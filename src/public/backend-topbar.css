@@ -346,7 +346,13 @@
   grid-template-rows: var(--goodos-topbar-height) !important;
   align-items: center !important;
   column-gap: var(--goodos-topbar-gap) !important;
-  width: 100% !important;
+  /*
+   * Use the viewport rather than the document's content box. Browsers that
+   * reserve space for a vertical scrollbar otherwise shift the right-side
+   * controls several pixels between applications.
+   */
+  width: 100vw !important;
+  max-width: 100vw !important;
   min-width: 0 !important;
   height: var(--goodos-topbar-height) !important;
   min-height: var(--goodos-topbar-height) !important;

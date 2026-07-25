@@ -23,6 +23,8 @@ test("master top bar exposes the four ordered integration zones", () => {
   assert.ok(controls > actions, "universal controls must follow application actions in integration markup");
   assert.match(styles, /--goodos-topbar-identity-width:\s*360px\s*;/);
   assert.match(styles, /--goodos-topbar-controls-width:\s*166px\s*;/);
+  assert.match(styles, /\[data-goodos-topbar\][\s\S]*width:\s*100vw\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar\][\s\S]*max-width:\s*100vw\s*!important\s*;/);
   assert.match(styles, /grid-template-columns:[\s\S]*var\(--goodos-topbar-identity-width\)[\s\S]*var\(--goodos-topbar-search-width\)[\s\S]*minmax\(0,\s*1fr\)[\s\S]*var\(--goodos-topbar-controls-width\)\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-identity\][\s\S]*grid-column:\s*1\s*;/);
   assert.match(styles, /\[data-goodos-topbar-search\][\s\S]*grid-column:\s*2\s*;/);
