@@ -25,13 +25,13 @@ test("deployment commands scope Git safe.directory to the selected application",
   delete require.cache[require.resolve("../src/services/site-deployment.service")];
   const deployment = require("../src/services/site-deployment.service");
   await deployment.runCommand("git", ["status", "--short"], {
-    cwd: "/var/www/Goodbase",
+    cwd: "/var/www/GoodBase",
   });
 
   assert.equal(invocation.command, "git");
   assert.deepEqual(invocation.args.slice(0, 2), [
     "-c",
-    "safe.directory=/var/www/Goodbase",
+    "safe.directory=/var/www/GoodBase",
   ]);
   assert.deepEqual(invocation.args.slice(2), ["status", "--short"]);
 });

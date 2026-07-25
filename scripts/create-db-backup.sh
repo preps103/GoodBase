@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="/var/www/Goodbase"
+APP_DIR="/var/www/GoodBase"
 BACKUP_DIR="$APP_DIR/backups/database"
 BACKUP_GROUP="${BACKUP_GROUP:-goodapp}"
 DB_NAME="goodos_backend"

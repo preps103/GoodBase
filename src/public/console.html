@@ -12019,7 +12019,7 @@ window.refreshStorageV2CenterNow = async function refreshStorageV2CenterNow() {
 window.createStorageProvider = async function createStorageProvider() {
   const provider = prompt("Provider type: local, s3, r2, minio, spaces, wasabi", "local") || "local";
   const name = prompt("Provider name:", provider.toUpperCase() + " Provider") || provider.toUpperCase() + " Provider";
-  const endpointUrl = prompt("Endpoint URL:", provider === "local" ? "file:///var/www/Goodbase/storage/buckets" : "") || "";
+  const endpointUrl = prompt("Endpoint URL:", provider === "local" ? "file:///var/www/GoodBase/storage/buckets" : "") || "";
   const bucketName = prompt("Provider bucket name:", "") || "";
   const cdnBaseUrl = prompt("CDN base URL:", "") || "";
 
@@ -12065,7 +12065,7 @@ window.editStorageV2Bucket = async function editStorageV2Bucket(bucketId) {
     providerConfigId: bucket.provider_config_id || bucket.providerConfigId || "storage_provider_local_goodos",
     providerBucketName: bucket.provider_bucket_name || bucket.providerBucketName || bucket.name,
     providerRegion: bucket.provider_region || bucket.providerRegion || "local",
-    providerEndpoint: bucket.provider_endpoint || bucket.providerEndpoint || "file:///var/www/Goodbase/storage/buckets",
+    providerEndpoint: bucket.provider_endpoint || bucket.providerEndpoint || "file:///var/www/GoodBase/storage/buckets",
     providerPrefix: bucket.provider_prefix || bucket.providerPrefix || "",
     cdnEnabled: Boolean(bucket.cdn_enabled || bucket.cdnEnabled),
     cdnBaseUrl: bucket.cdn_base_url || bucket.cdnBaseUrl || "",

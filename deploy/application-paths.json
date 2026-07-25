@@ -112,7 +112,7 @@
         "goodbase-api-ha",
         "goodbase-worker"
       ],
-      "productionPath": "/var/www/Goodbase"
+      "productionPath": "/var/www/GoodBase"
     },
     {
       "id": "goodid",

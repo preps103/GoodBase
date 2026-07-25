@@ -7,9 +7,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/var/www/Goodbase/deploy/observability
+WorkingDirectory=/var/www/GoodBase/deploy/observability
 Environment=OBSERVABILITY_ENV_FILE=/etc/goodbase/observability.env
-ExecStartPre=/var/www/Goodbase/deploy/observability/scripts/validate.sh
+ExecStartPre=/var/www/GoodBase/deploy/observability/scripts/validate.sh
 ExecStart=/usr/bin/docker compose --env-file /etc/goodbase/observability.env up -d --remove-orphans
 ExecReload=/usr/bin/docker compose --env-file /etc/goodbase/observability.env up -d --remove-orphans
 ExecStop=/usr/bin/docker compose --env-file /etc/goodbase/observability.env stop

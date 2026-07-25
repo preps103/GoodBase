@@ -4,7 +4,7 @@
 const database = require("../src/config/database");
 const { preserveEvidence, validCommit } = require("./lib/goodbase-evidence");
 
-const repository = process.env.GOODBASE_GITHUB_REPOSITORY || "preps103/GoodOSAppBackEnd";
+const repository = process.env.GOODBASE_GITHUB_REPOSITORY || "preps103/GoodBase";
 const commit = String(process.env.GOODBASE_RELEASE_COMMIT || "").toLowerCase();
 const requiredRunId = process.env.GOODBASE_REQUIRED_CI_RUN_ID;
 const assuranceRunId = process.env.GOODBASE_ASSURANCE_RUN_ID;

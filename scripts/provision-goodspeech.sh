@@ -6,7 +6,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-GOODBASE_ROOT="${GOODBASE_ROOT:-/var/www/Goodbase}"
+GOODBASE_ROOT="${GOODBASE_ROOT:-/var/www/GoodBase}"
 GOODSPEECH_ENV_FILE="${GOODSPEECH_ENV_FILE:-/etc/goodbase/goodspeech.env}"
 GOODBASE_RUNTIME_USER="${GOODBASE_RUNTIME_USER:-goodapp}"
 GOODBASE_PM2_USER="${GOODBASE_PM2_USER:-mgoodlo3}"

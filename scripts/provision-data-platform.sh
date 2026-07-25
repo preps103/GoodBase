@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 
-APP_DIR="${GOODBASE_APP_DIR:-${GOODOS_APP_DIR:-/var/www/Goodbase}}"
+APP_DIR="${GOODBASE_APP_DIR:-${GOODOS_APP_DIR:-/var/www/GoodBase}}"
 ENV_DIR="${GOODBASE_DATA_PLATFORM_ENV_DIR:-${GOODOS_DATA_PLATFORM_ENV_DIR:-/etc/goodbase}}"
 ENV_FILE="$ENV_DIR/data-platform.env"
 APP_ENV_FILE="$APP_DIR/.env"

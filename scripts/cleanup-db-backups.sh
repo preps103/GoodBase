@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_DB="goodos_backend"
-BACKUP_ROOT="/var/www/Goodbase/backups/database"
+BACKUP_ROOT="/var/www/GoodBase/backups/database"
 RETENTION_DAYS="$(sudo -u postgres psql -d "$APP_DB" -t -A -P pager=off -c "
 SELECT COALESCE(NULLIF(value_json ->> 'value', '')::int, 30)
 FROM backend_platform_settings

@@ -7,7 +7,7 @@ umask 077
 # recovery evidence, and destroys every disposable process and file afterward.
 
 DATABASE="${GOODBASE_PITR_DATABASE:-goodos_backend}"
-PROJECT_ROOT="${GOODBASE_PITR_PROJECT_ROOT:-/var/www/Goodbase}"
+PROJECT_ROOT="${GOODBASE_PITR_PROJECT_ROOT:-/var/www/GoodBase}"
 BACKUP_ROOT="${GOODBASE_PITR_BACKUP_ROOT:-/var/backups/goodos-enterprise-v1}"
 EVIDENCE_ROOT="${GOODBASE_PITR_EVIDENCE_ROOT:-/var/lib/goodbase/pitr-evidence}"
 IDENTITY="${GOODBASE_PITR_IDENTITY:-/etc/goodos/backup-age.key}"

@@ -16,7 +16,7 @@ if [[ ! "$BACKUP_ID" =~ ^[A-Za-z0-9_:-]+$ ]]; then
 fi
 
 APP_DB="goodos_backend"
-BACKUP_ROOT="/var/www/Goodbase/backups/database"
+BACKUP_ROOT="/var/www/GoodBase/backups/database"
 NOW="$(date -u +%Y%m%dT%H%M%SZ)"
 RAND="$(openssl rand -hex 4)"
 TEST_ID="restore_${NOW}_${RAND}"

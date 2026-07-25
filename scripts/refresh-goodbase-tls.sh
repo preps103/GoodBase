@@ -5,7 +5,7 @@ umask 027
 SOURCE_DIR="${GOODBASE_CERT_SOURCE_DIR:-/etc/letsencrypt/live/base.goodos.app}"
 TARGET_DIR="${GOODBASE_PGBOUNCER_TLS_DIR:-/etc/goodbase/pgbouncer-tls}"
 CONTAINER_GROUP_ID="${GOODBASE_PGBOUNCER_GROUP_ID:-70}"
-APP_DIR="${GOODBASE_APP_DIR:-/var/www/Goodbase}"
+APP_DIR="${GOODBASE_APP_DIR:-/var/www/GoodBase}"
 
 [ "$(id -u)" -eq 0 ] || { echo "Run as root." >&2; exit 1; }
 test -s "$SOURCE_DIR/fullchain.pem"

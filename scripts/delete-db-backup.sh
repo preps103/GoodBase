@@ -3,7 +3,7 @@ set -euo pipefail
 
 BACKUP_ID="${1:-}"
 APP_DB="goodos_backend"
-BACKUP_ROOT="/var/www/Goodbase/backups/database"
+BACKUP_ROOT="/var/www/GoodBase/backups/database"
 
 if [ -z "$BACKUP_ID" ]; then
   echo "STATUS=failed"

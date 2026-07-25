@@ -26,7 +26,7 @@ const {
   database;
 
 const APP_DIR =
-  "/var/www/Goodbase";
+  "/var/www/GoodBase";
 
 const FRONTEND_DIR =
   "/home/mgoodlo3/GoodOS";

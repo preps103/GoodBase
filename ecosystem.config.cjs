@@ -1,6 +1,6 @@
 const { execFileSync } = require("child_process");
 
-const cwd = "/var/www/Goodbase";
+const cwd = "/var/www/GoodBase";
 const runtimeUser = "goodapp";
 function releaseCommit() {
   try {

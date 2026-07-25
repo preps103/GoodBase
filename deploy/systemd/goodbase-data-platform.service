@@ -6,7 +6,7 @@ After=docker.service postgresql.service network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/var/www/Goodbase/deploy/data-platform
+WorkingDirectory=/var/www/GoodBase/deploy/data-platform
 EnvironmentFile=/etc/goodbase/data-platform.env
 ExecStart=/usr/bin/docker compose --env-file /etc/goodbase/data-platform.env up -d --remove-orphans postgrest pgbouncer-transaction pgbouncer-session realtime
 ExecReload=/usr/bin/docker compose --env-file /etc/goodbase/data-platform.env up -d --remove-orphans postgrest pgbouncer-transaction pgbouncer-session realtime

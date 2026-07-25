@@ -33,7 +33,7 @@ test("GoodBase and GoodID remain explicit platform services", () => {
   const platformIds = manifest.platformServices.map(({ id }) => id);
   assert.deepEqual(platformIds, ["goodbase", "goodid"]);
   assert.equal(manifest.platformServices[0].domain, "base.goodos.app");
-  assert.equal(manifest.platformServices[0].productionPath, "/var/www/Goodbase");
+  assert.equal(manifest.platformServices[0].productionPath, "/var/www/GoodBase");
 });
 
 test("GoodCustoms and GoodTrusts use their canonical singular domains", () => {
