@@ -1,4 +1,18 @@
-require("dotenv").config();
+const path = require("path");
+const dotenv = require("dotenv");
+
+dotenv.config();
+
+// GoodSpeech's API and loopback-only Kokoro service share one protected
+// environment file. Loading it here keeps PM2 restarts deterministic and
+// avoids copying the same internal token into multiple runtime files.
+const goodSpeechEnvFile = path.resolve(
+  process.env.GOODSPEECH_ENV_FILE || "/etc/goodbase/goodspeech.env"
+);
+dotenv.config({
+  path: goodSpeechEnvFile,
+  override: false,
+});
 
 const allowedOrigins = [
   "https://goodos.app",
@@ -42,6 +56,7 @@ const env = {
   serviceName: process.env.SERVICE_NAME || "Goodbase",
   version: process.env.VERSION || "1.0.0",
   databaseUrl: process.env.DATABASE_URL,
+  goodSpeechEnvFile,
 
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS || 60000),
   headersTimeoutMs: Number(process.env.HEADERS_TIMEOUT_MS || 15000),

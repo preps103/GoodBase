@@ -10,6 +10,7 @@ const MAX_TEXT_LENGTH = 2000;
 const PROVIDER_TIMEOUT_MS = 55_000;
 const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
 const KOKORO_MODEL = "hexgrad/Kokoro-82M";
+const KOKORO_HEALTH_TIMEOUT_MS = 4_000;
 const KOKORO_VOICES = Object.freeze({
   Kore: "af_kore",
   Puck: "am_puck",
@@ -103,6 +104,21 @@ function kokoroEndpoint() {
   }
 }
 
+function kokoroHealthEndpoint() {
+  const configured = String(process.env.KOKORO_TTS_URL || "").trim();
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/health/ready`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function kokoroRequest(input) {
   return {
     model: KOKORO_MODEL,
@@ -122,6 +138,66 @@ function configuredProvider() {
   const token = String(process.env.KOKORO_TTS_TOKEN || "").trim();
   if (!endpoint || token.length < 32) return null;
   return { endpoint, token };
+}
+
+async function checkKokoroHealth({
+  fetchFn = global.fetch,
+  timeoutMs = KOKORO_HEALTH_TIMEOUT_MS,
+} = {}) {
+  const provider = configuredProvider();
+  const endpoint = kokoroHealthEndpoint();
+  if (!provider || !endpoint) {
+    return {
+      ready: false,
+      code: "GOODSPEECH_NOT_CONFIGURED",
+      message: "GoodSpeech's Kokoro engine is not configured.",
+    };
+  }
+  if (typeof fetchFn !== "function") {
+    return {
+      ready: false,
+      code: "GOODSPEECH_PROVIDER_UNAVAILABLE",
+      message: "GoodSpeech's Kokoro engine is unavailable.",
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchFn(endpoint, {
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "X-GoodBase-Service": "GoodSpeech",
+      },
+    });
+    if (!response.ok) {
+      await response.body?.cancel?.().catch(() => {});
+      return {
+        ready: false,
+        code: "GOODSPEECH_PROVIDER_UNAVAILABLE",
+        message: "GoodSpeech's Kokoro engine is still starting or unavailable.",
+      };
+    }
+
+    const payload = await response.json().catch(() => null);
+    return {
+      ready: true,
+      code: "GOODSPEECH_READY",
+      message: "GoodSpeech's Kokoro engine is ready.",
+      model: payload?.model || KOKORO_MODEL,
+    };
+  } catch {
+    return {
+      ready: false,
+      code: "GOODSPEECH_PROVIDER_UNAVAILABLE",
+      message: "GoodSpeech's Kokoro engine is unavailable.",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readAudioBytes(response) {
@@ -150,6 +226,17 @@ async function readAudioBytes(response) {
   }
   return Buffer.concat(chunks, total);
 }
+
+router.get("/health", authRequired, async (_req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  const health = await checkKokoroHealth();
+  return res.status(health.ready ? 200 : 503).json({
+    success: health.ready,
+    service: "GoodSpeech",
+    provider: "kokoro",
+    ...health,
+  });
+});
 
 router.post("/speech", authRequired, speechLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
@@ -252,5 +339,7 @@ module.exports.validatePayload = validatePayload;
 module.exports.kokoroRequest = kokoroRequest;
 module.exports.kokoroSpeed = kokoroSpeed;
 module.exports.kokoroEndpoint = kokoroEndpoint;
+module.exports.kokoroHealthEndpoint = kokoroHealthEndpoint;
 module.exports.configuredProvider = configuredProvider;
+module.exports.checkKokoroHealth = checkKokoroHealth;
 module.exports.readAudioBytes = readAudioBytes;
