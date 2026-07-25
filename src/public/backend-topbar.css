@@ -394,6 +394,9 @@
   width: var(--goodos-topbar-identity-width) !important;
   max-width: var(--goodos-topbar-identity-width) !important;
   min-width: 0 !important;
+  height: var(--goodos-topbar-control-size) !important;
+  min-height: var(--goodos-topbar-control-size) !important;
+  max-height: var(--goodos-topbar-control-size) !important;
   overflow: hidden !important;
   gap: 12px !important;
 }
@@ -487,6 +490,17 @@
   height: var(--goodos-topbar-control-size) !important;
 }
 
+[data-goodos-topbar-controls] > [data-goodos-notifications] button {
+  width: var(--goodos-topbar-control-size) !important;
+  min-width: var(--goodos-topbar-control-size) !important;
+  max-width: var(--goodos-topbar-control-size) !important;
+  height: var(--goodos-topbar-control-size) !important;
+  min-height: var(--goodos-topbar-control-size) !important;
+  max-height: var(--goodos-topbar-control-size) !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
 [data-goodos-topbar-controls] > [data-goodos-topbar-control="help"] {
   grid-column: 3 !important;
 }
@@ -517,6 +531,21 @@
 
 [data-goodos-topbar-control="account"] {
   border-radius: 9999px !important;
+  overflow: hidden !important;
+}
+
+[data-goodos-topbar-control="account"] .goodos-avatar,
+[data-goodos-topbar-control="account"] img {
+  display: block !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  border-radius: 9999px !important;
+  object-fit: cover !important;
+  box-sizing: border-box !important;
 }
 
 [data-goodos-topbar-control="account"] > button,
