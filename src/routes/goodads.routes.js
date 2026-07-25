@@ -20,6 +20,12 @@ const publicFormWriteLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const generationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 
 function requireGoodAdsAccess(req, res, next) {
   const role = String(req.user?.platformRole || req.user?.role || "").toLowerCase();
@@ -69,11 +75,33 @@ router.use(authRequired, tenantContext, requireGoodAdsAccess);
 router.get("/dashboard", (req, res) => handle(res, "dashboard", service.dashboard(req.tenantContext)));
 router.get("/workspace", (req, res) => handle(res, "workspace", service.workspace(req.tenantContext)));
 router.get("/workspace/brand", (req, res) => handle(res, "brand", service.listResources({ type: "brand", context: req.tenantContext, limit: 1 })));
-router.get("/connections/:platform/authorize", (req, res) => res.status(501).json({
-  success: false,
-  code: "GOODADS_PROVIDER_NOT_CONFIGURED",
-  message: `${req.params.platform} OAuth credentials are not configured in GoodBase.`,
-}));
+router.get("/connections/providers", (req, res) => handle(res, "connections.providers", service.socialProviders()));
+router.get("/connections/:platform/authorize", (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    return res.redirect(302, service.providerAuthorizationUrl(req.params.platform));
+  } catch (requestError) {
+    return res.status(requestError.statusCode || 500).json({
+      success: false,
+      code: requestError.code || "GOODADS_PROVIDER_AUTHORIZATION_FAILED",
+      message: requestError.message || "Provider authorization could not be started.",
+    });
+  }
+});
+router.delete("/connections/provider/:platform", (req, res) => handle(res, "connections.disconnect", service.disconnectProvider({
+  platformId: req.params.platform,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/generation/content", generationLimiter, (req, res) => handle(res, "generation.content", service.generateContent({
+  payload: req.body,
+  context: req.tenantContext,
+})));
+router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", service.createPublishingJob({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
 
 function registerResource(path, type) {
   router.get(`/${path}`, (req, res) => handle(res, `${type}.list`, service.listResources({
@@ -138,15 +166,13 @@ function registerResource(path, type) {
   ["funnels", "funnels"],
   ["lead-forms", "lead_forms"],
   ["leads", "leads"],
+  ["brand", "brand"],
 ].forEach(([path, type]) => registerResource(path, type));
 
-router.post("/campaigns/:id/launch", (req, res) => handle(res, "campaign.launch", service.transitionResource({
-  type: "campaigns",
+router.post("/campaigns/:id/launch", (req, res) => handle(res, "campaign.launch", service.launchCampaign({
   id: req.params.id,
-  nextStatus: "active",
   context: req.tenantContext,
   userId: req.user.id,
-  eventType: "campaigns.launched",
 })));
 
 router.post("/funnels/:id/publish", (req, res) => handle(res, "funnel.publish", service.transitionResource({

@@ -4,10 +4,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   normalizeLeadSubmission,
+  normalizeGenerationInput,
   normalizePayload,
   requirePublicSlug,
   requireUuid,
   RESOURCE_TYPES,
+  socialProviders,
 } = require("../src/services/goodads.service");
 
 test("GoodAds exposes every production resource family", () => {
@@ -17,6 +19,29 @@ test("GoodAds exposes every production resource family", () => {
   for (const type of ["funnels", "lead_forms", "leads"]) {
     assert.equal(RESOURCE_TYPES.has(type), true);
   }
+});
+
+test("GoodAds validates and bounds authenticated generation input", () => {
+  const input = normalizeGenerationInput({
+    businessName: " GoodOS ",
+    type: "social_post",
+    audience: "Workspace owners",
+    additionalInfo: "x".repeat(4000),
+  });
+  assert.equal(input.businessName, "GoodOS");
+  assert.equal(input.audience, "Workspace owners");
+  assert.equal(input.additionalInfo.length, 3000);
+  assert.throws(() => normalizeGenerationInput({ businessName: "" }), /business name/i);
+});
+
+test("GoodAds only marks HTTPS OAuth start routes configured", () => {
+  const previous = process.env.GOODADS_GOOGLE_OAUTH_START_URL;
+  process.env.GOODADS_GOOGLE_OAUTH_START_URL = "https://identity.example.com/start";
+  assert.equal(socialProviders().find((provider) => provider.id === "google").configured, true);
+  process.env.GOODADS_GOOGLE_OAUTH_START_URL = "javascript:alert(1)";
+  assert.equal(socialProviders().find((provider) => provider.id === "google").configured, false);
+  if (previous === undefined) delete process.env.GOODADS_GOOGLE_OAUTH_START_URL;
+  else process.env.GOODADS_GOOGLE_OAUTH_START_URL = previous;
 });
 
 test("GoodAds payloads require bounded JSON objects", () => {

@@ -15,6 +15,17 @@ const PUBLIC_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MUTATING_ROLES = new Set(["owner", "admin", "manager", "editor", "member"]);
 const DESTRUCTIVE_ROLES = new Set(["owner", "admin", "manager"]);
+const SOCIAL_PROVIDERS = [
+  { id: "google", name: "Google", scopes: ["youtube.upload", "business.manage"] },
+  { id: "facebook", name: "Facebook", scopes: ["pages_manage_posts", "pages_read_engagement"] },
+  { id: "instagram", name: "Instagram", scopes: ["instagram_basic", "instagram_content_publish"] },
+  { id: "threads", name: "Threads", scopes: ["threads_basic", "threads_content_publish"] },
+  { id: "linkedin", name: "LinkedIn", scopes: ["openid", "profile", "w_member_social"] },
+  { id: "x", name: "X", scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"] },
+  { id: "tiktok", name: "TikTok", scopes: ["user.info.basic", "video.publish"] },
+  { id: "pinterest", name: "Pinterest", scopes: ["boards:read", "pins:read", "pins:write"] },
+  { id: "reddit", name: "Reddit", scopes: ["identity", "submit"] },
+];
 
 function serviceError(message, statusCode = 400, code = "GOODADS_REQUEST_INVALID") {
   const error = new Error(message);
@@ -55,6 +66,162 @@ function requirePublicSlug(value) {
 
 function boundedText(value, maximum) {
   return String(value || "").trim().slice(0, maximum);
+}
+
+function providerEnvironmentKey(providerId) {
+  return `GOODADS_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_OAUTH_START_URL`;
+}
+
+function providerAdapterEnvironmentKey(providerId, operation) {
+  return `GOODADS_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_${operation}_URL`;
+}
+
+function safeHttpsEnvironmentUrl(key) {
+  const value = boundedText(process.env[key], 2048);
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function socialProviders() {
+  return SOCIAL_PROVIDERS.map((provider) => {
+    const configured = Boolean(safeHttpsEnvironmentUrl(providerEnvironmentKey(provider.id)));
+    return {
+      ...provider,
+      configured,
+      capabilities: {
+        publish: Boolean(safeHttpsEnvironmentUrl(providerAdapterEnvironmentKey(provider.id, "PUBLISH"))),
+        campaigns: Boolean(safeHttpsEnvironmentUrl(providerAdapterEnvironmentKey(provider.id, "CAMPAIGN"))),
+      },
+    };
+  });
+}
+
+function providerAuthorizationUrl(providerId) {
+  const provider = socialProviders().find((item) => item.id === String(providerId || "").toLowerCase());
+  if (!provider) throw serviceError("Unsupported social provider.", 404, "GOODADS_PROVIDER_NOT_FOUND");
+  if (!provider.configured) {
+    throw serviceError(`${provider.name} OAuth is not configured in GoodBase.`, 503, "GOODADS_PROVIDER_NOT_CONFIGURED");
+  }
+  return process.env[providerEnvironmentKey(provider.id)];
+}
+
+async function dispatchProviderAdapter({ provider, operation, connectionId, payload, requestId }) {
+  const adapterUrl = safeHttpsEnvironmentUrl(providerAdapterEnvironmentKey(provider, operation));
+  const adapterToken = boundedText(process.env.GOODADS_PROVIDER_ADAPTER_TOKEN, 1000);
+  if (!adapterUrl || !adapterToken) {
+    return { provider, success: false, error: `${provider} ${operation.toLowerCase()} adapter is not configured.` };
+  }
+  try {
+    const response = await fetch(adapterUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${adapterToken}`,
+        "Idempotency-Key": requestId,
+      },
+      body: JSON.stringify({ provider, connectionId, requestId, payload }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { provider, success: false, error: boundedText(body?.message || body?.error || `Provider returned ${response.status}.`, 300) };
+    }
+    return {
+      provider,
+      success: true,
+      receiptId: boundedText(body?.receiptId || body?.postId || body?.campaignId, 240),
+      url: safeHttpsEnvironmentUrlFromValue(body?.url),
+    };
+  } catch {
+    return { provider, success: false, error: "Provider adapter could not be reached." };
+  }
+}
+
+function safeHttpsEnvironmentUrlFromValue(value) {
+  const text = boundedText(value, 2048);
+  try {
+    return new URL(text).protocol === "https:" ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeGenerationInput(value) {
+  const data = normalizePayload(value);
+  const businessName = boundedText(data.businessName, 160);
+  if (businessName.length < 2) {
+    throw serviceError("A business name is required for content generation.", 400, "GOODADS_GENERATION_BUSINESS_REQUIRED");
+  }
+  return {
+    type: boundedText(data.type || "social_post", 80),
+    businessName,
+    audience: boundedText(data.audience, 1000),
+    goal: boundedText(data.goal, 1000),
+    tone: boundedText(data.tone || "Professional", 80),
+    platform: boundedText(data.platform, 80),
+    format: boundedText(data.format, 80),
+    offer: boundedText(data.offer, 1000),
+    callToAction: boundedText(data.callToAction, 240),
+    additionalInfo: boundedText(data.additionalInfo, 3000),
+  };
+}
+
+async function generateContent({ payload, context }) {
+  requireMutationRole(context);
+  const input = normalizeGenerationInput(payload);
+  const apiKey = boundedText(process.env.GOODADS_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY, 500);
+  const model = boundedText(process.env.GOODADS_GEMINI_MODEL || "gemini-2.5-flash", 120);
+  if (!apiKey) {
+    throw serviceError("GoodAds AI generation is not configured in GoodBase.", 503, "GOODADS_GENERATION_NOT_CONFIGURED");
+  }
+
+  const instructions = [
+    "Create production-ready marketing content. Return only the requested content without analysis or markdown fences.",
+    `Asset type: ${input.type}`,
+    `Business: ${input.businessName}`,
+    input.audience && `Audience: ${input.audience}`,
+    input.goal && `Goal: ${input.goal}`,
+    `Tone: ${input.tone}`,
+    input.platform && `Platform: ${input.platform}`,
+    input.format && `Format: ${input.format}`,
+    input.offer && `Offer: ${input.offer}`,
+    input.callToAction && `Call to action: ${input.callToAction}`,
+    input.additionalInfo && `Additional requirements: ${input.additionalInfo}`,
+    "Do not invent prices, statistics, testimonials, guarantees, or regulatory claims.",
+  ].filter(Boolean).join("\n");
+
+  let response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: instructions }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+        }),
+        signal: AbortSignal.timeout(45000),
+      }
+    );
+  } catch {
+    throw serviceError("The configured AI provider could not be reached.", 502, "GOODADS_GENERATION_PROVIDER_UNAVAILABLE");
+  }
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const providerMessage = boundedText(body?.error?.message, 300);
+    throw serviceError(providerMessage || "The configured AI provider rejected the request.", 502, "GOODADS_GENERATION_PROVIDER_REJECTED");
+  }
+  const content = boundedText(
+    (body?.candidates?.[0]?.content?.parts || []).map((part) => part?.text || "").join("\n"),
+    20000
+  );
+  if (!content) throw serviceError("The AI provider returned no content.", 502, "GOODADS_GENERATION_EMPTY");
+  return { content, provider: "google-gemini", model };
 }
 
 function normalizeLeadSubmission(value) {
@@ -208,6 +375,173 @@ async function archiveResource({ type, id, context, userId }) {
   if (!result.rows[0]) throw serviceError("GoodAds resource not found.", 404, "GOODADS_RECORD_NOT_FOUND");
   await recordEvent({ resourceId: result.rows[0].id, context, userId, eventType: `${type}.archived`, previousStatus: result.rows[0].status, nextStatus: "archived" });
   return rowToResource(result.rows[0]);
+}
+
+async function disconnectProvider({ platformId, context, userId }) {
+  requireDestructiveRole(context);
+  const platform = boundedText(platformId, 80).toLowerCase();
+  if (!SOCIAL_PROVIDERS.some((provider) => provider.id === platform)) {
+    throw serviceError("Unsupported social provider.", 404, "GOODADS_PROVIDER_NOT_FOUND");
+  }
+  const result = await query(
+    `UPDATE goodads_resources
+     SET status = 'disconnected', archived_at = NOW(), updated_at = NOW(), version = version + 1
+     WHERE organization_id = $1 AND resource_type = 'connections'
+       AND archived_at IS NULL AND LOWER(data->>'platformId') = $2
+     RETURNING *`,
+    [context.organizationId, platform]
+  );
+  for (const row of result.rows) {
+    await recordEvent({
+      resourceId: row.id,
+      context,
+      userId,
+      eventType: "connections.disconnected",
+      previousStatus: row.status,
+      nextStatus: "disconnected",
+      metadata: { platformId: platform },
+    });
+  }
+  return { platformId: platform, disconnected: result.rowCount };
+}
+
+async function createPublishingJob({ payload, context, userId }) {
+  requireMutationRole(context);
+  const data = normalizePayload(payload);
+  const providers = [...new Set((Array.isArray(data.providers) ? data.providers : [])
+    .map((value) => boundedText(value, 80).toLowerCase())
+    .filter((value) => SOCIAL_PROVIDERS.some((provider) => provider.id === value)))];
+  const content = data.content && typeof data.content === "object" && !Array.isArray(data.content)
+    ? normalizePayload(data.content)
+    : {};
+  if (!providers.length) {
+    throw serviceError("Select at least one supported provider.", 400, "GOODADS_PUBLISHING_PROVIDER_REQUIRED");
+  }
+  if (!boundedText(content.text, 5000)) {
+    throw serviceError("Post text is required.", 400, "GOODADS_PUBLISHING_CONTENT_REQUIRED");
+  }
+
+  const connectionResult = await query(
+    `SELECT DISTINCT ON (LOWER(data->>'platformId')) id, LOWER(data->>'platformId') AS platform
+     FROM goodads_resources
+     WHERE organization_id = $1 AND resource_type = 'connections'
+       AND status = 'connected' AND archived_at IS NULL
+       AND LOWER(data->>'platformId') = ANY($2::text[])
+     ORDER BY LOWER(data->>'platformId'), updated_at DESC`,
+    [context.organizationId, providers]
+  );
+  const connections = new Map(connectionResult.rows.map((row) => [row.platform, row.id]));
+  const unavailable = providers.filter((provider) => !connections.has(provider));
+  if (unavailable.length) {
+    throw serviceError(
+      `Reconnect these providers before publishing: ${unavailable.join(", ")}.`,
+      409,
+      "GOODADS_PUBLISHING_CONNECTION_REQUIRED"
+    );
+  }
+  const missingAdapters = providers.filter((provider) => (
+    !safeHttpsEnvironmentUrl(providerAdapterEnvironmentKey(provider, "PUBLISH"))
+  ));
+  if (missingAdapters.length || !boundedText(process.env.GOODADS_PROVIDER_ADAPTER_TOKEN, 1000)) {
+    throw serviceError(
+      `GoodBase publishing adapters are not configured for: ${missingAdapters.length ? missingAdapters.join(", ") : providers.join(", ")}.`,
+      503,
+      "GOODADS_PUBLISHING_ADAPTER_NOT_CONFIGURED"
+    );
+  }
+
+  const job = await upsertResource({
+    type: "publishing_jobs",
+    payload: {
+      name: `Publish to ${providers.join(", ")}`,
+      status: "processing",
+      providers,
+      content,
+      queuedAt: new Date().toISOString(),
+      results: providers.map((provider) => ({ provider, status: "processing" })),
+    },
+    context,
+    userId,
+  });
+  const results = await Promise.all(providers.map((provider) => dispatchProviderAdapter({
+    provider,
+    operation: "PUBLISH",
+    connectionId: connections.get(provider),
+    payload: content,
+    requestId: job.id,
+  })));
+  const completed = results.every((result) => result.success);
+  return upsertResource({
+    type: "publishing_jobs",
+    id: job.id,
+    payload: {
+      ...job,
+      status: completed ? "completed" : "failed",
+      results,
+      completedAt: new Date().toISOString(),
+    },
+    context,
+    userId,
+  });
+}
+
+async function launchCampaign({ id, context, userId }) {
+  requireMutationRole(context);
+  const campaign = await getResource({ type: "campaigns", id, context });
+  const providers = [...new Set((Array.isArray(campaign.platforms) ? campaign.platforms : [])
+    .map((value) => boundedText(value, 80).toLowerCase())
+    .filter((value) => SOCIAL_PROVIDERS.some((provider) => provider.id === value)))];
+  if (!providers.length) throw serviceError("Select a supported campaign provider.", 400, "GOODADS_CAMPAIGN_PROVIDER_REQUIRED");
+  const connectionResult = await query(
+    `SELECT DISTINCT ON (LOWER(data->>'platformId')) id, LOWER(data->>'platformId') AS platform
+     FROM goodads_resources
+     WHERE organization_id = $1 AND resource_type = 'connections'
+       AND status = 'connected' AND archived_at IS NULL
+       AND LOWER(data->>'platformId') = ANY($2::text[])
+     ORDER BY LOWER(data->>'platformId'), updated_at DESC`,
+    [context.organizationId, providers]
+  );
+  const connections = new Map(connectionResult.rows.map((row) => [row.platform, row.id]));
+  const unavailable = providers.filter((provider) => !connections.has(provider));
+  if (unavailable.length) {
+    throw serviceError(`Reconnect these providers before launch: ${unavailable.join(", ")}.`, 409, "GOODADS_CAMPAIGN_CONNECTION_REQUIRED");
+  }
+  const missingAdapters = providers.filter((provider) => !safeHttpsEnvironmentUrl(providerAdapterEnvironmentKey(provider, "CAMPAIGN")));
+  if (missingAdapters.length || !boundedText(process.env.GOODADS_PROVIDER_ADAPTER_TOKEN, 1000)) {
+    throw serviceError(
+      `GoodBase campaign adapters are not configured for: ${missingAdapters.length ? missingAdapters.join(", ") : providers.join(", ")}.`,
+      503,
+      "GOODADS_CAMPAIGN_ADAPTER_NOT_CONFIGURED"
+    );
+  }
+  await upsertResource({
+    type: "campaigns",
+    id: campaign.id,
+    payload: { ...campaign, status: "processing", launchRequestedAt: new Date().toISOString() },
+    context,
+    userId,
+  });
+  const results = await Promise.all(providers.map((provider) => dispatchProviderAdapter({
+    provider,
+    operation: "CAMPAIGN",
+    connectionId: connections.get(provider),
+    payload: campaign,
+    requestId: campaign.id,
+  })));
+  const completed = results.every((result) => result.success);
+  return upsertResource({
+    type: "campaigns",
+    id: campaign.id,
+    payload: {
+      ...campaign,
+      status: completed ? "active" : "failed",
+      providerResults: results,
+      launchedAt: completed ? new Date().toISOString() : null,
+      updatedAt: new Date().toISOString(),
+    },
+    context,
+    userId,
+  });
 }
 
 async function transitionResource({ type, id, nextStatus, context, userId, eventType }) {
@@ -514,12 +848,19 @@ module.exports = {
   requireUuid,
   requirePublicSlug,
   normalizeLeadSubmission,
+  normalizeGenerationInput,
+  socialProviders,
+  providerAuthorizationUrl,
+  generateContent,
   dashboard,
   workspace,
   listResources,
   getResource,
   upsertResource,
   archiveResource,
+  disconnectProvider,
+  createPublishingJob,
+  launchCampaign,
   transitionResource,
   getPublicLeadForm,
   recordLeadFormView,
