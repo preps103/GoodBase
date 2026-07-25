@@ -90,7 +90,7 @@
     {
       "id": "goodtrusts",
       "name": "GoodTrusts",
-      "domain": "trusts.goodos.app",
+      "domain": "trust.goodos.app",
       "service": "goodtrusts",
       "productionPath": "/home/mgoodlo3/GoodTrusts"
     },

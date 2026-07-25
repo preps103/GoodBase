@@ -36,6 +36,21 @@ test("GoodBase and GoodID remain explicit platform services", () => {
   assert.equal(manifest.platformServices[0].productionPath, "/var/www/Goodbase");
 });
 
+test("GoodCustoms and GoodTrusts use their canonical singular domains", () => {
+  const applications = new Map(
+    manifest.applications.map((application) => [application.id, application])
+  );
+  assert.equal(applications.get("goodcustoms").domain, "custom.goodos.app");
+  assert.equal(applications.get("goodtrusts").domain, "trust.goodos.app");
+
+  const domainMigration = fs.readFileSync(
+    path.join(root, "migrations/20260725_canonical_product_domains.sql"),
+    "utf8"
+  );
+  assert.match(domainMigration, /custom\.goodos\.app/);
+  assert.match(domainMigration, /trust\.goodos\.app/);
+});
+
 test("retired GoodHub and GoodBackend identifiers cannot return", () => {
   assert.deepEqual(
     manifest.retired.map(({ id }) => id),
