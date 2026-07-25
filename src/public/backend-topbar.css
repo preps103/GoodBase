@@ -2,12 +2,15 @@
   --goodos-topbar-height: 77px;
   --goodos-topbar-edge-space: 36px;
   --goodos-topbar-gap: 18px;
+  --goodos-topbar-identity-width: 360px;
   --goodos-topbar-brand-mark-size: 36px;
   --goodos-topbar-workspace-width: 246px;
   --goodos-topbar-workspace-height: 38px;
   --goodos-topbar-search-width: 544px;
   --goodos-topbar-search-height: 46px;
   --goodos-topbar-control-size: 34px;
+  --goodos-topbar-control-gap: 10px;
+  --goodos-topbar-controls-width: 166px;
   --goodos-topbar-surface: rgba(12, 17, 33, 0.98);
   --goodos-topbar-raised: rgba(24, 31, 56, 0.82);
   --goodos-topbar-border: rgba(148, 163, 184, 0.16);
@@ -322,5 +325,213 @@
     [data-goodos-topbar-brand-mark]
   ) {
     display: none;
+  }
+}
+
+/*
+ * Structural enforcement layer.
+ *
+ * Product styles may theme color tokens, but they must never move or resize
+ * the master shell. These higher-specificity rules intentionally override
+ * legacy application CSS so every desktop application renders the same
+ * coordinates at the same viewport width.
+ */
+[data-goodos-topbar] {
+  display: grid !important;
+  grid-template-columns:
+    var(--goodos-topbar-identity-width)
+    var(--goodos-topbar-search-width)
+    minmax(0, 1fr)
+    var(--goodos-topbar-controls-width) !important;
+  grid-template-rows: var(--goodos-topbar-height) !important;
+  align-items: center !important;
+  column-gap: var(--goodos-topbar-gap) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: var(--goodos-topbar-height) !important;
+  min-height: var(--goodos-topbar-height) !important;
+  max-height: var(--goodos-topbar-height) !important;
+  padding: 0 var(--goodos-topbar-edge-space) !important;
+  box-sizing: border-box !important;
+}
+
+[data-goodos-topbar] > [data-goodos-topbar-identity] {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: var(--goodos-topbar-identity-width) !important;
+  max-width: var(--goodos-topbar-identity-width) !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+[data-goodos-topbar] > [data-goodos-topbar-search] {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  justify-self: start !important;
+  width: var(--goodos-topbar-search-width) !important;
+  min-width: var(--goodos-topbar-search-width) !important;
+  max-width: var(--goodos-topbar-search-width) !important;
+  height: var(--goodos-topbar-search-height) !important;
+  min-height: var(--goodos-topbar-search-height) !important;
+  max-height: var(--goodos-topbar-search-height) !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+
+[data-goodos-topbar] > [data-goodos-topbar-actions] {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+[data-goodos-topbar] > [data-goodos-topbar-controls] {
+  grid-column: 4 !important;
+  grid-row: 1 !important;
+  display: grid !important;
+  grid-template-columns: repeat(4, var(--goodos-topbar-control-size)) !important;
+  grid-template-rows: var(--goodos-topbar-control-size) !important;
+  grid-auto-flow: column !important;
+  align-items: center !important;
+  justify-content: end !important;
+  gap: var(--goodos-topbar-control-gap) !important;
+  width: var(--goodos-topbar-controls-width) !important;
+  min-width: var(--goodos-topbar-controls-width) !important;
+  max-width: var(--goodos-topbar-controls-width) !important;
+  height: var(--goodos-topbar-control-size) !important;
+  margin: 0 !important;
+}
+
+[data-goodos-topbar-controls] > [data-goodos-topbar-control="theme"] {
+  grid-column: 1 !important;
+}
+
+[data-goodos-topbar-controls] > [data-goodos-notifications] {
+  grid-column: 2 !important;
+  width: var(--goodos-topbar-control-size) !important;
+  height: var(--goodos-topbar-control-size) !important;
+}
+
+[data-goodos-topbar-controls] > [data-goodos-topbar-control="help"] {
+  grid-column: 3 !important;
+}
+
+[data-goodos-topbar-controls] > [data-goodos-topbar-control="account"],
+[data-goodos-topbar-controls] > :has(> [data-goodos-topbar-control="account"]) {
+  grid-column: 4 !important;
+  width: var(--goodos-topbar-control-size) !important;
+  min-width: var(--goodos-topbar-control-size) !important;
+  max-width: var(--goodos-topbar-control-size) !important;
+  height: var(--goodos-topbar-control-size) !important;
+}
+
+[data-goodos-topbar-control="theme"],
+[data-goodos-topbar-control="help"],
+[data-goodos-topbar-control="account"],
+[data-goodos-notification-trigger] {
+  width: var(--goodos-topbar-control-size) !important;
+  min-width: var(--goodos-topbar-control-size) !important;
+  max-width: var(--goodos-topbar-control-size) !important;
+  height: var(--goodos-topbar-control-size) !important;
+  min-height: var(--goodos-topbar-control-size) !important;
+  max-height: var(--goodos-topbar-control-size) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+
+[data-goodos-topbar-control="account"] {
+  border-radius: 9999px !important;
+}
+
+[data-goodos-topbar-control="account"] > button,
+[data-goodos-topbar-control="account"] > a,
+[data-goodos-topbar-controls] > :has(> [data-goodos-topbar-control="account"]) > [data-goodos-topbar-control="account"] {
+  width: var(--goodos-topbar-control-size) !important;
+  min-width: var(--goodos-topbar-control-size) !important;
+  max-width: var(--goodos-topbar-control-size) !important;
+  height: var(--goodos-topbar-control-size) !important;
+  overflow: hidden !important;
+  border-radius: 9999px !important;
+}
+
+[data-goodos-topbar-controls] > .topbar-divider,
+[data-goodos-topbar-controls] > .goodos-action-divider {
+  display: none !important;
+}
+
+@media (max-width: 1480px) and (min-width: 761px) {
+  :root {
+    --goodos-topbar-edge-space: 24px;
+    --goodos-topbar-gap: 14px;
+    --goodos-topbar-identity-width: 300px;
+    --goodos-topbar-search-width: 480px;
+  }
+}
+
+@media (max-width: 1120px) and (min-width: 761px) {
+  :root {
+    --goodos-topbar-identity-width: 220px;
+    --goodos-topbar-search-width: 1fr;
+  }
+
+  [data-goodos-topbar] {
+    grid-template-columns:
+      var(--goodos-topbar-identity-width)
+      minmax(240px, 1fr)
+      0
+      var(--goodos-topbar-controls-width) !important;
+  }
+
+  [data-goodos-topbar] > [data-goodos-topbar-search] {
+    width: 100% !important;
+    min-width: 240px !important;
+    max-width: none !important;
+  }
+
+  [data-goodos-topbar] > [data-goodos-topbar-actions] {
+    display: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-goodos-topbar] {
+    grid-template-columns: auto minmax(0, 1fr) auto !important;
+    grid-template-rows: 44px 46px !important;
+    gap: 10px !important;
+    height: auto !important;
+    min-height: 116px !important;
+    max-height: none !important;
+    padding: 10px 16px !important;
+  }
+
+  [data-goodos-topbar] > [data-goodos-topbar-identity] {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    width: auto !important;
+    max-width: min(45vw, 260px) !important;
+  }
+
+  [data-goodos-topbar] > [data-goodos-topbar-search] {
+    grid-column: 1 / 3 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  [data-goodos-topbar] > [data-goodos-topbar-actions] {
+    grid-column: 3 !important;
+    grid-row: 2 !important;
+    width: auto !important;
+    max-width: 38vw !important;
+  }
+
+  [data-goodos-topbar] > [data-goodos-topbar-controls] {
+    grid-column: 2 / 4 !important;
+    grid-row: 1 !important;
   }
 }

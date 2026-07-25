@@ -279,12 +279,14 @@
       --nav-accent: #7c72ff;
       --suite-topbar-height: 77px;
       --suite-edge-space: 36px;
+      --suite-identity-width: 360px;
       --suite-brand-mark: 36px;
       --suite-workspace-width: 246px;
       --suite-workspace-height: 38px;
       --suite-search-width: 544px;
       --suite-search-height: 46px;
       --suite-control-size: 34px;
+      --suite-controls-width: 166px;
     }
 
     * { box-sizing: border-box; }
@@ -412,7 +414,7 @@
       height: var(--suite-topbar-height);
       border-bottom: 1px solid var(--nav-border);
       display: grid;
-      grid-template-columns: auto minmax(280px, var(--suite-search-width)) minmax(0, 1fr) auto;
+      grid-template-columns: var(--suite-identity-width) var(--suite-search-width) minmax(0, 1fr) var(--suite-controls-width);
       align-items: center;
       gap: 18px;
       padding: 0 var(--suite-edge-space);
@@ -5618,7 +5620,7 @@
 }
 </style>
 <link rel="stylesheet" href="/account-settings.css?v=752e8dd" />
-<link rel="stylesheet" href="/backend-topbar.css" />
+<link rel="stylesheet" href="/backend-topbar.css?v=20260725-uniform-1" />
 <link rel="stylesheet" href="/backend-ada.css" />
 <link rel="stylesheet" href="/backend-collapsible-sections.css?v=20260720-1236" />
 </head>
@@ -5709,7 +5711,9 @@
         </a>
         <span class="topbar-divider"></span>
         <div class="topbar-user">
-          <button class="topbar-user-button" data-goodos-topbar-control="account" id="userPill" type="button" aria-haspopup="menu" aria-expanded="false">Loading...</button>
+          <button class="topbar-user-button" data-goodos-topbar-control="account" id="userPill" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Account">
+            <span class="account-pill-avatar" id="userPillAvatar" aria-hidden="true">GB</span>
+          </button>
           <div class="topbar-user-menu hidden" id="userMenu" role="menu">
             <button type="button" id="profileMenuBtn" role="menuitem">Profile settings</button>
             <button type="button" id="logoutBtn" role="menuitem">Sign out</button>
@@ -5833,6 +5837,27 @@ async function request(path, options = {}) {
 function safeText(value) {
   return String(value ?? "").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 }
+
+window.goodosUpdateUserPill = function goodosUpdateUserPill() {
+  const button = document.getElementById("userPill");
+  const avatar = document.getElementById("userPillAvatar");
+  if (!button || !avatar || !state.user) return;
+  const displayName = state.user.displayName || state.user.fullName || state.user.email || "GoodBase account";
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part.charAt(0))
+    .join("")
+    .toUpperCase() || "GB";
+  const avatarUrl = state.user.avatarUrl || state.user.avatar_url || state.user.picture || state.user.photoURL || "";
+  avatar.textContent = initials;
+  avatar.style.backgroundImage = avatarUrl ? `url("${String(avatarUrl).replaceAll('"', "%22")}")` : "";
+  avatar.style.backgroundSize = "cover";
+  avatar.style.backgroundPosition = "center";
+  button.setAttribute("aria-label", `${displayName} account`);
+  button.title = displayName;
+};
 
 async function checkSession() {
   try {

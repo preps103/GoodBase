@@ -12,12 +12,14 @@ test("GoodBase uses the shared GoodApps desktop top-bar sizing contract", () => 
   const expectedTokens = {
     "--suite-topbar-height": "77px",
     "--suite-edge-space": "36px",
+    "--suite-identity-width": "360px",
     "--suite-brand-mark": "36px",
     "--suite-workspace-width": "246px",
     "--suite-workspace-height": "38px",
     "--suite-search-width": "544px",
     "--suite-search-height": "46px",
     "--suite-control-size": "34px",
+    "--suite-controls-width": "166px",
   };
 
   for (const [token, value] of Object.entries(expectedTokens)) {
@@ -29,7 +31,7 @@ test("GoodBase uses the shared GoodApps desktop top-bar sizing contract", () => 
 
   assert.match(
     consoleHtml,
-    /grid-template-columns:\s*auto\s*minmax\(280px,\s*var\(--suite-search-width\)\)\s*minmax\(0,\s*1fr\)\s*auto\s*;/
+    /grid-template-columns:\s*var\(--suite-identity-width\)\s*var\(--suite-search-width\)\s*minmax\(0,\s*1fr\)\s*var\(--suite-controls-width\)\s*;/
   );
   assert.match(consoleHtml, /padding:\s*0\s+var\(--suite-edge-space\)\s*;/);
 });
@@ -44,7 +46,7 @@ test("GoodBase implements the ordered shared top-bar zones", () => {
   assert.ok(search > identity);
   assert.ok(actions > search);
   assert.ok(controls > actions);
-  assert.match(consoleHtml, /href="\/backend-topbar\.css"/);
+  assert.match(consoleHtml, /href="\/backend-topbar\.css\?v=20260725-uniform-1"/);
 });
 
 test("GoodBase notifications remain explicitly application scoped", () => {

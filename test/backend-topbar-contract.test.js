@@ -21,7 +21,9 @@ test("master top bar exposes the four ordered integration zones", () => {
   assert.ok(search > identity, "search must follow identity in integration markup");
   assert.ok(actions > search, "application actions must follow search in integration markup");
   assert.ok(controls > actions, "universal controls must follow application actions in integration markup");
-  assert.match(styles, /grid-template-columns:\s*auto\s+minmax\(280px,\s*var\(--goodos-topbar-search-width\)\)\s+minmax\(0,\s*1fr\)\s+auto\s*;/);
+  assert.match(styles, /--goodos-topbar-identity-width:\s*360px\s*;/);
+  assert.match(styles, /--goodos-topbar-controls-width:\s*166px\s*;/);
+  assert.match(styles, /grid-template-columns:[\s\S]*var\(--goodos-topbar-identity-width\)[\s\S]*var\(--goodos-topbar-search-width\)[\s\S]*minmax\(0,\s*1fr\)[\s\S]*var\(--goodos-topbar-controls-width\)\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-identity\][\s\S]*grid-column:\s*1\s*;/);
   assert.match(styles, /\[data-goodos-topbar-search\][\s\S]*grid-column:\s*2\s*;/);
   assert.match(styles, /\[data-goodos-topbar-actions\][\s\S]*grid-column:\s*3\s*;/);
@@ -42,6 +44,10 @@ test("master top bar preserves the GoodBase desktop dimensions", () => {
   for (const [token, value] of Object.entries(expectedTokens)) {
     assert.match(styles, new RegExp(`${token}:\\s*${value}\\s*;`));
   }
+  assert.match(styles, /\[data-goodos-topbar-control="theme"\][\s\S]*grid-column:\s*1\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-notifications\][\s\S]*grid-column:\s*2\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar-control="help"\][\s\S]*grid-column:\s*3\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar-control="account"\][\s\S]*grid-column:\s*4\s*!important\s*;/);
 });
 
 test("master top bar is responsive and themeable without changing structure", () => {

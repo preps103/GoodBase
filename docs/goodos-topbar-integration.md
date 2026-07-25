@@ -108,7 +108,14 @@ The DOM order is the contract. Keep the four zones in this exact sequence:
 - Application-specific actions sit after search and before the theme control.
 - Theme, notifications, help, and account are universal controls and always remain at the right edge.
 - Applications may override the `--goodos-topbar-*` color tokens. They must not override structural sizing or zone order.
-- The desktop baseline is a 77 px bar, 246 × 38 px workspace selector, 544 × 46 px search field, and 34 × 34 px universal controls.
+- The desktop baseline is a 77 px bar with a fixed 360 px identity zone, a
+  544 × 46 px search field, a flexible application-action zone, and a fixed
+  166 px universal-control zone.
+- Theme, notifications, help, and account occupy fixed 34 × 34 px slots in
+  that order. Their coordinates do not change when an application has fewer
+  actions or a longer product name.
+- The account slot is always a circular 34 × 34 px avatar or initials button.
+  User names and roles belong in the account popover, never in the bar itself.
 
 ## Notification Center integration
 
