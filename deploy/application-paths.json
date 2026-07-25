@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "applicationCount": 14,
+  "productionRoot": "/home/mgoodlo3",
+  "applications": [
+    {
+      "id": "goodos",
+      "name": "GoodOS",
+      "domain": "goodos.app",
+      "service": "goodos",
+      "productionPath": "/home/mgoodlo3/GoodOS"
+    },
+    {
+      "id": "goodads",
+      "name": "GoodAds",
+      "domain": "ads.goodos.app",
+      "service": "goodads",
+      "productionPath": "/home/mgoodlo3/GoodAds"
+    },
+    {
+      "id": "goodboost",
+      "name": "GoodBoost",
+      "domain": "boost.goodos.app",
+      "service": "goodboost",
+      "productionPath": "/home/mgoodlo3/GoodBoost"
+    },
+    {
+      "id": "goodcustoms",
+      "name": "GoodCustoms",
+      "domain": "custom.goodos.app",
+      "service": "goodcustoms",
+      "productionPath": "/home/mgoodlo3/GoodCustoms"
+    },
+    {
+      "id": "gooddesigner",
+      "name": "GoodDesigner",
+      "domain": "designer.goodos.app",
+      "service": "gooddesigner",
+      "productionPath": "/home/mgoodlo3/GoodDesigner"
+    },
+    {
+      "id": "goodeditor",
+      "name": "GoodEditor",
+      "domain": "editor.goodos.app",
+      "service": "goodeditor",
+      "productionPath": "/home/mgoodlo3/GoodEditor"
+    },
+    {
+      "id": "goodescrow",
+      "name": "GoodEscrow",
+      "domain": "escrow.goodos.app",
+      "service": "goodescrow",
+      "productionPath": "/home/mgoodlo3/GoodEscrow"
+    },
+    {
+      "id": "goodfleet",
+      "name": "GoodFleet",
+      "domain": "fleet.goodos.app",
+      "service": "goodfleet",
+      "productionPath": "/home/mgoodlo3/GoodFleet"
+    },
+    {
+      "id": "goodqr",
+      "name": "GoodQR",
+      "domain": "qr.goodos.app",
+      "service": "goodqr",
+      "productionPath": "/home/mgoodlo3/GoodQR"
+    },
+    {
+      "id": "goodscan",
+      "name": "GoodScan",
+      "domain": "scan.goodos.app",
+      "service": "goodscan",
+      "productionPath": "/home/mgoodlo3/GoodScan"
+    },
+    {
+      "id": "goodspeech",
+      "name": "GoodSpeech",
+      "domain": "speech.goodos.app",
+      "service": "goodspeech",
+      "productionPath": "/home/mgoodlo3/GoodSpeech"
+    },
+    {
+      "id": "goodswapz",
+      "name": "GoodSwapz",
+      "domain": "swapz.goodos.app",
+      "service": "goodswapz",
+      "productionPath": "/home/mgoodlo3/GoodSwapz"
+    },
+    {
+      "id": "goodtrusts",
+      "name": "GoodTrusts",
+      "domain": "trusts.goodos.app",
+      "service": "goodtrusts",
+      "productionPath": "/home/mgoodlo3/GoodTrusts"
+    },
+    {
+      "id": "goodvoice",
+      "name": "GoodVoice",
+      "domain": "voice.goodos.app",
+      "service": "goodvoice",
+      "productionPath": "/home/mgoodlo3/GoodVoice"
+    }
+  ],
+  "platformServices": [
+    {
+      "id": "goodbase",
+      "name": "GoodBase",
+      "domain": "base.goodos.app",
+      "services": [
+        "goodbase-api",
+        "goodbase-api-ha",
+        "goodbase-worker"
+      ],
+      "productionPath": "/var/www/Goodbase"
+    },
+    {
+      "id": "goodid",
+      "name": "GoodID",
+      "domain": "id.goodos.app",
+      "services": [
+        "goodid"
+      ],
+      "productionPath": "/var/www/GoodID"
+    }
+  ],
+  "retired": [
+    {
+      "id": "goodhub",
+      "forbiddenDomains": [
+        "hub.goodos.app"
+      ]
+    },
+    {
+      "id": "goodbackend",
+      "forbiddenDomains": [
+        "backend.goodos.app"
+      ]
+    }
+  ]
+}

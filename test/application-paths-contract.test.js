@@ -1,0 +1,48 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+
+const root = path.join(__dirname, "..");
+const manifest = JSON.parse(
+  fs.readFileSync(path.join(root, "deploy/application-paths.json"), "utf8")
+);
+const cleanupMigration = fs.readFileSync(
+  path.join(root, "migrations/20260725_remove_retired_goodhub.sql"),
+  "utf8"
+);
+
+test("the deployment manifest defines exactly 14 uniquely routed applications", () => {
+  assert.equal(manifest.applicationCount, 14);
+  assert.equal(manifest.applications.length, 14);
+  assert.equal(new Set(manifest.applications.map(({ id }) => id)).size, 14);
+  assert.equal(new Set(manifest.applications.map(({ domain }) => domain)).size, 14);
+  assert.equal(new Set(manifest.applications.map(({ service }) => service)).size, 14);
+});
+
+test("every product deployment uses the canonical production root and unversioned path", () => {
+  for (const application of manifest.applications) {
+    assert.match(application.productionPath, /^\/home\/mgoodlo3\/Good[A-Za-z]+$/);
+    assert.equal(application.productionPath.includes("-backup"), false);
+    assert.equal(application.productionPath.includes("-release"), false);
+    assert.equal(application.productionPath.includes("-v1."), false);
+  }
+});
+
+test("GoodBase and GoodID remain explicit platform services", () => {
+  const platformIds = manifest.platformServices.map(({ id }) => id);
+  assert.deepEqual(platformIds, ["goodbase", "goodid"]);
+  assert.equal(manifest.platformServices[0].domain, "base.goodos.app");
+  assert.equal(manifest.platformServices[0].productionPath, "/var/www/Goodbase");
+});
+
+test("retired GoodHub and GoodBackend identifiers cannot return", () => {
+  assert.deepEqual(
+    manifest.retired.map(({ id }) => id),
+    ["goodhub", "goodbackend"]
+  );
+  assert.match(cleanupMigration, /DELETE FROM apps[\s\S]*'goodhub'/);
+  assert.match(cleanupMigration, /DELETE FROM apps[\s\S]*'goodbackend'/);
+  assert.match(cleanupMigration, /backend\.goodos\.app/);
+  assert.match(cleanupMigration, /base\.goodos\.app/);
+});
