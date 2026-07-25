@@ -74,6 +74,11 @@
     "speakeasy": "^2.0.0",
     "ws": "8.21.1"
   },
+  "overrides": {
+    "gcp-metadata": {
+      "gaxios": "7.3.0"
+    }
+  },
   "devDependencies": {
     "nodemon": "^3.1.9"
   }
