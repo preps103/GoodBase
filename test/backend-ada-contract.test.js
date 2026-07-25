@@ -75,6 +75,7 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
     "border-radius: 9999px",
     "bottom: 96px",
     "z-index: 100",
+    "box-sizing: border-box",
     "width: 400px",
     "height: 750px",
     "max-height: 85vh",
@@ -112,6 +113,7 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
     "right: 24px",
     "bottom: 96px",
     "z-index: 100",
+    "box-sizing: border-box",
     "width: 400px",
     "height: 750px",
     "max-height: 85vh",
@@ -122,6 +124,30 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
       `${requiredPanelRule} must remain on the universal panel`,
     );
   }
+});
+
+test("ADA panel adapts safely to tablet and mobile viewports", () => {
+  const styles = read("src/public/backend-ada.css");
+  const tabletRule =
+    styles.match(/@media \(max-width: 1024px\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  const mobileRule =
+    styles.match(/@media \(max-width: 640px\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  const compactRule =
+    styles.match(/@media \(max-width: 360px\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+
+  assert.match(tabletRule, /max-height:\s*min\(85vh,\s*calc\(100dvh - 120px\)\)/);
+  assert.match(mobileRule, /left:\s*24px/);
+  assert.match(mobileRule, /right:\s*24px/);
+  assert.match(mobileRule, /width:\s*auto/);
+  assert.match(mobileRule, /max-width:\s*none/);
+  assert.match(mobileRule, /\.backend-ada-close[\s\S]*?width:\s*44px[\s\S]*?height:\s*44px/);
+  assert.match(mobileRule, /\.backend-ada-text-sizes button[\s\S]*?min-height:\s*44px/);
+  assert.match(mobileRule, /\.backend-ada-reset[\s\S]*?min-height:\s*44px/);
+  assert.match(compactRule, /\.backend-ada-subtitle[\s\S]*?display:\s*none/);
+  assert.match(styles, /overscroll-behavior:\s*contain/);
+  assert.match(styles, /-webkit-overflow-scrolling:\s*touch/);
+  assert.match(styles, /@media \(hover: none\), \(pointer: coarse\)/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
 });
 
 test("PostgREST exposes its local-only admin readiness endpoint", () => {

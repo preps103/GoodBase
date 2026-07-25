@@ -50,6 +50,8 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
   line-height: 16px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   cursor: pointer;
   transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
 }
@@ -109,6 +111,7 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
   display: flex;
   overflow: hidden;
   flex-direction: column;
+  box-sizing: border-box;
   width: 400px;
   height: 750px;
   max-width: calc(100vw - 32px);
@@ -213,6 +216,8 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
 
 .backend-ada-panel-content {
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 15px;
 }
 
@@ -427,4 +432,95 @@ html.ada-focus-indicators body > :not(.backend-ada-root) :focus-visible {
 @keyframes backend-ada-panel-enter {
   from { opacity: 0; transform: translateY(12px) scale(0.975); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 1024px) {
+  .backend-ada-panel {
+    max-height: min(85vh, calc(100dvh - 120px));
+  }
+}
+
+@media (max-width: 640px) {
+  .backend-ada-panel {
+    left: 24px;
+    right: 24px;
+    width: auto;
+    max-width: none;
+  }
+
+  .backend-ada-panel-header,
+  .backend-ada-panel-footer {
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .backend-ada-heading-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+  }
+
+  .backend-ada-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .backend-ada-panel-content {
+    padding: 12px;
+  }
+
+  .backend-ada-section {
+    padding: 12px;
+  }
+
+  .backend-ada-text-sizes button {
+    min-height: 44px;
+  }
+
+  .backend-ada-setting {
+    min-height: 68px;
+    padding: 9px 8px;
+    grid-template-columns: 36px minmax(0, 1fr) 38px;
+    gap: 8px;
+  }
+
+  .backend-ada-setting-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .backend-ada-reset {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 360px) {
+  .backend-ada-panel-heading {
+    gap: 8px;
+  }
+
+  .backend-ada-subtitle {
+    display: none;
+  }
+
+  .backend-ada-panel-footer {
+    font-size: 9px;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .backend-ada-trigger:hover {
+    filter: none;
+    transform: none;
+    box-shadow: var(--backend-ada-trigger-shadow);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backend-ada-trigger,
+  .backend-ada-panel,
+  .backend-ada-switch span {
+    animation: none;
+    transition: none;
+  }
 }
