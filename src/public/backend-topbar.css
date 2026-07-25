@@ -30,9 +30,11 @@
  * dimensions and zone order are intentionally shared across every application.
  */
 :where(.goodos-topbar, [data-goodos-topbar]) {
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 40;
+  right: 0;
+  left: 0;
+  z-index: 100;
   display: grid;
   grid-template-columns:
     auto
@@ -342,6 +344,9 @@
  * coordinates at the same viewport width.
  */
 [data-goodos-topbar] {
+  position: fixed !important;
+  inset: 0 0 auto 0 !important;
+  z-index: 100 !important;
   display: grid !important;
   grid-template-columns:
     var(--goodos-topbar-identity-width)
@@ -364,6 +369,23 @@
   max-height: var(--goodos-topbar-height) !important;
   padding: 0 var(--goodos-topbar-edge-space) !important;
   box-sizing: border-box !important;
+}
+
+/*
+ * Every React application mounts its header through GoodOSTopBarWidget. The
+ * widget portals the bar to document.body, while this spacer preserves the
+ * exact place the 77px bar occupied in the application's normal layout.
+ */
+.goodos-topbar-widget__spacer,
+[data-goodos-topbar-spacer] {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: var(--goodos-topbar-height) !important;
+  min-height: var(--goodos-topbar-height) !important;
+  max-height: var(--goodos-topbar-height) !important;
+  flex: 0 0 var(--goodos-topbar-height) !important;
+  pointer-events: none !important;
 }
 
 [data-goodos-topbar] > [data-goodos-topbar-identity] {
@@ -557,6 +579,14 @@
     min-height: 116px !important;
     max-height: none !important;
     padding: 10px 16px !important;
+  }
+
+  .goodos-topbar-widget__spacer,
+  [data-goodos-topbar-spacer] {
+    height: 116px !important;
+    min-height: 116px !important;
+    max-height: 116px !important;
+    flex-basis: 116px !important;
   }
 
   [data-goodos-topbar] > [data-goodos-topbar-identity] {

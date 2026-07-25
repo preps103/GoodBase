@@ -55,6 +55,21 @@ test("master top bar preserves the GoodBase desktop dimensions", () => {
   assert.match(styles, /\[data-goodos-topbar-control="account"\][\s\S]*grid-column:\s*4\s*!important\s*;/);
 });
 
+test("top-bar widget owns viewport placement and preserves application notification slots", () => {
+  const styles = read("src/public/backend-topbar.css");
+  const widget = read("packages/goodos-topbar-widget/GoodOSTopBarWidget.tsx");
+  const contract = read("docs/goodos-topbar-integration.md");
+
+  assert.match(styles, /\[data-goodos-topbar\]\s*\{[\s\S]*position:\s*fixed\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar\]\s*\{[\s\S]*inset:\s*0 0 auto 0\s*!important\s*;/);
+  assert.match(styles, /\.goodos-topbar-widget__spacer[\s\S]*height:\s*var\(--goodos-topbar-height\)\s*!important\s*;/);
+  assert.match(widget, /createPortal\(children,\s*document\.body\)/);
+  assert.match(widget, /data-goodos-topbar-spacer/);
+  assert.match(contract, /this application's own notification center/);
+  assert.match(contract, /Notification data remains application-scoped/);
+  assert.match(contract, /GoodOS alone mounts the\s+aggregated master notification center/);
+});
+
 test("master top bar is responsive and themeable without changing structure", () => {
   const styles = read("src/public/backend-topbar.css");
 

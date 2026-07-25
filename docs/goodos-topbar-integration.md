@@ -180,3 +180,31 @@ Applications should dispatch `goodos:notifications:updated` from the element car
 `data-goodos-notifications` after an unread-count or list change. Event detail must
 include `appId` and `unreadCount`; GoodOS master mode may additionally include
 `sourceAppIds`, already filtered to entitled applications.
+
+## React widget
+
+Authenticated React applications mount the shared shell through
+`GoodOSTopBarWidget`. The widget portals the application-owned top-bar content
+to `document.body`, so sidebars, transforms, overflow containers, and stacking
+contexts can never shift or clip it. A responsive spacer remains in the
+application layout to reserve 77px on desktop and 116px on mobile.
+
+```tsx
+<GoodOSTopBarWidget>
+  <header className="goodos-topbar" data-goodos-topbar>
+    <div data-goodos-topbar-identity>{/* application branding */}</div>
+    <label data-goodos-topbar-search>{/* application search */}</label>
+    <nav data-goodos-topbar-actions>{/* application-only actions */}</nav>
+    <nav data-goodos-topbar-controls>
+      {/* theme */}
+      {/* this application's own notification center */}
+      {/* help */}
+      {/* account */}
+    </nav>
+  </header>
+</GoodOSTopBarWidget>
+```
+
+Notification data remains application-scoped. Each product must mount its own
+notification center with its fixed application ID. GoodOS alone mounts the
+aggregated master notification center.
