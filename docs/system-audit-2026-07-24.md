@@ -65,12 +65,12 @@ only their compiled output.
 | GoodDesigner | 200 | Pass | **Fail: generation namespace returns 404** |
 | GoodEditor | 200 | Pass | Shared boundary passes |
 | GoodEscrow | 200 | Pass | REST and data-token routes protected with 401 |
-| GoodFleet | 200 | Pass | **Fail: `/api/fleet/v1/bootstrap` returns 404** |
+| GoodFleet | 200 | Pass | Fleet and communications routes exist; protected with 401 |
 | GoodQR | 200 | Pass | Shared boundary passes |
 | GoodScan | 200 | Pass | Shared boundary passes |
 | GoodSpeech | 200 | Pass | Speech route exists; protected with 401 |
 | GoodSwapz | 200 | Pass | Listings route exists; protected with 401 |
-| GoodTrusts | 200 | Pass | Shared boundary passes; new UI bundle pending |
+| GoodTrusts | 200 | Pass | Shared boundary and deployed UI bundle pass |
 | GoodVoice | 200 | Pass | Voice health returns 200 |
 
 ## Registry and isolation
@@ -110,9 +110,8 @@ only their compiled output.
 
 ### Product business APIs
 
-GoodFleet and GoodDesigner cannot complete their primary business workflows
-through GoodBase until their referenced API namespaces are implemented and
-deployed.
+GoodDesigner cannot complete its primary generation workflow through GoodBase
+until its referenced generation namespace is implemented and deployed.
 
 ### External social authentication
 
@@ -121,16 +120,31 @@ GoodBase reports each provider as `misconfigured` and `available: false`.
 The login UI must continue to disable them until real provider credentials and
 callback configuration are installed.
 
-### Product frontend publication
-
-The latest top bars, logins, notification centers, and ADA themes are not yet
-served by the 13 product domains. GoodOS and GoodBase are live. Publishing the
-remaining compiled product bundles is blocked by pre-existing uncommitted
-production source edits and requires explicit compiled-output overwrite
-authorization.
-
 ### Retired DNS records
 
 Origin routes and certificates for the retired backend and GoodHub hostnames
 are retired, but the DNS records still resolve through Cloudflare. They must be
 deleted at the DNS provider to complete domain retirement.
+
+## Post-deployment verification
+
+The authorized production rollout completed after the audit:
+
+- Full-folder archives for GoodOS, GoodID, GoodBase, and every product were
+  stored under `/var/backups/goodos-uniformity-20260724`.
+- A complete pre-migration `goodos_backend` PostgreSQL dump was created with
+  the local PostgreSQL administrator.
+- All 18 completed backup artifacts passed SHA-256 verification.
+- The GoodBase registry, GoodFleet core, GoodFleet communications, and
+  job-schedule integrity migrations completed successfully.
+- All 18 managed PM2 processes are online.
+- All 16 managed public domains return HTTP 200.
+- GoodBase readiness reports the API runtime, PostgreSQL, automatic REST, and
+  background worker ready.
+- The Fleet bootstrap and communications endpoints now return authenticated
+  HTTP 401 responses rather than HTTP 404.
+- Every product build contains the shared ADA, top-bar, and login contracts.
+  GoodOS contains the ADA and top-bar contracts but intentionally omits the
+  product login contract.
+- GoodID health and OIDC discovery both return HTTP 200 after its protected
+  signing-key directory was restored from the verified backup.
