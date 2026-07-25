@@ -1,15 +1,18 @@
 "use strict";
 
-const { query } = require("../config/database");
+const { pool, query } = require("../config/database");
 
 const RESOURCE_TYPES = new Set([
   "campaigns", "content", "approvals", "calendar", "connections",
   "publishing_jobs", "analytics", "media", "link_hubs", "automations",
   "notifications", "email_campaigns", "designs", "flyers",
   "business_cards", "qr_codes", "videos", "brand", "audit_events",
+  "funnels", "lead_forms", "leads",
 ]);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PUBLIC_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MUTATING_ROLES = new Set(["owner", "admin", "manager", "editor", "member"]);
 const DESTRUCTIVE_ROLES = new Set(["owner", "admin", "manager"]);
 
@@ -40,6 +43,53 @@ function requireUuid(value) {
   const id = String(value || "").trim();
   if (!UUID_PATTERN.test(id)) throw serviceError("A valid resource ID is required.");
   return id;
+}
+
+function requirePublicSlug(value) {
+  const slug = String(value || "").trim().toLowerCase();
+  if (!PUBLIC_SLUG_PATTERN.test(slug)) {
+    throw serviceError("A valid lead form address is required.", 400, "GOODADS_FORM_SLUG_INVALID");
+  }
+  return slug;
+}
+
+function boundedText(value, maximum) {
+  return String(value || "").trim().slice(0, maximum);
+}
+
+function normalizeLeadSubmission(value) {
+  const data = normalizePayload(value);
+  if (boundedText(data.website, 200)) {
+    throw serviceError("The lead submission was rejected.", 400, "GOODADS_LEAD_SPAM_REJECTED");
+  }
+
+  const email = boundedText(data.email, 320).toLowerCase();
+  const phone = boundedText(data.phone, 40);
+  if (!email && !phone) {
+    throw serviceError("An email address or phone number is required.", 400, "GOODADS_LEAD_CONTACT_REQUIRED");
+  }
+  if (email && !EMAIL_PATTERN.test(email)) {
+    throw serviceError("Enter a valid email address.", 400, "GOODADS_LEAD_EMAIL_INVALID");
+  }
+
+  return {
+    firstName: boundedText(data.firstName, 100),
+    lastName: boundedText(data.lastName, 100),
+    email,
+    phone,
+    company: boundedText(data.company, 160),
+    message: boundedText(data.message, 4000),
+    consent: data.consent === true,
+    source: boundedText(data.source || "lead-form", 120),
+    pageUrl: boundedText(data.pageUrl, 2048),
+    utm: {
+      source: boundedText(data.utm?.source, 120),
+      medium: boundedText(data.utm?.medium, 120),
+      campaign: boundedText(data.utm?.campaign, 120),
+      content: boundedText(data.utm?.content, 120),
+      term: boundedText(data.utm?.term, 120),
+    },
+  };
 }
 
 function roleFromContext(context) {
@@ -194,11 +244,41 @@ async function dashboard(context) {
      GROUP BY resource_type, status ORDER BY resource_type, status`,
     [context.organizationId]
   );
+  const recent = await query(
+    `SELECT * FROM goodads_resources
+     WHERE organization_id = $1 AND archived_at IS NULL
+     ORDER BY updated_at DESC LIMIT 12`,
+    [context.organizationId]
+  );
+  const wonLeads = await query(
+    `SELECT COUNT(*)::integer AS count FROM goodads_resources
+     WHERE organization_id = $1 AND resource_type = 'leads'
+       AND archived_at IS NULL AND data->>'stage' = 'won'`,
+    [context.organizationId]
+  );
+  const count = (type, status = null) => result.rows
+    .filter((row) => row.resource_type === type && (!status || row.status === status))
+    .reduce((sum, row) => sum + Number(row.count || 0), 0);
   return {
     organization: context.organization,
     project: context.project,
     environment: context.environment,
     counts: result.rows,
+    metrics: {
+      campaigns: count("campaigns"),
+      activeCampaigns: count("campaigns", "active"),
+      content: count("content"),
+      scheduled: count("calendar", "scheduled"),
+      pendingApprovals: count("approvals", "pending"),
+      connectedAccounts: count("connections", "connected"),
+      publishingJobs: count("publishing_jobs"),
+      publishingFailures: count("publishing_jobs", "failed"),
+      funnels: count("funnels"),
+      liveForms: count("lead_forms", "active"),
+      leads: count("leads"),
+      wonLeads: wonLeads.rows[0]?.count || 0,
+    },
+    recent: recent.rows.map(rowToResource),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -218,10 +298,222 @@ async function workspace(context) {
   };
 }
 
+function publicFormFromRow(row) {
+  const data = row.data || {};
+  const allowedFields = new Set(["firstName", "lastName", "email", "phone", "company", "message"]);
+  const fields = Array.isArray(data.fields)
+    ? data.fields
+      .filter((field) => field && typeof field === "object" && allowedFields.has(String(field.id)))
+      .slice(0, 12)
+      .map((field) => ({
+        id: String(field.id),
+        label: boundedText(field.label, 80) || String(field.id),
+        type: ["text", "email", "tel", "textarea"].includes(String(field.type)) ? String(field.type) : "text",
+        required: field.required === true,
+      }))
+    : [];
+  return {
+    id: row.id,
+    name: row.name,
+    publicSlug: boundedText(data.publicSlug, 64),
+    headline: boundedText(data.headline, 180),
+    description: boundedText(data.description, 800),
+    buttonLabel: boundedText(data.buttonLabel, 80) || "Get started",
+    successMessage: boundedText(data.successMessage, 500) || "Thank you. We received your information.",
+    fields,
+    requireConsent: data.requireConsent === true,
+    consentText: boundedText(data.consentText, 500),
+    funnelId: UUID_PATTERN.test(String(data.funnelId || "")) ? String(data.funnelId) : null,
+    theme: {
+      backgroundColor: boundedText(data.theme?.backgroundColor, 20) || "#f8fafc",
+      cardColor: boundedText(data.theme?.cardColor, 20) || "#ffffff",
+      accentColor: boundedText(data.theme?.accentColor, 20) || "#4f46e5",
+    },
+  };
+}
+
+async function getPublicLeadForm(slug) {
+  const result = await query(
+    `SELECT * FROM goodads_resources
+     WHERE resource_type = 'lead_forms' AND status = 'active'
+       AND archived_at IS NULL AND data->>'publicSlug' = $1
+     LIMIT 1`,
+    [requirePublicSlug(slug)]
+  );
+  if (!result.rows[0]) {
+    throw serviceError("This lead form is not available.", 404, "GOODADS_FORM_NOT_FOUND");
+  }
+  return publicFormFromRow(result.rows[0]);
+}
+
+async function recordLeadFormView(slug) {
+  const result = await query(
+    `UPDATE goodads_resources
+     SET data = jsonb_set(
+           data,
+           '{viewCount}',
+           to_jsonb(CASE WHEN COALESCE(data->>'viewCount', '') ~ '^[0-9]+$'
+             THEN (data->>'viewCount')::integer + 1 ELSE 1 END),
+           true
+         ),
+         version = version + 1,
+         updated_at = NOW()
+     WHERE resource_type = 'lead_forms' AND status = 'active'
+       AND archived_at IS NULL AND data->>'publicSlug' = $1
+     RETURNING id`,
+    [requirePublicSlug(slug)]
+  );
+  if (!result.rows[0]) {
+    throw serviceError("This lead form is not available.", 404, "GOODADS_FORM_NOT_FOUND");
+  }
+  return { recorded: true };
+}
+
+async function captureLead({ slug, payload, idempotencyKey, userAgent = "" }) {
+  const normalizedSlug = requirePublicSlug(slug);
+  const submission = normalizeLeadSubmission(payload);
+  const requestKey = boundedText(idempotencyKey, 128);
+  if (!requestKey) {
+    throw serviceError("An idempotency key is required.", 400, "GOODADS_IDEMPOTENCY_REQUIRED");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const formResult = await client.query(
+      `SELECT * FROM goodads_resources
+       WHERE resource_type = 'lead_forms' AND status = 'active'
+         AND archived_at IS NULL AND data->>'publicSlug' = $1
+       LIMIT 1 FOR UPDATE`,
+      [normalizedSlug]
+    );
+    const form = formResult.rows[0];
+    if (!form) {
+      throw serviceError("This lead form is not available.", 404, "GOODADS_FORM_NOT_FOUND");
+    }
+    if (form.data?.requireConsent === true && !submission.consent) {
+      throw serviceError("Consent is required before submitting this form.", 400, "GOODADS_LEAD_CONSENT_REQUIRED");
+    }
+
+    const duplicateRequest = await client.query(
+      `SELECT resource_id FROM goodads_resource_events
+       WHERE organization_id = $1 AND event_type = 'leads.captured'
+         AND metadata->>'idempotencyKey' = $2
+       LIMIT 1`,
+      [form.organization_id, requestKey]
+    );
+    if (duplicateRequest.rows[0]) {
+      await client.query("COMMIT");
+      return { leadId: duplicateRequest.rows[0].resource_id, status: "received", duplicate: true };
+    }
+
+    const identityClause = submission.email
+      ? "LOWER(data->>'email') = $2"
+      : "data->>'phone' = $2";
+    const identityValue = submission.email || submission.phone;
+    const existingResult = await client.query(
+      `SELECT * FROM goodads_resources
+       WHERE organization_id = $1 AND resource_type = 'leads'
+         AND archived_at IS NULL AND ${identityClause}
+       ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`,
+      [form.organization_id, identityValue]
+    );
+
+    const now = new Date().toISOString();
+    const funnelId = UUID_PATTERN.test(String(form.data?.funnelId || "")) ? String(form.data.funnelId) : null;
+    const formId = String(form.id);
+    const previous = existingResult.rows[0];
+    const name = [submission.firstName, submission.lastName].filter(Boolean).join(" ")
+      || submission.company || submission.email || submission.phone;
+    let lead;
+
+    if (previous) {
+      const previousData = previous.data || {};
+      const nextData = {
+        ...previousData,
+        ...submission,
+        stage: previousData.stage || "new",
+        score: Number(previousData.score) || 0,
+        formId,
+        funnelId,
+        submissionCount: (Number(previousData.submissionCount) || 1) + 1,
+        lastSubmittedAt: now,
+        updatedAt: now,
+      };
+      const updated = await client.query(
+        `UPDATE goodads_resources
+         SET name = $1, data = $2::jsonb, version = version + 1, updated_at = NOW()
+         WHERE id = $3::uuid RETURNING *`,
+        [name, JSON.stringify(nextData), previous.id]
+      );
+      lead = updated.rows[0];
+    } else {
+      const leadData = {
+        ...submission,
+        stage: "new",
+        score: 0,
+        tags: [],
+        notes: "",
+        formId,
+        funnelId,
+        submissionCount: 1,
+        firstSubmittedAt: now,
+        lastSubmittedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const inserted = await client.query(
+        `INSERT INTO goodads_resources (
+           resource_type, organization_id, project_id, environment_id,
+           owner_user_id, name, status, data
+         ) VALUES ('leads', $1, $2, $3, $4::uuid, $5, 'active', $6::jsonb)
+         RETURNING *`,
+        [form.organization_id, form.project_id, form.environment_id, form.owner_user_id, name, JSON.stringify(leadData)]
+      );
+      lead = inserted.rows[0];
+    }
+
+    await client.query(
+      `UPDATE goodads_resources
+       SET data = jsonb_set(
+             data,
+             '{submissionCount}',
+             to_jsonb(CASE WHEN COALESCE(data->>'submissionCount', '') ~ '^[0-9]+$'
+               THEN (data->>'submissionCount')::integer + 1 ELSE 1 END),
+             true
+           ),
+           version = version + 1,
+           updated_at = NOW()
+       WHERE id = $1::uuid`,
+      [form.id]
+    );
+    await client.query(
+      `INSERT INTO goodads_resource_events (
+         resource_id, organization_id, actor_user_id, event_type, next_status, metadata
+       ) VALUES ($1::uuid, $2, NULL, 'leads.captured', 'active', $3::jsonb)`,
+      [lead.id, form.organization_id, JSON.stringify({
+        formId,
+        funnelId,
+        idempotencyKey: requestKey,
+        userAgent: boundedText(userAgent, 400),
+      })]
+    );
+    await client.query("COMMIT");
+    return { leadId: lead.id, status: "received", duplicate: Boolean(previous) };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   RESOURCE_TYPES,
   normalizePayload,
   requireUuid,
+  requirePublicSlug,
+  normalizeLeadSubmission,
   dashboard,
   workspace,
   listResources,
@@ -229,4 +521,7 @@ module.exports = {
   upsertResource,
   archiveResource,
   transitionResource,
+  getPublicLeadForm,
+  recordLeadFormView,
+  captureLead,
 };

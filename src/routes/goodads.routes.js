@@ -1,12 +1,25 @@
 "use strict";
 
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { success, error } = require("../utils/response");
 const service = require("../services/goodads.service");
 
 const router = express.Router();
+const publicFormReadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 240,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const publicFormWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 
 function requireGoodAdsAccess(req, res, next) {
   const role = String(req.user?.platformRole || req.user?.role || "").toLowerCase();
@@ -35,6 +48,21 @@ function handle(res, label, operation) {
       });
     });
 }
+
+router.get("/public/forms/:slug", publicFormReadLimiter, (req, res) => (
+  handle(res, "lead-form.public", service.getPublicLeadForm(req.params.slug))
+));
+router.post("/public/forms/:slug/views", publicFormReadLimiter, (req, res) => (
+  handle(res, "lead-form.view", service.recordLeadFormView(req.params.slug))
+));
+router.post("/public/forms/:slug/submissions", publicFormWriteLimiter, (req, res) => (
+  handle(res, "lead.capture", service.captureLead({
+    slug: req.params.slug,
+    payload: req.body,
+    idempotencyKey: req.get("Idempotency-Key"),
+    userAgent: req.get("User-Agent"),
+  }))
+));
 
 router.use(authRequired, tenantContext, requireGoodAdsAccess);
 
@@ -107,6 +135,9 @@ function registerResource(path, type) {
   ["qr-codes", "qr_codes"],
   ["videos", "videos"],
   ["audit-events", "audit_events"],
+  ["funnels", "funnels"],
+  ["lead-forms", "lead_forms"],
+  ["leads", "leads"],
 ].forEach(([path, type]) => registerResource(path, type));
 
 router.post("/campaigns/:id/launch", (req, res) => handle(res, "campaign.launch", service.transitionResource({
@@ -116,6 +147,33 @@ router.post("/campaigns/:id/launch", (req, res) => handle(res, "campaign.launch"
   context: req.tenantContext,
   userId: req.user.id,
   eventType: "campaigns.launched",
+})));
+
+router.post("/funnels/:id/publish", (req, res) => handle(res, "funnel.publish", service.transitionResource({
+  type: "funnels",
+  id: req.params.id,
+  nextStatus: "active",
+  context: req.tenantContext,
+  userId: req.user.id,
+  eventType: "funnels.published",
+})));
+
+router.post("/funnels/:id/pause", (req, res) => handle(res, "funnel.pause", service.transitionResource({
+  type: "funnels",
+  id: req.params.id,
+  nextStatus: "paused",
+  context: req.tenantContext,
+  userId: req.user.id,
+  eventType: "funnels.paused",
+})));
+
+router.post("/lead-forms/:id/publish", (req, res) => handle(res, "lead-form.publish", service.transitionResource({
+  type: "lead_forms",
+  id: req.params.id,
+  nextStatus: "active",
+  context: req.tenantContext,
+  userId: req.user.id,
+  eventType: "lead_forms.published",
 })));
 
 module.exports = router;
