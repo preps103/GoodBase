@@ -49,6 +49,14 @@ test("GoodCustoms and GoodTrusts use their canonical singular domains", () => {
   );
   assert.match(domainMigration, /custom\.goodos\.app/);
   assert.match(domainMigration, /trust\.goodos\.app/);
+
+  const customNginx = fs.readFileSync(
+    path.join(root, "deploy/nginx/custom.goodos.app.conf"),
+    "utf8"
+  );
+  assert.match(customNginx, /server_name custom\.goodos\.app;/);
+  assert.match(customNginx, /proxy_pass http:\/\/127\.0\.0\.1:3007;/);
+  assert.match(customNginx, /return 308 https:\/\/custom\.goodos\.app\$request_uri;/);
 });
 
 test("retired GoodHub and GoodBackend identifiers cannot return", () => {
