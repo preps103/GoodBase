@@ -279,11 +279,11 @@
       --nav-accent: #7c72ff;
       --suite-topbar-height: 77px;
       --suite-edge-space: 36px;
-      --suite-identity-width: 360px;
-      --suite-brand-mark: 36px;
-      --suite-workspace-width: 246px;
-      --suite-workspace-height: 38px;
-      --suite-search-width: 544px;
+      --suite-identity-width: clamp(320px, 23vw, 360px);
+      --suite-brand-mark: 34px;
+      --suite-workspace-width: 176px;
+      --suite-workspace-height: 34px;
+      --suite-search-width: clamp(360px, 34vw, 544px);
       --suite-search-height: 46px;
       --suite-control-size: 34px;
       --suite-controls-width: 166px;
@@ -437,7 +437,7 @@
       min-width: 0;
     }
 
-    .topbar-left { gap: 16px; }
+    .topbar-left { gap: 12px; }
     .topbar-actions {
       gap: 8px;
       overflow-x: auto;
@@ -449,9 +449,9 @@
     .topbar-brand {
       display: inline-flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       color: #f8fafc;
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 950;
       letter-spacing: -.025em;
       white-space: nowrap;
@@ -470,15 +470,18 @@
 
     .workspace-select {
       width: var(--suite-workspace-width);
-      min-width: var(--suite-workspace-width);
+      min-width: 0;
       height: var(--suite-workspace-height);
       border: 1px solid var(--nav-border);
       border-radius: 10px;
       background-color: rgba(24,31,56,.82);
       color: #d9def0;
-      padding: 0 38px 0 14px;
+      padding: 0 30px 0 11px;
       outline: none;
-      font-size: 15px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
     }
 
     .search {
@@ -5620,7 +5623,7 @@
 }
 </style>
 <link rel="stylesheet" href="/account-settings.css?v=752e8dd" />
-<link rel="stylesheet" href="/backend-topbar.css?v=20260725-uniform-2" />
+<link rel="stylesheet" href="/backend-topbar.css?v=20260725-uniform-3" />
 <link rel="stylesheet" href="/backend-ada.css" />
 <link rel="stylesheet" href="/backend-collapsible-sections.css?v=20260720-1236" />
 </head>
@@ -5682,12 +5685,15 @@
       <div class="topbar-left goodos-topbar__identity" data-goodos-topbar-identity>
         <div class="topbar-brand goodos-topbar__brand" data-goodos-topbar-brand>
           <span class="topbar-brand-mark goodos-topbar__brand-mark" data-goodos-topbar-brand-mark aria-hidden="true">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="m12 3 7.5 4.2v9.6L12 21l-7.5-4.2V7.2L12 3Z" stroke="currentColor" stroke-width="1.8"/><path d="m4.8 7.4 7.2 4.1 7.2-4.1M12 11.5V21" stroke="currentColor" stroke-width="1.8"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <ellipse cx="12" cy="5" rx="7.5" ry="3" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M4.5 5v5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V5M4.5 10v5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-5M4.5 15v4c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-4" stroke="currentColor" stroke-width="1.8"/>
+            </svg>
           </span>
           <span>GoodBase</span>
         </div>
-        <select class="workspace-select goodos-topbar__workspace" data-goodos-topbar-workspace id="workspaceSelect" aria-label="Current workspace">
-          <option>GoodBase Owner Workspace</option>
+        <select class="workspace-select goodos-topbar__workspace" data-goodos-topbar-workspace id="workspaceSelect" aria-label="Current workspace" title="GoodBase Owner Workspace">
+          <option>Owner Workspace</option>
         </select>
       </div>
       <div class="search goodos-topbar__search" data-goodos-topbar-search>

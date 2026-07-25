@@ -108,9 +108,15 @@ The DOM order is the contract. Keep the four zones in this exact sequence:
 - Application-specific actions sit after search and before the theme control.
 - Theme, notifications, help, and account are universal controls and always remain at the right edge.
 - Applications may override the `--goodos-topbar-*` color tokens. They must not override structural sizing or zone order.
-- The desktop baseline is a 77 px bar with a fixed 360 px identity zone, a
-  544 × 46 px search field, a flexible application-action zone, and a fixed
-  166 px universal-control zone.
+- The desktop baseline is a 77 px bar with a responsive 320–360 px identity
+  zone, a responsive search field capped at 544 × 46 px, a flexible
+  application-action zone, and a fixed 166 px universal-control zone.
+- Workspace controls use a compact 176 × 34 px treatment with 13 px text and
+  collapse below 1120 px. Application actions scroll within their own zone and
+  collapse below 1120 px, so neither area can overlap search or universal
+  controls.
+- Every application must supply its own product-specific icon inside
+  `[data-goodos-topbar-brand-mark]`; the GoodOS cube is reserved for GoodOS.
 - Theme, notifications, help, and account occupy fixed 34 × 34 px slots in
   that order. Their coordinates do not change when an application has fewer
   actions or a longer product name.

@@ -2,11 +2,11 @@
   --goodos-topbar-height: 77px;
   --goodos-topbar-edge-space: 36px;
   --goodos-topbar-gap: 18px;
-  --goodos-topbar-identity-width: 360px;
-  --goodos-topbar-brand-mark-size: 36px;
-  --goodos-topbar-workspace-width: 246px;
-  --goodos-topbar-workspace-height: 38px;
-  --goodos-topbar-search-width: 544px;
+  --goodos-topbar-identity-width: clamp(320px, 23vw, 360px);
+  --goodos-topbar-brand-mark-size: 34px;
+  --goodos-topbar-workspace-width: 176px;
+  --goodos-topbar-workspace-height: 34px;
+  --goodos-topbar-search-width: clamp(360px, 34vw, 544px);
   --goodos-topbar-search-height: 46px;
   --goodos-topbar-control-size: 34px;
   --goodos-topbar-control-gap: 10px;
@@ -68,7 +68,7 @@
 
 :where(.goodos-topbar__identity, [data-goodos-topbar-identity]) {
   grid-column: 1;
-  gap: 16px;
+  gap: 12px;
 }
 
 :where(.goodos-topbar__search, [data-goodos-topbar-search]) {
@@ -124,10 +124,10 @@
 :where(.goodos-topbar__brand, [data-goodos-topbar-brand]) {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex: 0 0 auto;
   color: var(--goodos-topbar-text);
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 900;
   letter-spacing: -0.025em;
   white-space: nowrap;
@@ -144,9 +144,10 @@
 
 :where(.goodos-topbar__workspace, [data-goodos-topbar-workspace]) {
   width: var(--goodos-topbar-workspace-width);
-  min-width: var(--goodos-topbar-workspace-width);
   height: var(--goodos-topbar-workspace-height);
-  padding: 0 38px 0 14px;
+  min-width: 0;
+  max-width: var(--goodos-topbar-workspace-width);
+  padding: 0 30px 0 11px;
   box-sizing: border-box;
   border: 1px solid var(--goodos-topbar-border);
   border-radius: 10px;
@@ -154,7 +155,11 @@
   color: var(--goodos-topbar-text);
   background-color: var(--goodos-topbar-raised);
   font: inherit;
-  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
 }
 
 :where(
@@ -274,8 +279,8 @@
   }
 
   :where(.goodos-topbar__workspace, [data-goodos-topbar-workspace]) {
-    width: 200px;
-    min-width: 200px;
+    width: var(--goodos-topbar-workspace-width);
+    min-width: 0;
   }
 }
 
@@ -368,6 +373,44 @@
   max-width: var(--goodos-topbar-identity-width) !important;
   min-width: 0 !important;
   overflow: hidden !important;
+  gap: 12px !important;
+}
+
+[data-goodos-topbar-brand] {
+  gap: 10px !important;
+  min-width: 0 !important;
+  font-size: 18px !important;
+  line-height: 22px !important;
+}
+
+[data-goodos-topbar-brand-mark] {
+  display: grid !important;
+  place-items: center !important;
+  width: var(--goodos-topbar-brand-mark-size) !important;
+  min-width: var(--goodos-topbar-brand-mark-size) !important;
+  max-width: var(--goodos-topbar-brand-mark-size) !important;
+  height: var(--goodos-topbar-brand-mark-size) !important;
+  min-height: var(--goodos-topbar-brand-mark-size) !important;
+  max-height: var(--goodos-topbar-brand-mark-size) !important;
+  flex: 0 0 var(--goodos-topbar-brand-mark-size) !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+[data-goodos-topbar-workspace] {
+  width: var(--goodos-topbar-workspace-width) !important;
+  min-width: 0 !important;
+  max-width: var(--goodos-topbar-workspace-width) !important;
+  height: var(--goodos-topbar-workspace-height) !important;
+  min-height: var(--goodos-topbar-workspace-height) !important;
+  max-height: var(--goodos-topbar-workspace-height) !important;
+  padding: 0 30px 0 11px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  font-size: 13px !important;
+  line-height: 18px !important;
+  box-sizing: border-box !important;
 }
 
 [data-goodos-topbar] > [data-goodos-topbar-search] {
@@ -388,6 +431,7 @@
   grid-column: 3 !important;
   grid-row: 1 !important;
   justify-content: flex-start !important;
+  display: flex !important;
   width: 100% !important;
   min-width: 0 !important;
   max-width: none !important;
@@ -473,15 +517,12 @@
   :root {
     --goodos-topbar-edge-space: 24px;
     --goodos-topbar-gap: 14px;
-    --goodos-topbar-identity-width: 300px;
-    --goodos-topbar-search-width: 480px;
   }
 }
 
 @media (max-width: 1120px) and (min-width: 761px) {
   :root {
-    --goodos-topbar-identity-width: 220px;
-    --goodos-topbar-search-width: 1fr;
+    --goodos-topbar-identity-width: 190px;
   }
 
   [data-goodos-topbar] {
@@ -499,6 +540,10 @@
   }
 
   [data-goodos-topbar] > [data-goodos-topbar-actions] {
+    display: none !important;
+  }
+
+  [data-goodos-topbar-workspace] {
     display: none !important;
   }
 }
