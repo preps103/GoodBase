@@ -24,6 +24,7 @@ const goodswapzRoutes = require("./goodswapz.routes");
 const goodAdsRoutes = require("./goodads.routes");
 const fleetRoutes = require("./fleet.routes");
 const fleetCommunicationsRoutes = require("./fleet-communications.routes");
+const goodDesignerRoutes = require("./gooddesigner.routes");
 
 
 const billingRoutes = require("./billing.routes");
@@ -315,6 +316,7 @@ router.use("/health", healthRoutes);
 router.use("/api/health", healthRoutes);
 router.use("/api/internal/observability", goodbaseAlertDeliveryRoutes.receiverRouter);
 router.use("/api/apps/goodads/v1", goodAdsRoutes);
+router.use("/api/gooddesigner/v1", goodDesignerRoutes);
 router.use("/api/apps", appsRoutes);
 router.use("/api/db", dbRoutes);
 router.use("/api/auth", authRoutes);
