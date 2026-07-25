@@ -145,11 +145,14 @@
 }
 
 :where(.goodos-topbar__workspace, [data-goodos-topbar-workspace]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--goodos-topbar-workspace-width);
   height: var(--goodos-topbar-workspace-height);
   min-width: 0;
   max-width: var(--goodos-topbar-workspace-width);
-  padding: 0 30px 0 11px;
+  padding: 0 28px;
   box-sizing: border-box;
   border: 1px solid var(--goodos-topbar-border);
   border-radius: 10px;
@@ -161,7 +164,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  line-height: 18px;
+  line-height: 1;
+  text-align: center;
+  text-align-last: center;
+  vertical-align: middle;
 }
 
 :where(
@@ -423,18 +429,24 @@
 }
 
 [data-goodos-topbar-workspace] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   width: var(--goodos-topbar-workspace-width) !important;
   min-width: 0 !important;
   max-width: var(--goodos-topbar-workspace-width) !important;
   height: var(--goodos-topbar-workspace-height) !important;
   min-height: var(--goodos-topbar-workspace-height) !important;
   max-height: var(--goodos-topbar-workspace-height) !important;
-  padding: 0 30px 0 11px !important;
+  padding: 0 28px !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
   font-size: 13px !important;
-  line-height: 18px !important;
+  line-height: 1 !important;
+  text-align: center !important;
+  text-align-last: center !important;
+  vertical-align: middle !important;
   box-sizing: border-box !important;
 }
 

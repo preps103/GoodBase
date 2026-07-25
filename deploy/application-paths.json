@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "applicationCount": 14,
+  "applicationCount": 15,
   "productionRoot": "/home/mgoodlo3",
   "applications": [
     {
@@ -23,6 +23,13 @@
       "domain": "boost.goodos.app",
       "service": "goodboost",
       "productionPath": "/home/mgoodlo3/GoodBoost"
+    },
+    {
+      "id": "goodbuilder",
+      "name": "GoodBuilder",
+      "domain": "builder.goodos.app",
+      "service": "goodbuilder",
+      "productionPath": "/home/mgoodlo3/GoodBuilder"
     },
     {
       "id": "goodcustoms",

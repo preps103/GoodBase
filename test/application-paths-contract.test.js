@@ -12,12 +12,12 @@ const cleanupMigration = fs.readFileSync(
   "utf8"
 );
 
-test("the deployment manifest defines exactly 14 uniquely routed applications", () => {
-  assert.equal(manifest.applicationCount, 14);
-  assert.equal(manifest.applications.length, 14);
-  assert.equal(new Set(manifest.applications.map(({ id }) => id)).size, 14);
-  assert.equal(new Set(manifest.applications.map(({ domain }) => domain)).size, 14);
-  assert.equal(new Set(manifest.applications.map(({ service }) => service)).size, 14);
+test("the deployment manifest defines exactly 15 uniquely routed applications", () => {
+  assert.equal(manifest.applicationCount, 15);
+  assert.equal(manifest.applications.length, 15);
+  assert.equal(new Set(manifest.applications.map(({ id }) => id)).size, 15);
+  assert.equal(new Set(manifest.applications.map(({ domain }) => domain)).size, 15);
+  assert.equal(new Set(manifest.applications.map(({ service }) => service)).size, 15);
 });
 
 test("every product deployment uses the canonical production root and unversioned path", () => {

@@ -233,7 +233,7 @@ router.get("/backend-ada.css", (req, res) => {
 
 router.get("/backend-topbar.css", (req, res) => {
   const crossOriginResourcePolicy = "Cross-Origin-Resource-Policy";
-  res.set("Cache-Control", "public, max-age=300");
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set(crossOriginResourcePolicy, "cross-origin");
   res.type("text/css");
   res.sendFile(path.join(__dirname, "../public/backend-topbar.css"));
