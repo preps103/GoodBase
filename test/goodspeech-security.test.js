@@ -11,7 +11,9 @@ const {
   kokoroRequest,
   kokoroSpeed,
   kokoroEndpoint,
+  kokoroHealthEndpoint,
   configuredProvider,
+  checkKokoroHealth,
   readAudioBytes,
 } = require("../src/routes/goodspeech.routes");
 
@@ -92,9 +94,50 @@ test("GoodSpeech requires an explicit Kokoro URL and strong internal token", () 
     process.env.KOKORO_TTS_URL = "http://127.0.0.1:8880/";
     process.env.KOKORO_TTS_TOKEN = "x".repeat(32);
     assert.equal(kokoroEndpoint(), "http://127.0.0.1:8880/v1/audio/speech");
+    assert.equal(kokoroHealthEndpoint(), "http://127.0.0.1:8880/health/ready");
     assert.deepEqual(configuredProvider(), {
       endpoint: "http://127.0.0.1:8880/v1/audio/speech",
       token: "x".repeat(32),
+    });
+  } finally {
+    if (originalUrl === undefined) delete process.env.KOKORO_TTS_URL;
+    else process.env.KOKORO_TTS_URL = originalUrl;
+    if (originalToken === undefined) delete process.env.KOKORO_TTS_TOKEN;
+    else process.env.KOKORO_TTS_TOKEN = originalToken;
+  }
+});
+
+test("GoodSpeech health reports configuration and Kokoro readiness", async () => {
+  const originalUrl = process.env.KOKORO_TTS_URL;
+  const originalToken = process.env.KOKORO_TTS_TOKEN;
+  try {
+    delete process.env.KOKORO_TTS_URL;
+    delete process.env.KOKORO_TTS_TOKEN;
+    assert.deepEqual(await checkKokoroHealth(), {
+      ready: false,
+      code: "GOODSPEECH_NOT_CONFIGURED",
+      message: "GoodSpeech's Kokoro engine is not configured.",
+    });
+
+    process.env.KOKORO_TTS_URL = "http://127.0.0.1:8880";
+    process.env.KOKORO_TTS_TOKEN = "x".repeat(32);
+    const ready = await checkKokoroHealth({
+      fetchFn: async (url) => {
+        assert.equal(url, "http://127.0.0.1:8880/health/ready");
+        return new Response(JSON.stringify({
+          status: "ready",
+          model: "hexgrad/Kokoro-82M",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+    assert.deepEqual(ready, {
+      ready: true,
+      code: "GOODSPEECH_READY",
+      message: "GoodSpeech's Kokoro engine is ready.",
+      model: "hexgrad/Kokoro-82M",
     });
   } finally {
     if (originalUrl === undefined) delete process.env.KOKORO_TTS_URL;

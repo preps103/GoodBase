@@ -8,17 +8,22 @@ GoodBase authenticates the user, validates and rate-limits the request, calls th
 
 ## Production configuration
 
-1. Create `/etc/goodbase/goodspeech.env` from `deploy/goodspeech/env.example`, set mode `0600`, and generate a unique token with `openssl rand -hex 32`.
-2. Add the same token to the GoodBase runtime environment:
+Run the idempotent provisioner from the active GoodBase checkout:
 
-   ```text
-   KOKORO_TTS_URL=http://127.0.0.1:8880
-   KOKORO_TTS_TOKEN=<same secret>
-   ```
+```sh
+sudo npm run provision:goodspeech
+```
 
-3. Install `deploy/systemd/goodspeech-inference.service`, then enable and start it.
-4. Wait for `http://127.0.0.1:8880/health/ready` to return `200`. The first start downloads the pinned Kokoro model into the persistent `kokoro_models` volume.
-5. Restart GoodBase with its updated environment.
+The provisioner creates `/etc/goodbase/goodspeech.env` when needed, generates
+the internal token, installs and starts the systemd unit, waits for Kokoro to
+finish loading, and restarts the Base API processes. GoodBase loads this same
+protected environment file on every start, so its token cannot drift from the
+inference service token.
+
+The environment file is owned by `root:goodapp` with mode `0640`: systemd can
+start the service and the unprivileged Base API can read the shared values.
+Override `GOODBASE_RUNTIME_USER`, `GOODBASE_PM2_USER`, or `GOODBASE_PM2_HOME`
+when a server uses different service accounts.
 
 ## Security and operations
 
@@ -34,5 +39,6 @@ GoodBase authenticates the user, validates and rate-limits the request, calls th
 ```sh
 docker compose --env-file /etc/goodbase/goodspeech.env -f deploy/goodspeech/compose.yaml config --quiet
 curl --fail http://127.0.0.1:8880/health/ready
-npm test -- --test-name-pattern GoodSpeech
+curl --fail --cookie '<authenticated GoodBase session>' https://base.goodos.app/api/goodspeech/v1/health
+npm run test:goodspeech
 ```

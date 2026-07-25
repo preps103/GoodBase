@@ -7,6 +7,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+EnvironmentFile=/etc/goodbase/goodspeech.env
 WorkingDirectory=/var/www/Goodbase/deploy/goodspeech
 ExecStart=/usr/bin/docker compose --env-file /etc/goodbase/goodspeech.env up -d --build --remove-orphans
 ExecReload=/usr/bin/docker compose --env-file /etc/goodbase/goodspeech.env up -d --build --remove-orphans

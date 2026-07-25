@@ -92,10 +92,40 @@
     }
   },
   "paths": {
+    "/api/goodspeech/v1/health": {
+      "get": {
+        "summary": "Check the GoodSpeech Kokoro engine",
+        "description": "Reports whether the authenticated GoodSpeech user can reach the configured private Kokoro inference service.",
+        "servers": [
+          {
+            "url": "https://base.goodos.app"
+          }
+        ],
+        "security": [
+          {
+            "GoodBaseSession": []
+          },
+          {
+            "GoodOSBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Kokoro is configured and ready"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "503": {
+            "description": "Kokoro is not configured, still starting, or unavailable"
+          }
+        }
+      }
+    },
     "/api/goodspeech/v1/speech": {
       "post": {
         "summary": "Generate speech through GoodBase",
-        "description": "Authenticated, MFA-aware GoodSpeech generation. Provider credentials remain server-side and cloned samples are processed transiently.",
+        "description": "Authenticated GoodSpeech generation through the private Kokoro service. Provider credentials remain server-side and voice cloning is unavailable.",
         "servers": [
           {
             "url": "https://base.goodos.app"
@@ -159,6 +189,9 @@
           },
           "502": {
             "description": "Speech provider unavailable"
+          },
+          "503": {
+            "description": "Speech provider is not configured"
           }
         }
       }
