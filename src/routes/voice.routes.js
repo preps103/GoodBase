@@ -183,7 +183,7 @@ function runSystemCommand(command, args) {
   }
 }
 
-function getTelephonyHealth() {
+async function getTelephonyHealth() {
   const versionOutput = runAsteriskCommand("core show version");
   const registrationsOutput = runAsteriskCommand("pjsip show registrations");
   const endpointsOutput = runAsteriskCommand("pjsip show endpoints");
@@ -213,7 +213,7 @@ function getTelephonyHealth() {
     registeredMatches.length > 0 ||
     reachableChanSipPeers.length > 0;
 
-  return {
+  const localHealth = {
     asterisk_connected: asteriskConnected,
     sip_trunk_connected: sipTrunkConnected,
     ami_connected:
@@ -229,6 +229,37 @@ function getTelephonyHealth() {
     sip_auth_mode: chanSipPeerLines.length > 0 ? "ip" : "unconfigured",
     active_channels: activeChannelsMatch ? Number(activeChannelsMatch[1]) : 0
   };
+  if (process.env.NODE_ENV === "test") return localHealth;
+
+  try {
+    const response = await fetch(
+      process.env.GOODVOICE_PBX_HEALTH_URL ||
+      "http://127.0.0.1:3015/api/voice/pbx-health",
+      {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(1500)
+      }
+    );
+    if (!response.ok) return localHealth;
+    const remoteHealth = await response.json();
+    return {
+      ...localHealth,
+      ...Object.fromEntries(
+        [
+          "asterisk_connected",
+          "sip_trunk_connected",
+          "ami_connected",
+          "sip_registrations",
+          "sip_endpoints",
+          "sip_reachable_endpoints",
+          "sip_auth_mode",
+          "active_channels"
+        ].map((key) => [key, remoteHealth[key] ?? localHealth[key]])
+      )
+    };
+  } catch (_) {
+    return localHealth;
+  }
 }
 
 function requireVoiceAdmin(req, res, next) {
@@ -324,7 +355,7 @@ function crud(pathName, tableName, prefix) {
   router.delete(`${pathName}/:id`, deleteTableRecord(tableName));
 }
 
-router.get("/health", (req, res) => {
+router.get("/health", async (req, res) => {
   let databaseConnected = false;
   let tablesReady = false;
   let db = null;
@@ -338,7 +369,7 @@ router.get("/health", (req, res) => {
     tablesReady = false;
   }
 
-  const telephony = getTelephonyHealth();
+  const telephony = await getTelephonyHealth();
   const providerSecrets = readProviderSecrets();
   const liveNumbers = databaseConnected
     ? db.voice_numbers.filter((number) => number.demo_data !== true)
@@ -526,9 +557,9 @@ router.post("/numbers/import", requireVoiceAdmin, (req, res) => {
   });
 });
 
-router.get("/settings", (req, res) => {
+router.get("/settings", async (req, res) => {
   const db = ensureDb();
-  const telephony = getTelephonyHealth();
+  const telephony = await getTelephonyHealth();
   return res.json({
     ...db.voice_settings,
     asterisk_connection_status: telephony.asterisk_connected ? "Connected" : "Disconnected",
@@ -551,9 +582,9 @@ router.patch("/settings", requireVoiceAdmin, (req, res) => {
   return res.json(db.voice_settings);
 });
 
-router.get("/providers/status", (req, res) => {
+router.get("/providers/status", async (req, res) => {
   const secrets = readProviderSecrets();
-  const telephony = getTelephonyHealth();
+  const telephony = await getTelephonyHealth();
   return res.json({
     bulkvs: {
       credentials_configured: Boolean(secrets.bulkvs && secrets.bulkvs.api_username && secrets.bulkvs.api_secret),
