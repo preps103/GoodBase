@@ -9,6 +9,11 @@ const RESOURCE_TYPES = new Set([
   "business_cards", "qr_codes", "videos", "brand", "audit_events",
   "funnels", "lead_forms", "leads",
 ]);
+const RESOURCE_STATUSES = new Set([
+  "draft", "ready", "pending", "approved", "rejected", "scheduled",
+  "queued", "processing", "active", "paused", "completed", "failed",
+  "connected", "disconnected", "expired", "archived",
+]);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PUBLIC_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
@@ -37,6 +42,14 @@ function serviceError(message, statusCode = 400, code = "GOODADS_REQUEST_INVALID
 function requireResourceType(type) {
   if (!RESOURCE_TYPES.has(type)) throw serviceError("Unsupported GoodAds resource.", 404, "GOODADS_RESOURCE_NOT_FOUND");
   return type;
+}
+
+function requireResourceStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  if (!RESOURCE_STATUSES.has(status)) {
+    throw serviceError("Unsupported GoodAds resource status.", 400, "GOODADS_STATUS_INVALID");
+  }
+  return status;
 }
 
 function normalizePayload(value) {
@@ -277,6 +290,7 @@ function requireDestructiveRole(context) {
 
 function rowToResource(row) {
   return {
+    ...(row.data || {}),
     id: row.id,
     resourceType: row.resource_type,
     organizationId: row.organization_id,
@@ -288,12 +302,12 @@ function rowToResource(row) {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    ...row.data,
   };
 }
 
 async function listResources({ type, context, limit = 50, offset = 0, status = null }) {
   requireResourceType(type);
+  const statusFilter = status ? requireResourceStatus(status) : null;
   const boundedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const boundedOffset = Math.max(Number(offset) || 0, 0);
   const result = await query(
@@ -303,13 +317,13 @@ async function listResources({ type, context, limit = 50, offset = 0, status = n
        AND ($3::text IS NULL OR status = $3)
      ORDER BY updated_at DESC
      LIMIT $4 OFFSET $5`,
-    [context.organizationId, type, status || null, boundedLimit, boundedOffset]
+    [context.organizationId, type, statusFilter, boundedLimit, boundedOffset]
   );
   const count = await query(
     `SELECT COUNT(*)::integer AS count FROM goodads_resources
      WHERE organization_id = $1 AND resource_type = $2
        AND archived_at IS NULL AND ($3::text IS NULL OR status = $3)`,
-    [context.organizationId, type, status || null]
+    [context.organizationId, type, statusFilter]
   );
   return { items: result.rows.map(rowToResource), total: count.rows[0]?.count || 0, limit: boundedLimit, offset: boundedOffset };
 }
@@ -332,7 +346,7 @@ async function upsertResource({ type, id, payload, context, userId }) {
   const data = normalizePayload(payload);
   const resourceId = id ? requireUuid(id) : (data.id && UUID_PATTERN.test(String(data.id)) ? String(data.id) : null);
   const name = String(data.name || data.title || "").trim().slice(0, 240);
-  const status = String(data.status || "draft").toLowerCase();
+  const status = requireResourceStatus(data.status || "draft");
   const result = await query(
     `INSERT INTO goodads_resources (
        id, resource_type, organization_id, project_id, environment_id,
@@ -365,6 +379,7 @@ async function upsertResource({ type, id, payload, context, userId }) {
 async function archiveResource({ type, id, context, userId }) {
   requireDestructiveRole(context);
   requireResourceType(type);
+  const current = await getResource({ type, id, context });
   const result = await query(
     `UPDATE goodads_resources
      SET status = 'archived', archived_at = NOW(), updated_at = NOW(), version = version + 1
@@ -373,7 +388,7 @@ async function archiveResource({ type, id, context, userId }) {
     [requireUuid(id), context.organizationId, type]
   );
   if (!result.rows[0]) throw serviceError("GoodAds resource not found.", 404, "GOODADS_RECORD_NOT_FOUND");
-  await recordEvent({ resourceId: result.rows[0].id, context, userId, eventType: `${type}.archived`, previousStatus: result.rows[0].status, nextStatus: "archived" });
+  await recordEvent({ resourceId: result.rows[0].id, context, userId, eventType: `${type}.archived`, previousStatus: current.status, nextStatus: "archived" });
   return rowToResource(result.rows[0]);
 }
 
@@ -383,6 +398,13 @@ async function disconnectProvider({ platformId, context, userId }) {
   if (!SOCIAL_PROVIDERS.some((provider) => provider.id === platform)) {
     throw serviceError("Unsupported social provider.", 404, "GOODADS_PROVIDER_NOT_FOUND");
   }
+  const existing = await query(
+    `SELECT id, status FROM goodads_resources
+     WHERE organization_id = $1 AND resource_type = 'connections'
+       AND archived_at IS NULL AND LOWER(data->>'platformId') = $2`,
+    [context.organizationId, platform]
+  );
+  const previousStatuses = new Map(existing.rows.map((row) => [row.id, row.status]));
   const result = await query(
     `UPDATE goodads_resources
      SET status = 'disconnected', archived_at = NOW(), updated_at = NOW(), version = version + 1
@@ -397,7 +419,7 @@ async function disconnectProvider({ platformId, context, userId }) {
       context,
       userId,
       eventType: "connections.disconnected",
-      previousStatus: row.status,
+      previousStatus: previousStatuses.get(row.id) || null,
       nextStatus: "disconnected",
       metadata: { platformId: platform },
     });
@@ -547,6 +569,7 @@ async function launchCampaign({ id, context, userId }) {
 async function transitionResource({ type, id, nextStatus, context, userId, eventType }) {
   requireMutationRole(context);
   requireResourceType(type);
+  const normalizedNextStatus = requireResourceStatus(nextStatus);
   const current = await getResource({ type, id, context });
   const result = await query(
     `UPDATE goodads_resources
@@ -554,9 +577,9 @@ async function transitionResource({ type, id, nextStatus, context, userId, event
          data = data || jsonb_build_object('status', $1::text, 'updatedAt', NOW()::text)
      WHERE id = $2::uuid AND organization_id = $3 AND resource_type = $4
        AND archived_at IS NULL RETURNING *`,
-    [nextStatus, requireUuid(id), context.organizationId, type]
+    [normalizedNextStatus, requireUuid(id), context.organizationId, type]
   );
-  await recordEvent({ resourceId: id, context, userId, eventType, previousStatus: current.status, nextStatus });
+  await recordEvent({ resourceId: id, context, userId, eventType, previousStatus: current.status, nextStatus: normalizedNextStatus });
   return rowToResource(result.rows[0]);
 }
 
@@ -844,7 +867,10 @@ async function captureLead({ slug, payload, idempotencyKey, userAgent = "" }) {
 
 module.exports = {
   RESOURCE_TYPES,
+  RESOURCE_STATUSES,
   normalizePayload,
+  requireResourceStatus,
+  rowToResource,
   requireUuid,
   requirePublicSlug,
   normalizeLeadSubmission,

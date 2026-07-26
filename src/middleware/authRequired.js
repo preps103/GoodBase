@@ -85,7 +85,7 @@ function mfaStepUpResponse(
         ? "verify_mfa"
         : "enroll_mfa",
     enrollmentUrl:
-      "https://backend.goodos.app/mfa-enroll",
+      "https://base.goodos.app/mfa-enroll",
     requestedPath:
       String(
         req.originalUrl ||

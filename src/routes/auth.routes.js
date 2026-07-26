@@ -989,7 +989,7 @@ router.post("/login", loginLimiter, async (req, res) => {
               )
             : null,
         enrollmentUrl:
-          "https://backend.goodos.app/mfa-enroll"
+          "https://base.goodos.app/mfa-enroll"
       }
     });
   } catch (err) {
@@ -1180,7 +1180,7 @@ router.get("/session", authRequired, async (req, res) => {
               )
             : null,
         enrollmentUrl:
-          "https://backend.goodos.app/mfa-enroll",
+          "https://base.goodos.app/mfa-enroll",
         factors:
           factorsResult.rows.map(
             authV2PublicFactor

@@ -8,7 +8,10 @@ const {
   normalizePayload,
   requirePublicSlug,
   requireUuid,
+  requireResourceStatus,
+  rowToResource,
   RESOURCE_TYPES,
+  RESOURCE_STATUSES,
   socialProviders,
 } = require("../src/services/goodads.service");
 
@@ -19,6 +22,40 @@ test("GoodAds exposes every production resource family", () => {
   for (const type of ["funnels", "lead_forms", "leads"]) {
     assert.equal(RESOURCE_TYPES.has(type), true);
   }
+});
+
+test("GoodAds only accepts database-supported resource statuses", () => {
+  assert.equal(RESOURCE_STATUSES.has("processing"), true);
+  assert.equal(requireResourceStatus(" Active "), "active");
+  assert.throws(() => requireResourceStatus("launching"), /resource status/i);
+});
+
+test("GoodAds never lets JSON payloads override tenant or lifecycle fields", () => {
+  const resource = rowToResource({
+    id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    resource_type: "campaigns",
+    organization_id: "organization-live",
+    project_id: "project-live",
+    environment_id: "environment-live",
+    owner_user_id: "owner-live",
+    name: "Verified campaign",
+    status: "active",
+    version: 3,
+    created_at: "2026-07-26T00:00:00.000Z",
+    updated_at: "2026-07-26T01:00:00.000Z",
+    data: {
+      id: "spoofed",
+      organizationId: "other-tenant",
+      status: "completed",
+      name: "Spoofed campaign",
+      customField: "preserved",
+    },
+  });
+  assert.equal(resource.id, "89e0e5e1-ee43-4c9a-a41b-6b07bb920430");
+  assert.equal(resource.organizationId, "organization-live");
+  assert.equal(resource.status, "active");
+  assert.equal(resource.name, "Verified campaign");
+  assert.equal(resource.customField, "preserved");
 });
 
 test("GoodAds validates and bounds authenticated generation input", () => {

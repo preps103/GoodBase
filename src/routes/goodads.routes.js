@@ -47,10 +47,14 @@ function handle(res, label, operation) {
     .then((data) => success(res, { data }))
     .catch((requestError) => {
       console.error(`GoodAds ${label} failed:`, requestError.message);
-      return res.status(requestError.statusCode || 500).json({
+      const statusCode = requestError.statusCode || 500;
+      const operational = Number.isInteger(requestError.statusCode);
+      return res.status(statusCode).json({
         success: false,
         code: requestError.code || "GOODADS_REQUEST_FAILED",
-        message: requestError.message || "The GoodAds request could not be completed.",
+        message: operational
+          ? requestError.message
+          : "The GoodAds request could not be completed.",
       });
     });
 }
