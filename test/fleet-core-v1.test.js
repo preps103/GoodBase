@@ -77,6 +77,7 @@ test("Fleet payment boundary is mounted but fails closed until processing is act
   assert.match(migration, /fleet_payment_operations/);
   assert.match(migration, /fleet_payment_webhook_events/);
   assert.match(migration, /UNIQUE \(organization_id, idempotency_key\)/);
+  assert.match(migration, /TO goodapp_backend_user/);
 });
 
 test("Public availability exposes sanitized inventory and honors booking conflicts", () => {

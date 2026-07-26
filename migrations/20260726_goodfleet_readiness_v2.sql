@@ -129,4 +129,15 @@ CREATE INDEX IF NOT EXISTS fleet_bookings_org_active_idx
   ON fleet_bookings (organization_id, pickup_at DESC)
   WHERE archived_at IS NULL;
 
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'goodapp_backend_user') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE
+      ON fleet_workspace_state,
+         fleet_payment_operations,
+         fleet_payment_webhook_events
+      TO goodapp_backend_user;
+  END IF;
+END $$;
+
 COMMIT;
