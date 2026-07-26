@@ -10,6 +10,11 @@ const database = require("../config/database");
 const { pool, query } = database;
 const BACKUP_ROOT = "/var/backups/goodos-site-updates";
 const NPM_CACHE_ROOT = path.join(BACKUP_ROOT, "npm-cache");
+const GOODBASE_PM2_PROCESSES = [
+  "goodbase-api",
+  "goodbase-api-ha",
+  "goodbase-worker",
+];
 const ALLOWED_ROOTS = ["/home", "/var/www", "/opt"];
 const MAX_OUTPUT = 12000;
 const PM2_HOME = path.resolve(
@@ -484,20 +489,33 @@ async function buildApplication(runId, site, appPath) {
   }
 }
 
+function pm2ProcessNamesForSite(site) {
+  const configured = validateProcessName(site.processName, "pm2");
+  const isGoodBase =
+    cleanText(site.name, 200) === "GoodBase" &&
+    path.resolve(site.appPath || "") === "/var/www/GoodBase";
+
+  return isGoodBase ? [...GOODBASE_PM2_PROCESSES] : [configured];
+}
+
 async function restartApplication(runId, site) {
   if (site.processManager === "none") {
     await addEvent(runId, "restart", "No process restart is required for this site.");
     return;
   }
 
-  const name = validateProcessName(site.processName, site.processManager);
-
   if (site.processManager === "pm2") {
-    await commandWithEvents(runId, "restart", "pm2", ["restart", name, "--update-env"], { timeoutMs: 2 * 60 * 1000 });
+    const processNames = pm2ProcessNamesForSite(site);
+    for (const processName of processNames) {
+      await commandWithEvents(runId, "restart", "pm2", ["restart", processName, "--update-env"], {
+        timeoutMs: 2 * 60 * 1000,
+      });
+    }
     await commandWithEvents(runId, "restart", "pm2", ["save"], { timeoutMs: 2 * 60 * 1000 });
     return;
   }
 
+  const name = validateProcessName(site.processName, site.processManager);
   await commandWithEvents(runId, "restart", "systemctl", ["restart", name], { timeoutMs: 2 * 60 * 1000 });
   await commandWithEvents(runId, "restart", "systemctl", ["is-active", "--quiet", name], { timeoutMs: 60 * 1000 });
 }
@@ -1017,4 +1035,5 @@ module.exports = {
   discoverServerApps,
   discoverGithubRepositories,
   runCommand,
+  pm2ProcessNamesForSite,
 };

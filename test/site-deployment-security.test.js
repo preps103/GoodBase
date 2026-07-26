@@ -54,3 +54,25 @@ test("deployment npm commands use the guarded deployment cache", () => {
   );
   assert.doesNotMatch(deploymentSource, /\/root\/\.npm/);
 });
+
+test("GoodBase deployments restart both API instances and the worker", () => {
+  delete require.cache[require.resolve("../src/services/site-deployment.service")];
+  const deployment = require("../src/services/site-deployment.service");
+
+  assert.deepEqual(
+    deployment.pm2ProcessNamesForSite({
+      name: "GoodBase",
+      appPath: "/var/www/GoodBase",
+      processName: "goodbase-api",
+    }),
+    ["goodbase-api", "goodbase-api-ha", "goodbase-worker"]
+  );
+  assert.deepEqual(
+    deployment.pm2ProcessNamesForSite({
+      name: "GoodAds",
+      appPath: "/home/mgoodlo3/GoodAds",
+      processName: "goodads",
+    }),
+    ["goodads"]
+  );
+});
