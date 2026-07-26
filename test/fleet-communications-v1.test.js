@@ -29,6 +29,9 @@ test("Customer notifications can only be read by their recipient identity", () =
   assert.match(routes, /notification\.recipient_user_id=\$1/);
   assert.match(routes, /lower\(notification\.recipient_email\)=lower\(\$2\)/);
   assert.match(routes, /CUSTOMER_SEND_ROLES/);
+  assert.match(routes, /router\.get\("\/customer-account"/);
+  assert.match(routes, /WHERE lower\(email\)=lower\(\$1\) AND archived_at IS NULL/);
+  assert.match(routes, /customer_id=\$2/);
 });
 
 test("Communication schema contains read receipts, delivery state, and audit-ready ownership", () => {
