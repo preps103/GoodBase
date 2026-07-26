@@ -18,6 +18,21 @@ test("GoodSpeech provisioner restarts the live Base PM2 process", () => {
   assert.match(provisioner, /pm2 restart "\$\{process_name\}" --update-env/);
 });
 
+test("GoodSpeech provisioner injects the private Kokoro settings into Base", () => {
+  assert.match(
+    provisioner,
+    /kokoro_url="\$\([\s\S]*?KOKORO_TTS_URL[\s\S]*?\)"/
+  );
+  assert.match(
+    provisioner,
+    /kokoro_token="\$\([\s\S]*?KOKORO_TTS_TOKEN[\s\S]*?\)"/
+  );
+  assert.match(
+    provisioner,
+    /KOKORO_TTS_URL="\$\{kokoro_url\}"[\s\S]*KOKORO_TTS_TOKEN="\$\{kokoro_token\}"[\s\S]*pm2 restart/
+  );
+});
+
 test("GoodSpeech provisioner discovers both user and root PM2 runtimes", () => {
   assert.match(
     provisioner,
