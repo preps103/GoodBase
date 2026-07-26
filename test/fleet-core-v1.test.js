@@ -63,6 +63,7 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /updateTeamMemberForUser/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS fleet_workspace_state/);
   assert.match(migration, /archived_at/);
+  assert.match(migration, /fleet_bookings_organization_id_id_v2_key/);
 });
 
 test("Fleet payment boundary is mounted but fails closed until processing is activated", () => {

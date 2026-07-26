@@ -11,6 +11,14 @@ ALTER TABLE fleet_bookings
 
 DO $$
 BEGIN
+  ALTER TABLE fleet_bookings
+    ADD CONSTRAINT fleet_bookings_organization_id_id_v2_key
+    UNIQUE (organization_id, id);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
   ALTER TABLE fleet_vehicles ADD CONSTRAINT fleet_vehicles_status_v2_check
     CHECK (status IN (
       'available','reserved','checked_out','in_transit','cleaning','turnaround',
