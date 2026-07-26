@@ -41,7 +41,9 @@ async function main() {
     locked = true;
     const before = await constraintDefinition(client);
 
-    await client.query(sql);
+    if (!hasGrowthTypes(before)) {
+      await client.query(sql);
+    }
 
     const after = await constraintDefinition(client);
     if (!hasGrowthTypes(after)) {

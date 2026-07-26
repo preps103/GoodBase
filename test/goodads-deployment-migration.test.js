@@ -18,6 +18,7 @@ test("GoodBase deployment applies the idempotent GoodAds growth migration", () =
   assert.match(runner, /pg_advisory_lock/);
   assert.match(runner, /DATABASE_URL is required/);
   assert.match(runner, /20260725_goodads_growth_engine\.sql/);
+  assert.match(runner, /if \(!hasGrowthTypes\(before\)\)/);
   assert.doesNotMatch(runner, /process\.env\.(?:DATABASE_URL|JWT_SECRET)/);
   for (const resourceType of ["funnels", "lead_forms", "leads"]) {
     assert.match(migration, new RegExp(`'${resourceType}'`));
