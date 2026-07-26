@@ -390,7 +390,8 @@ app.use(
       "X-GoodOS-API-Key",
       "X-GoodBase-Client",
       "X-Request-ID",
-      "Traceparent"
+      "Traceparent",
+      "Idempotency-Key"
     ]
   })
 );

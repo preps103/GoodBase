@@ -13,6 +13,13 @@ const {
   RESOURCE_TYPES,
   RESOURCE_STATUSES,
 } = require("../src/services/goodads.service");
+const fs = require("node:fs");
+const path = require("node:path");
+
+test("GoodBase CORS permits GoodAds idempotent browser writes", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "../src/app.js"), "utf8");
+  assert.match(appSource, /"Idempotency-Key"/);
+});
 
 test("GoodAds exposes every production resource family", () => {
   for (const type of ["campaigns", "content", "approvals", "calendar", "connections", "publishing_jobs", "analytics", "media", "link_hubs", "automations"]) {
