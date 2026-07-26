@@ -11,6 +11,7 @@ GOODSPEECH_ENV_FILE="${GOODSPEECH_ENV_FILE:-/etc/goodbase/goodspeech.env}"
 GOODBASE_RUNTIME_USER="${GOODBASE_RUNTIME_USER:-goodapp}"
 GOODBASE_PM2_USER="${GOODBASE_PM2_USER:-mgoodlo3}"
 GOODBASE_PM2_HOME="${GOODBASE_PM2_HOME:-/home/${GOODBASE_PM2_USER}/.pm2}"
+GOODBASE_PM2_RUNTIMES="${GOODBASE_PM2_RUNTIMES:-${GOODBASE_PM2_USER}:${GOODBASE_PM2_HOME} root:/root/.pm2}"
 GOODBASE_PM2_PROCESSES="${GOODBASE_PM2_PROCESSES:-goodapp-backend goodapp-backend-ha goodbase-api goodbase-api-ha}"
 SERVICE_SOURCE="${GOODBASE_ROOT}/deploy/systemd/goodspeech-inference.service"
 SERVICE_TARGET="/etc/systemd/system/goodspeech-inference.service"
@@ -80,24 +81,44 @@ if [[ "${ready}" -ne 1 ]]; then
   exit 1
 fi
 
-if command -v pm2 >/dev/null 2>&1 && id "${GOODBASE_PM2_USER}" >/dev/null 2>&1; then
+if command -v pm2 >/dev/null 2>&1; then
   restarted=0
-  for process_name in ${GOODBASE_PM2_PROCESSES}; do
-    if runuser -u "${GOODBASE_PM2_USER}" -- \
-      env PM2_HOME="${GOODBASE_PM2_HOME}" pm2 describe "${process_name}" >/dev/null 2>&1; then
-      runuser -u "${GOODBASE_PM2_USER}" -- \
-        env PM2_HOME="${GOODBASE_PM2_HOME}" pm2 restart "${process_name}" --update-env
-      restarted=1
+  for pm2_runtime in ${GOODBASE_PM2_RUNTIMES}; do
+    pm2_user="${pm2_runtime%%:*}"
+    pm2_home="${pm2_runtime#*:}"
+
+    if [[ -z "${pm2_user}" || -z "${pm2_home}" || "${pm2_home}" == "${pm2_runtime}" ]]; then
+      echo "Ignoring invalid PM2 runtime candidate: ${pm2_runtime}" >&2
+      continue
+    fi
+
+    if ! id "${pm2_user}" >/dev/null 2>&1; then
+      continue
+    fi
+
+    runtime_restarted=0
+    for process_name in ${GOODBASE_PM2_PROCESSES}; do
+      if runuser -u "${pm2_user}" -- \
+        env PM2_HOME="${pm2_home}" pm2 describe "${process_name}" >/dev/null 2>&1; then
+        runuser -u "${pm2_user}" -- \
+          env PM2_HOME="${pm2_home}" pm2 restart "${process_name}" --update-env
+        runtime_restarted=1
+        restarted=1
+      fi
+    done
+
+    if [[ "${runtime_restarted}" -eq 1 ]]; then
+      runuser -u "${pm2_user}" -- \
+        env PM2_HOME="${pm2_home}" pm2 save
+      echo "Restarted Base from PM2 runtime ${pm2_user}:${pm2_home}."
+      break
     fi
   done
 
   if [[ "${restarted}" -ne 1 ]]; then
-    echo "No configured Base PM2 process was found. Set GOODBASE_PM2_PROCESSES to the live process name." >&2
+    echo "No configured Base PM2 process was found. Set GOODBASE_PM2_RUNTIMES and GOODBASE_PM2_PROCESSES for the live runtime." >&2
     exit 1
   fi
-
-  runuser -u "${GOODBASE_PM2_USER}" -- \
-    env PM2_HOME="${GOODBASE_PM2_HOME}" pm2 save
 fi
 
 echo "GoodSpeech Kokoro is ready on the Base loopback interface."
