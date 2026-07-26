@@ -337,9 +337,9 @@ router.use("/api/voice", voiceRoutes);
 router.use("/api/goodspeech/v1", goodSpeechRoutes);
 router.use("/api/teams", teamsRoutes);
 router.use("/api/fleet/v1/public", fleetPublicRoutes);
-router.use("/api/fleet/v1", fleetRoutes);
 router.use("/api/fleet/v1/communications", fleetCommunicationsRoutes);
 router.use("/api/fleet/v1/payments", fleetPaymentsRoutes);
+router.use("/api/fleet/v1", fleetRoutes);
 router.use(
   "/storage/v2",
   storageV2CdnRoutes

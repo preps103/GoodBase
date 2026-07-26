@@ -16,6 +16,16 @@ test("Fleet API is authenticated, tenant scoped, and mounted at a versioned path
   assert.match(routes, /EMPLOYEE_ACCESS_REQUIRED/);
   assert.match(routes, /request\.tenantContext\.organizationId/);
   assert.match(index, /router\.use\("\/api\/fleet\/v1", fleetRoutes\)/);
+  assert.ok(
+    index.indexOf('router.use("/api/fleet/v1/communications", fleetCommunicationsRoutes)') <
+      index.indexOf('router.use("/api/fleet/v1", fleetRoutes)'),
+    "customer and payment subroutes must be mounted before the employee-only catch-all route"
+  );
+  assert.ok(
+    index.indexOf('router.use("/api/fleet/v1/payments", fleetPaymentsRoutes)') <
+      index.indexOf('router.use("/api/fleet/v1", fleetRoutes)'),
+    "payment subroutes must not be intercepted by the employee-only catch-all route"
+  );
 });
 
 test("Fleet booking creation serializes by tenant and vehicle", () => {
