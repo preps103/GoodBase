@@ -11,10 +11,20 @@ ALTER TABLE fleet_bookings
 
 DO $$
 BEGIN
-  ALTER TABLE fleet_bookings
-    ADD CONSTRAINT fleet_bookings_organization_id_id_v2_key
-    UNIQUE (organization_id, id);
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'fleet_bookings'::regclass
+      AND conname = 'fleet_bookings_organization_id_id_v2_key'
+  ) THEN
+    IF to_regclass('fleet_bookings_org_id_unique_idx') IS NULL THEN
+      EXECUTE 'CREATE UNIQUE INDEX fleet_bookings_org_id_unique_idx
+        ON fleet_bookings (organization_id, id)';
+    END IF;
+    ALTER TABLE fleet_bookings
+      ADD CONSTRAINT fleet_bookings_organization_id_id_v2_key
+      UNIQUE USING INDEX fleet_bookings_org_id_unique_idx;
+  END IF;
 END $$;
 
 DO $$
@@ -68,9 +78,6 @@ CREATE TABLE IF NOT EXISTS fleet_workspace_state (
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (jsonb_typeof(state_json) = 'object')
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS fleet_bookings_org_id_unique_idx
-  ON fleet_bookings (organization_id, id);
 
 CREATE TABLE IF NOT EXISTS fleet_payment_operations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
