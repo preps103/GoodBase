@@ -11,6 +11,7 @@ GOODSPEECH_ENV_FILE="${GOODSPEECH_ENV_FILE:-/etc/goodbase/goodspeech.env}"
 GOODBASE_RUNTIME_USER="${GOODBASE_RUNTIME_USER:-goodapp}"
 GOODBASE_PM2_USER="${GOODBASE_PM2_USER:-mgoodlo3}"
 GOODBASE_PM2_HOME="${GOODBASE_PM2_HOME:-/home/${GOODBASE_PM2_USER}/.pm2}"
+GOODBASE_PM2_PROCESSES="${GOODBASE_PM2_PROCESSES:-goodapp-backend goodapp-backend-ha goodbase-api goodbase-api-ha}"
 SERVICE_SOURCE="${GOODBASE_ROOT}/deploy/systemd/goodspeech-inference.service"
 SERVICE_TARGET="/etc/systemd/system/goodspeech-inference.service"
 
@@ -80,13 +81,21 @@ if [[ "${ready}" -ne 1 ]]; then
 fi
 
 if command -v pm2 >/dev/null 2>&1 && id "${GOODBASE_PM2_USER}" >/dev/null 2>&1; then
-  for process_name in goodbase-api goodbase-api-ha; do
+  restarted=0
+  for process_name in ${GOODBASE_PM2_PROCESSES}; do
     if runuser -u "${GOODBASE_PM2_USER}" -- \
       env PM2_HOME="${GOODBASE_PM2_HOME}" pm2 describe "${process_name}" >/dev/null 2>&1; then
       runuser -u "${GOODBASE_PM2_USER}" -- \
         env PM2_HOME="${GOODBASE_PM2_HOME}" pm2 restart "${process_name}" --update-env
+      restarted=1
     fi
   done
+
+  if [[ "${restarted}" -ne 1 ]]; then
+    echo "No configured Base PM2 process was found. Set GOODBASE_PM2_PROCESSES to the live process name." >&2
+    exit 1
+  fi
+
   runuser -u "${GOODBASE_PM2_USER}" -- \
     env PM2_HOME="${GOODBASE_PM2_HOME}" pm2 save
 fi
