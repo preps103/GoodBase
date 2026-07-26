@@ -187,6 +187,8 @@ function getTelephonyHealth() {
   const versionOutput = runAsteriskCommand("core show version");
   const registrationsOutput = runAsteriskCommand("pjsip show registrations");
   const endpointsOutput = runAsteriskCommand("pjsip show endpoints");
+  const chanSipRegistriesOutput = runAsteriskCommand("sip show registry");
+  const chanSipPeersOutput = runAsteriskCommand("sip show peers");
   const managerOutput = runAsteriskCommand("manager show settings");
   const channelOutput = runAsteriskCommand("core show channels count");
   const asteriskProcessOutput = runSystemCommand("pgrep", ["-x", "asterisk"]);
@@ -195,14 +197,25 @@ function getTelephonyHealth() {
   const asteriskConnected =
     /Asterisk\s+\d/i.test(versionOutput) ||
     /^\s*\d+\s*$/m.test(asteriskProcessOutput);
-  const registeredMatches = registrationsOutput.match(/\bRegistered\b/gi) || [];
+  const registeredMatches = [
+    ...(registrationsOutput.match(/\bRegistered\b/gi) || []),
+    ...(chanSipRegistriesOutput.match(/\bRegistered\b/gi) || [])
+  ];
   const rejectedMatches = registrationsOutput.match(/\bRejected\b/gi) || [];
   const endpointMatches = endpointsOutput.match(/Endpoint:\s+\S+/gi) || [];
+  const chanSipPeerLines = chanSipPeersOutput
+    .split(/\r?\n/)
+    .filter((line) => /bulkvs/i.test(line));
+  const reachableChanSipPeers = chanSipPeerLines.filter((line) => /\bOK\b/i.test(line));
   const activeChannelsMatch = channelOutput.match(/(\d+)\s+active channels/i);
+  const sipEndpoints = endpointMatches.length + chanSipPeerLines.length;
+  const sipTrunkConnected =
+    registeredMatches.length > 0 ||
+    reachableChanSipPeers.length > 0;
 
   return {
     asterisk_connected: asteriskConnected,
-    sip_trunk_connected: registeredMatches.length > 0,
+    sip_trunk_connected: sipTrunkConnected,
     ami_connected:
       asteriskConnected &&
       (
@@ -211,7 +224,9 @@ function getTelephonyHealth() {
       ),
     sip_registrations: registeredMatches.length,
     sip_rejected_registrations: rejectedMatches.length,
-    sip_endpoints: endpointMatches.length,
+    sip_endpoints: sipEndpoints,
+    sip_reachable_endpoints: reachableChanSipPeers.length,
+    sip_auth_mode: chanSipPeerLines.length > 0 ? "ip" : "unconfigured",
     active_channels: activeChannelsMatch ? Number(activeChannelsMatch[1]) : 0
   };
 }
@@ -333,7 +348,9 @@ router.get("/health", (req, res) => {
   if (liveNumbers.length === 0) blockers.push("Import at least one owned phone number.");
   if (!telephony.asterisk_connected) blockers.push("Asterisk is not reachable.");
   if (telephony.sip_endpoints === 0) blockers.push("No SIP endpoint is configured in Asterisk.");
-  if (!telephony.sip_trunk_connected) blockers.push("No SIP trunk is registered.");
+  if (telephony.sip_endpoints > 0 && !telephony.sip_trunk_connected) {
+    blockers.push("The configured SIP endpoint is not reachable.");
+  }
 
   return res.json({
     status: "ok",
