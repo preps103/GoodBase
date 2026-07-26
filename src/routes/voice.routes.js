@@ -171,14 +171,30 @@ function runAsteriskCommand(command) {
   }
 }
 
+function runSystemCommand(command, args) {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      timeout: 1500,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch (_) {
+    return "";
+  }
+}
+
 function getTelephonyHealth() {
   const versionOutput = runAsteriskCommand("core show version");
   const registrationsOutput = runAsteriskCommand("pjsip show registrations");
   const endpointsOutput = runAsteriskCommand("pjsip show endpoints");
   const managerOutput = runAsteriskCommand("manager show settings");
   const channelOutput = runAsteriskCommand("core show channels count");
+  const asteriskProcessOutput = runSystemCommand("pgrep", ["-x", "asterisk"]);
+  const listeningSockets = runSystemCommand("ss", ["-ltn"]);
 
-  const asteriskConnected = /Asterisk\s+\d/i.test(versionOutput);
+  const asteriskConnected =
+    /Asterisk\s+\d/i.test(versionOutput) ||
+    /^\s*\d+\s*$/m.test(asteriskProcessOutput);
   const registeredMatches = registrationsOutput.match(/\bRegistered\b/gi) || [];
   const rejectedMatches = registrationsOutput.match(/\bRejected\b/gi) || [];
   const endpointMatches = endpointsOutput.match(/Endpoint:\s+\S+/gi) || [];
@@ -189,7 +205,10 @@ function getTelephonyHealth() {
     sip_trunk_connected: registeredMatches.length > 0,
     ami_connected:
       asteriskConnected &&
-      /Manager\s+\(AMI\):\s+Yes/i.test(managerOutput),
+      (
+        /Manager\s+\(AMI\):\s+Yes/i.test(managerOutput) ||
+        /127\.0\.0\.1:5038\b/.test(listeningSockets)
+      ),
     sip_registrations: registeredMatches.length,
     sip_rejected_registrations: rejectedMatches.length,
     sip_endpoints: endpointMatches.length,
