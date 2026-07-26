@@ -90,6 +90,45 @@ function notificationPayload(row) {
   };
 }
 
+function customerAccountPayload(row) {
+  return {
+    ...(row.payload || {}),
+    id: row.id,
+    name: row.full_name,
+    email: row.email,
+    phone: row.phone,
+    status: row.status,
+    licenseNumber: row.license_number,
+    licenseExpiry: row.license_expiry,
+    licenseVerificationStatus: row.license_verification_status,
+    createdAt: row.created_at
+  };
+}
+
+function customerBookingPayload(row) {
+  const pickup = new Date(row.pickup_at);
+  const returned = new Date(row.return_at);
+  return {
+    ...(row.payload || {}),
+    id: row.id,
+    reservationNumber: row.reservation_number,
+    customerId: row.customer_id,
+    carId: row.vehicle_id || undefined,
+    startDate: pickup.toISOString().slice(0, 10),
+    endDate: returned.toISOString().slice(0, 10),
+    pickupTime: pickup.toISOString().slice(11, 16),
+    dropoffTime: returned.toISOString().slice(11, 16),
+    pickupLocationId: row.pickup_branch_id,
+    returnLocationId: row.return_branch_id,
+    status: row.status,
+    paymentStatus: row.payment_status,
+    totalAmount: Number(row.total_amount),
+    depositAmount: Number(row.deposit_amount),
+    paidAmount: Number(row.paid_amount),
+    createdAt: row.created_at
+  };
+}
+
 async function audit(client, request, action, entityType, entityId, after) {
   await client.query(
     `INSERT INTO fleet_audit_events
@@ -528,6 +567,65 @@ router.get("/customer-inbox", async (request, response, next) => {
       [request.user.id, email],
     );
     response.json({ success: true, data: result.rows.map(notificationPayload) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/customer-account", async (request, response, next) => {
+  try {
+    const email = clean(request.user.email, 320).toLowerCase();
+    const customer = await query(
+      `SELECT * FROM fleet_customers
+       WHERE lower(email)=lower($1) AND archived_at IS NULL
+       ORDER BY updated_at DESC LIMIT 1`,
+      [email]
+    );
+    if (!customer.rowCount) {
+      return response.json({
+        success: true,
+        data: { customer: null, bookings: [], payments: [] }
+      });
+    }
+    const record = customer.rows[0];
+    const [bookings, payments] = await Promise.all([
+      query(
+        `SELECT * FROM fleet_bookings
+         WHERE organization_id=$1 AND customer_id=$2 AND archived_at IS NULL
+         ORDER BY pickup_at DESC`,
+        [record.organization_id, record.id]
+      ),
+      query(
+        `SELECT * FROM fleet_payment_operations
+         WHERE organization_id=$1 AND customer_id=$2
+         ORDER BY created_at DESC`,
+        [record.organization_id, record.id]
+      )
+    ]);
+    response.json({
+      success: true,
+      data: {
+        customer: customerAccountPayload(record),
+        bookings: bookings.rows.map(customerBookingPayload),
+        payments: payments.rows.map(payment => ({
+          id: payment.id,
+          bookingId: payment.booking_id,
+          amount: Number(payment.amount),
+          currency: payment.currency,
+          status: payment.status === "succeeded"
+            ? "completed"
+            : payment.status === "failed"
+              ? "failed"
+              : "pending",
+          method: "Credit Card",
+          transactionId: payment.provider_reference || undefined,
+          createdAt: payment.created_at,
+          description: payment.operation_type.replaceAll("_", " "),
+          type: payment.operation_type === "refund" ? "refund" : "rental",
+          refunded: payment.operation_type === "refund" && payment.status === "succeeded"
+        }))
+      }
+    });
   } catch (error) {
     next(error);
   }
