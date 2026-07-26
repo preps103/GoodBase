@@ -57,6 +57,13 @@ if [[ -z "${token_length}" || "${token_length}" -lt 32 ]]; then
   exit 1
 fi
 
+kokoro_url="$(
+  awk -F= '/^KOKORO_TTS_URL=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
+)"
+kokoro_token="$(
+  awk -F= '/^KOKORO_TTS_TOKEN=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
+)"
+
 install -m 0644 "${SERVICE_SOURCE}" "${SERVICE_TARGET}"
 systemctl daemon-reload
 systemctl enable --now goodspeech-inference.service
@@ -101,7 +108,11 @@ if command -v pm2 >/dev/null 2>&1; then
       if runuser -u "${pm2_user}" -- \
         env PM2_HOME="${pm2_home}" pm2 describe "${process_name}" >/dev/null 2>&1; then
         runuser -u "${pm2_user}" -- \
-          env PM2_HOME="${pm2_home}" pm2 restart "${process_name}" --update-env
+          env \
+            PM2_HOME="${pm2_home}" \
+            KOKORO_TTS_URL="${kokoro_url}" \
+            KOKORO_TTS_TOKEN="${kokoro_token}" \
+            pm2 restart "${process_name}" --update-env
         runtime_restarted=1
         restarted=1
       fi
