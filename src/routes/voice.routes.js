@@ -2,12 +2,20 @@ const express = require("express");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
+const authRequired = process.env.NODE_ENV === "test"
+  ? (req, res, next) => next()
+  : require("../middleware/authRequired");
 
 const router = express.Router();
 
 const DB_PATH = path.resolve(
   process.env.GOODOS_VOICE_DB_PATH ||
   path.join(process.cwd(), "data", "goodos-voice-db.json")
+);
+const SECRETS_PATH = path.resolve(
+  process.env.GOODVOICE_SECRETS_PATH ||
+  path.join(path.dirname(DB_PATH), "goodvoice-provider-secrets.json")
 );
 
 const TABLES = {
@@ -21,6 +29,33 @@ const TABLES = {
   "active-calls": "voice_active_calls",
   "call-events": "voice_call_events",
   "route-decisions": "voice_route_decisions"
+};
+
+const DEFAULT_SETTINGS = {
+  module_status: "Online",
+  asterisk_connection_status: "Disconnected",
+  sip_trunk_status: "Offline",
+  default_fallback_action: "Voicemail",
+  default_routing_mode: "Round Robin",
+  call_recording_enabled: true,
+  recording_consent_message: "This call is recorded for quality assurance.",
+  webhook_url: "https://base.goodos.app/api/voice/call-event",
+  auto_attendant_enabled: false,
+  auto_attendant_number_ids: [],
+  auto_attendant_greeting: "Thank you for calling. Please select an option.",
+  auto_attendant_timeout_seconds: 8,
+  auto_attendant_menu: [],
+  missed_call_text_enabled: true,
+  missed_call_text_template: "Sorry we missed your call. Reply here and our team will follow up.",
+  spam_blocking_enabled: true,
+  blocked_numbers: [],
+  anonymous_call_action: "Voicemail",
+  call_log_retention_days: 365,
+  recording_retention_days: 90,
+  sla_answer_seconds: 30,
+  sla_abandon_rate_percent: 5,
+  webhook_retry_count: 5,
+  webhook_retry_delay_seconds: 30
 };
 
 function nowIso() {
@@ -38,6 +73,7 @@ function ensureDb() {
   if (!fs.existsSync(DB_PATH)) {
     const fresh = {};
     for (const table of Object.values(TABLES)) fresh[table] = [];
+    fresh.voice_settings = { ...DEFAULT_SETTINGS };
     fs.writeFileSync(DB_PATH, JSON.stringify(fresh, null, 2));
   }
 
@@ -55,6 +91,16 @@ function ensureDb() {
       changed = true;
     }
   }
+  if (!db.voice_settings || Array.isArray(db.voice_settings)) {
+    db.voice_settings = { ...DEFAULT_SETTINGS };
+    changed = true;
+  } else {
+    const mergedSettings = { ...DEFAULT_SETTINGS, ...db.voice_settings };
+    if (JSON.stringify(mergedSettings) !== JSON.stringify(db.voice_settings)) {
+      db.voice_settings = mergedSettings;
+      changed = true;
+    }
+  }
 
   if (changed) saveDb(db);
   return db;
@@ -66,6 +112,106 @@ function saveDb(db) {
 
 function normalizeNumber(value) {
   return String(value || "").trim();
+}
+
+function normalizeE164(value) {
+  const raw = String(value || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  const normalized = raw.startsWith("+")
+    ? `+${digits}`
+    : digits.length === 10
+      ? `+1${digits}`
+      : `+${digits}`;
+  return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : "";
+}
+
+function stableStringHash(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) || 1;
+}
+
+function recordMatchesId(row, id) {
+  return (
+    String(row.id) === String(id) ||
+    String(stableStringHash(row.id)) === String(id)
+  );
+}
+
+function readProviderSecrets() {
+  try {
+    return JSON.parse(fs.readFileSync(SECRETS_PATH, "utf8"));
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveProviderSecrets(secrets) {
+  fs.mkdirSync(path.dirname(SECRETS_PATH), { recursive: true });
+  fs.writeFileSync(SECRETS_PATH, JSON.stringify(secrets, null, 2), {
+    encoding: "utf8",
+    mode: 0o600
+  });
+  fs.chmodSync(SECRETS_PATH, 0o600);
+}
+
+function runAsteriskCommand(command) {
+  try {
+    return execFileSync("asterisk", ["-rx", command], {
+      encoding: "utf8",
+      timeout: 2500,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch (_) {
+    return "";
+  }
+}
+
+function getTelephonyHealth() {
+  const versionOutput = runAsteriskCommand("core show version");
+  const registrationsOutput = runAsteriskCommand("pjsip show registrations");
+  const endpointsOutput = runAsteriskCommand("pjsip show endpoints");
+  const managerOutput = runAsteriskCommand("manager show settings");
+  const channelOutput = runAsteriskCommand("core show channels count");
+
+  const asteriskConnected = /Asterisk\s+\d/i.test(versionOutput);
+  const registeredMatches = registrationsOutput.match(/\bRegistered\b/gi) || [];
+  const rejectedMatches = registrationsOutput.match(/\bRejected\b/gi) || [];
+  const endpointMatches = endpointsOutput.match(/Endpoint:\s+\S+/gi) || [];
+  const activeChannelsMatch = channelOutput.match(/(\d+)\s+active channels/i);
+
+  return {
+    asterisk_connected: asteriskConnected,
+    sip_trunk_connected: registeredMatches.length > 0,
+    ami_connected:
+      asteriskConnected &&
+      /Manager\s+\(AMI\):\s+Yes/i.test(managerOutput),
+    sip_registrations: registeredMatches.length,
+    sip_rejected_registrations: rejectedMatches.length,
+    sip_endpoints: endpointMatches.length,
+    active_channels: activeChannelsMatch ? Number(activeChannelsMatch[1]) : 0
+  };
+}
+
+function requireVoiceAdmin(req, res, next) {
+  if (process.env.NODE_ENV === "test") return next();
+  return authRequired(req, res, () => {
+    const role = String(
+      req.user && (req.user.platformRole || req.user.platform_role || req.user.role) || ""
+    ).toLowerCase();
+    if (!["owner", "admin"].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        code: "ADMIN_REQUIRED",
+        message: "GoodVoice administration requires an owner or admin role."
+      });
+    }
+    return next();
+  });
 }
 
 function listTable(tableName) {
@@ -94,7 +240,7 @@ function createTableRecord(tableName, prefix) {
 function updateTableRecord(tableName) {
   return (req, res) => {
     const db = ensureDb();
-    const idx = db[tableName].findIndex((row) => String(row.id) === String(req.params.id));
+    const idx = db[tableName].findIndex((row) => recordMatchesId(row, req.params.id));
 
     if (idx < 0) {
       return res.status(404).json({
@@ -119,7 +265,7 @@ function deleteTableRecord(tableName) {
     const db = ensureDb();
     const before = db[tableName].length;
 
-    db[tableName] = db[tableName].filter((row) => String(row.id) !== String(req.params.id));
+    db[tableName] = db[tableName].filter((row) => !recordMatchesId(row, req.params.id));
 
     if (db[tableName].length === before) {
       return res.status(404).json({
@@ -147,9 +293,10 @@ function crud(pathName, tableName, prefix) {
 router.get("/health", (req, res) => {
   let databaseConnected = false;
   let tablesReady = false;
+  let db = null;
 
   try {
-    const db = ensureDb();
+    db = ensureDb();
     databaseConnected = true;
     tablesReady = Object.values(TABLES).every((table) => Array.isArray(db[table]));
   } catch (err) {
@@ -157,17 +304,41 @@ router.get("/health", (req, res) => {
     tablesReady = false;
   }
 
+  const telephony = getTelephonyHealth();
+  const providerSecrets = readProviderSecrets();
+  const liveNumbers = databaseConnected
+    ? db.voice_numbers.filter((number) => number.demo_data !== true)
+    : [];
+  const blockers = [];
+  if (!databaseConnected) blockers.push("GoodBase voice database is unavailable.");
+  if (liveNumbers.length === 0) blockers.push("Import at least one owned phone number.");
+  if (!telephony.asterisk_connected) blockers.push("Asterisk is not reachable.");
+  if (telephony.sip_endpoints === 0) blockers.push("No SIP endpoint is configured in Asterisk.");
+  if (!telephony.sip_trunk_connected) blockers.push("No SIP trunk is registered.");
+
   return res.json({
     status: "ok",
-    module: "GoodOS Voice",
+    module: "GoodVoice",
     database_connected: databaseConnected,
     database_persistent: true,
     voice_tables_ready: tablesReady,
     backend_api_ready: true,
-    asterisk_connected: false,
-    sip_trunk_connected: false,
-    ami_connected: false,
+    ...telephony,
     gateway_secret_configured: Boolean(process.env.GOODOS_VOICE_SECRET),
+    provider_credentials_configured: Object.keys(providerSecrets).length > 0,
+    setup_complete: blockers.length === 0,
+    blockers,
+    counts: databaseConnected ? {
+      numbers: db.voice_numbers.length,
+      live_numbers: liveNumbers.length,
+      agents: db.voice_agents.length,
+      routes: db.voice_routes.length,
+      business_hours: db.voice_business_hours.length,
+      queues: db.voice_queues.length,
+      voicemails: db.voice_voicemail_profiles.length,
+      call_logs: db.voice_call_logs.length,
+      active_calls: db.voice_active_calls.length
+    } : {},
     last_gateway_event_at: (() => {
       try {
         const db = ensureDb();
@@ -207,9 +378,213 @@ crud("/queues", TABLES.queues, "queue");
 crud("/voicemail-profiles", TABLES["voicemail-profiles"], "vm");
 crud("/call-logs", TABLES["call-logs"], "cdr");
 
+router.post("/numbers/import", requireVoiceAdmin, (req, res) => {
+  const input = Array.isArray(req.body)
+    ? req.body
+    : Array.isArray(req.body && req.body.numbers)
+      ? req.body.numbers
+      : [];
+
+  if (input.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Provide a non-empty numbers array."
+    });
+  }
+  if (input.length > 1000) {
+    return res.status(400).json({
+      success: false,
+      message: "A maximum of 1,000 phone numbers can be imported at once."
+    });
+  }
+
+  const db = ensureDb();
+  const normalizedRows = [];
+  const invalid = [];
+  const seen = new Set();
+
+  input.forEach((item, index) => {
+    const source = typeof item === "string" ? { phone_number: item } : (item || {});
+    const phoneNumber = normalizeE164(
+      source.phone_number || source.phoneNumber || source.did || source.number
+    );
+    if (!phoneNumber) {
+      invalid.push({
+        index,
+        value: source.phone_number || source.phoneNumber || source.did || source.number || ""
+      });
+      return;
+    }
+    if (seen.has(phoneNumber)) return;
+    seen.add(phoneNumber);
+    normalizedRows.push({
+      phone_number: phoneNumber,
+      label: String(source.label || source.name || `Imported DID ${phoneNumber}`).trim().slice(0, 120),
+      partner_name: String(source.partner_name || source.partnerName || "GoodVoice").trim().slice(0, 120),
+      department: ["Sales", "Support", "Billing", "General"].includes(source.department)
+        ? source.department
+        : "General",
+      routing_mode: ["Round Robin", "Priority", "Least Recent", "Broadcast"].includes(source.routing_mode || source.routingMode)
+        ? (source.routing_mode || source.routingMode)
+        : "Round Robin",
+      business_hours_id: Number(source.business_hours_id || source.businessHoursId || 1),
+      fallback_action: ["Queue", "Voicemail", "Overflow Number", "Reject"].includes(source.fallback_action || source.fallbackAction)
+        ? (source.fallback_action || source.fallbackAction)
+        : "Voicemail",
+      fallback_target: String(source.fallback_target || source.fallbackTarget || ""),
+      provider: String(source.provider || (req.body && req.body.provider) || "bulkvs").toLowerCase(),
+      status: "active",
+      is_active: source.is_active !== false
+    });
+  });
+
+  if (invalid.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: "One or more phone numbers are not valid E.164 numbers.",
+      invalid
+    });
+  }
+
+  if (req.body && req.body.replace_demo === true) {
+    db.voice_numbers = db.voice_numbers.filter((number) => number.demo_data !== true);
+  }
+
+  let created = 0;
+  let updated = 0;
+  const imported = normalizedRows.map((row) => {
+    const existing = db.voice_numbers.find(
+      (number) => normalizeE164(number.phone_number || number.phoneNumber) === row.phone_number
+    );
+    if (existing) {
+      Object.assign(existing, row, {
+        updated_at: nowIso(),
+        demo_data: false
+      });
+      updated += 1;
+      return existing;
+    }
+
+    const numericIds = db.voice_numbers
+      .map((number) => Number(number.id))
+      .filter(Number.isFinite);
+    const record = {
+      id: numericIds.length ? Math.max(...numericIds) + created + 1 : created + 1,
+      ...row,
+      demo_data: false,
+      created_at: nowIso(),
+      updated_at: nowIso()
+    };
+    db.voice_numbers.push(record);
+    created += 1;
+    return record;
+  });
+
+  saveDb(db);
+  return res.status(201).json({
+    success: true,
+    created,
+    updated,
+    imported,
+    total_numbers: db.voice_numbers.length
+  });
+});
+
+router.get("/settings", (req, res) => {
+  const db = ensureDb();
+  const telephony = getTelephonyHealth();
+  return res.json({
+    ...db.voice_settings,
+    asterisk_connection_status: telephony.asterisk_connected ? "Connected" : "Disconnected",
+    sip_trunk_status: telephony.sip_trunk_connected ? "Online" : "Offline"
+  });
+});
+
+router.patch("/settings", requireVoiceAdmin, (req, res) => {
+  const db = ensureDb();
+  const allowed = new Set(Object.keys(DEFAULT_SETTINGS));
+  const updates = Object.fromEntries(
+    Object.entries(req.body || {}).filter(([key]) => allowed.has(key))
+  );
+  db.voice_settings = {
+    ...db.voice_settings,
+    ...updates,
+    updated_at: nowIso()
+  };
+  saveDb(db);
+  return res.json(db.voice_settings);
+});
+
+router.get("/providers/status", (req, res) => {
+  const secrets = readProviderSecrets();
+  const telephony = getTelephonyHealth();
+  return res.json({
+    bulkvs: {
+      credentials_configured: Boolean(secrets.bulkvs && secrets.bulkvs.api_username && secrets.bulkvs.api_secret),
+      sip_route_configured: telephony.sip_endpoints > 0,
+      sip_registered: telephony.sip_trunk_connected
+    },
+    signalwire: {
+      credentials_configured: Boolean(secrets.signalwire && secrets.signalwire.project_id && secrets.signalwire.api_token),
+      sip_route_configured: telephony.sip_endpoints > 0,
+      sip_registered: telephony.sip_trunk_connected
+    }
+  });
+});
+
+router.post("/providers/bulkvs/configure", requireVoiceAdmin, (req, res) => {
+  const apiUsername = String(req.body.username || req.body.api_username || "").trim();
+  const apiSecret = String(req.body.api_key || req.body.api_secret || "").trim();
+  if (!apiUsername || !apiSecret) {
+    return res.status(400).json({
+      success: false,
+      message: "BulkVS API username and API secret are required."
+    });
+  }
+  const secrets = readProviderSecrets();
+  secrets.bulkvs = {
+    api_username: apiUsername,
+    api_secret: apiSecret,
+    updated_at: nowIso()
+  };
+  saveProviderSecrets(secrets);
+  return res.json({
+    success: true,
+    provider: "bulkvs",
+    credentials_configured: true,
+    message: "BulkVS credentials were stored in the GoodVoice backend vault."
+  });
+});
+
+router.post("/providers/signalwire/configure", requireVoiceAdmin, (req, res) => {
+  const projectId = String(req.body.project_id || "").trim();
+  const apiToken = String(req.body.api_token || "").trim();
+  const spaceUrl = String(req.body.space_url || "").trim();
+  if (!projectId || !apiToken || !spaceUrl) {
+    return res.status(400).json({
+      success: false,
+      message: "SignalWire Space URL, project ID, and API token are required."
+    });
+  }
+  const secrets = readProviderSecrets();
+  secrets.signalwire = {
+    space_url: spaceUrl,
+    project_id: projectId,
+    api_token: apiToken,
+    updated_at: nowIso()
+  };
+  saveProviderSecrets(secrets);
+  return res.json({
+    success: true,
+    provider: "signalwire",
+    credentials_configured: true,
+    message: "SignalWire credentials were stored in the GoodVoice backend vault."
+  });
+});
+
 router.patch("/agents/:id/status", (req, res) => {
   const db = ensureDb();
-  const idx = db.voice_agents.findIndex((row) => String(row.id) === String(req.params.id));
+  const idx = db.voice_agents.findIndex((row) => recordMatchesId(row, req.params.id));
 
   if (idx < 0) {
     return res.status(404).json({
