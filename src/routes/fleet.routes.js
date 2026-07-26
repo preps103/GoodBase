@@ -5,6 +5,7 @@ const express = require("express");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
+const teamsService = require("../services/teams.service");
 
 const router = express.Router();
 
@@ -296,6 +297,64 @@ router.get("/bootstrap", async (request, response, next) => {
         avatarUrl: member.avatar_url || undefined
       }))
     }});
+  } catch (error) { next(error); }
+});
+
+router.post("/staff/invitations", async (request, response, next) => {
+  try {
+    const email = required(request.body?.email, "email", 320).toLowerCase();
+    const requestedRole = text(request.body?.role, 40).toLowerCase();
+    const roleName = requestedRole === "owner"
+      ? "owner"
+      : requestedRole === "manager"
+        ? "admin"
+        : "user";
+    const result = await teamsService.inviteTeamMemberForUser(
+      actor(request),
+      { email, roleName },
+      { ipAddress: request.ip }
+    );
+    response.status(result.memberAdded ? 200 : 201).json({
+      success: true,
+      data: {
+        memberAdded: Boolean(result.memberAdded),
+        invitationSent: !result.memberAdded,
+        email
+      }
+    });
+  } catch (error) { next(error); }
+});
+
+router.patch("/staff/:userId", async (request, response, next) => {
+  try {
+    const requestedRole = text(request.body?.role, 40).toLowerCase();
+    const roleName = requestedRole === "owner"
+      ? "owner"
+      : requestedRole === "manager"
+        ? "admin"
+        : "user";
+    await teamsService.updateTeamMemberForUser(
+      actor(request),
+      request.params.userId,
+      {
+        roleName,
+        status: request.body?.status === "inactive" ? "suspended" : "active"
+      },
+      { ipAddress: request.ip }
+    );
+    response.json({ success: true, data: { updated: true } });
+  } catch (error) { next(error); }
+});
+
+router.delete("/staff/:userId", async (request, response, next) => {
+  try {
+    await teamsService.updateTeamMemberForUser(
+      actor(request),
+      request.params.userId,
+      { roleName: "user", status: "removed" },
+      { ipAddress: request.ip }
+    );
+    response.json({ success: true, data: { removed: true } });
   } catch (error) { next(error); }
 });
 

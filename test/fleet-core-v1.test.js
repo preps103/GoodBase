@@ -46,6 +46,11 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /router\.patch\("\/customers\/:customerId"/);
   assert.match(routes, /router\.patch\("\/bookings\/:bookingId"/);
   assert.match(routes, /router\.delete\("\/vehicles\/:vehicleId"/);
+  assert.match(routes, /router\.post\("\/staff\/invitations"/);
+  assert.match(routes, /router\.patch\("\/staff\/:userId"/);
+  assert.match(routes, /router\.delete\("\/staff\/:userId"/);
+  assert.match(routes, /inviteTeamMemberForUser/);
+  assert.match(routes, /updateTeamMemberForUser/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS fleet_workspace_state/);
   assert.match(migration, /archived_at/);
 });
