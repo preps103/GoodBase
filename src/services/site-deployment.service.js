@@ -9,6 +9,7 @@ const database = require("../config/database");
 
 const { pool, query } = database;
 const BACKUP_ROOT = "/var/backups/goodos-site-updates";
+const NPM_CACHE_ROOT = path.join(BACKUP_ROOT, "npm-cache");
 const ALLOWED_ROOTS = ["/home", "/var/www", "/opt"];
 const MAX_OUTPUT = 12000;
 const PM2_HOME = path.resolve(
@@ -451,7 +452,11 @@ async function installDependencies(runId, site, appPath) {
     ? ["ci", "--no-audit", "--no-fund"]
     : ["install", "--no-audit", "--no-fund"];
 
-  await commandWithEvents(runId, "dependencies", "npm", args, { cwd: appPath });
+  await fsp.mkdir(NPM_CACHE_ROOT, { recursive: true, mode: 0o700 });
+  await commandWithEvents(runId, "dependencies", "npm", args, {
+    cwd: appPath,
+    env: { NPM_CONFIG_CACHE: NPM_CACHE_ROOT },
+  });
 }
 
 async function buildApplication(runId, site, appPath) {
@@ -471,7 +476,11 @@ async function buildApplication(runId, site, appPath) {
   } else if (info.packageManager === "yarn") {
     await commandWithEvents(runId, "build", "corepack", ["yarn", "build"], { cwd: appPath });
   } else {
-    await commandWithEvents(runId, "build", "npm", ["run", "build"], { cwd: appPath });
+    await fsp.mkdir(NPM_CACHE_ROOT, { recursive: true, mode: 0o700 });
+    await commandWithEvents(runId, "build", "npm", ["run", "build"], {
+      cwd: appPath,
+      env: { NPM_CONFIG_CACHE: NPM_CACHE_ROOT },
+    });
   }
 }
 
