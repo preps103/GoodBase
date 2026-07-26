@@ -76,6 +76,7 @@ test("Fleet payment boundary is mounted but fails closed until processing is act
   assert.match(index, /router\.use\("\/api\/fleet\/v1\/payments", fleetPaymentsRoutes\)/);
   assert.match(migration, /fleet_payment_operations/);
   assert.match(migration, /fleet_payment_webhook_events/);
+  assert.match(migration, /fleet_bookings_org_id_unique_idx/);
   assert.match(migration, /UNIQUE \(organization_id, idempotency_key\)/);
   assert.match(migration, /TO goodapp_backend_user/);
 });

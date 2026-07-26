@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS fleet_workspace_state (
   CHECK (jsonb_typeof(state_json) = 'object')
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS fleet_bookings_org_id_unique_idx
+  ON fleet_bookings (organization_id, id);
+
 CREATE TABLE IF NOT EXISTS fleet_payment_operations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id text NOT NULL,
