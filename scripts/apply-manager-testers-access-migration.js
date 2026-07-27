@@ -140,7 +140,7 @@ function ready(rows) {
   return rows.length === MANAGER_EMAILS.length
     && rows.every((row) =>
       MANAGER_EMAILS.includes(row.email)
-      && row.platform_role === "manager"
+      && row.platform_role === "admin"
       && row.status === "active"
       && row.email_verified === true
       && row.password_configured === true

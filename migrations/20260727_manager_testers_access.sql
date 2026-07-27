@@ -33,7 +33,7 @@ $$;
 
 UPDATE users
 SET
-  platform_role = 'manager',
+  platform_role = 'admin',
   status = 'active',
   email_verified = TRUE,
   failed_login_count = 0,
@@ -165,7 +165,8 @@ SELECT
   account.id::TEXT,
   JSONB_BUILD_OBJECT(
     'email', LOWER(account.email),
-    'platformRole', 'manager',
+    'platformRole', 'admin',
+    'accessLevel', 'manager',
     'allActiveApplications', TRUE,
     'source', '20260727_manager_testers_access'
   )

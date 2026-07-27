@@ -33,7 +33,8 @@ test("GoodBase deployment grants Ryan and Marissa verified manager access", () =
   for (const email of ["ryan@goodos.app", "marissa@goodos.app"]) {
     assert.match(migration, new RegExp(email.replace(".", "\\."), "i"));
   }
-  assert.match(migration, /platform_role = 'manager'/);
+  assert.match(migration, /platform_role = 'admin'/);
+  assert.match(migration, /'accessLevel', 'manager'/);
   assert.match(migration, /role = 'manager'/);
   assert.match(migration, /application\.status = 'active'/);
   assert.match(migration, /email_verified = TRUE/);
