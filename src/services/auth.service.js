@@ -5,6 +5,11 @@ const crypto = require("crypto");
 const env = require("../config/env");
 const { query } = require("../config/database");
 const {
+  ensureCorporateAppAccess,
+  isCorporateMailbox,
+  synchronizeCorporateIdentity
+} = require("./corporate-mail-identity.service");
+const {
   profileAvatarUrl
 } = require("../utils/managedAssetUrl");
 
@@ -249,15 +254,9 @@ async function login({ email, password, ipAddress, userAgent }) {
     throw err;
   }
 
-  const user = await getUserByEmail(email);
+  let user = await getUserByEmail(email);
 
-  if (!user || !user.password_hash) {
-    const err = new Error("Invalid email or password.");
-    err.statusCode = 401;
-    throw err;
-  }
-
-  if (!user.email_verified) {
+  if (user && !user.email_verified) {
     const err = new Error(
       "Verify your email before signing in."
     );
@@ -265,18 +264,39 @@ async function login({ email, password, ipAddress, userAgent }) {
     throw err;
   }
 
-  if (user.status !== "active") {
+  if (user && user.status !== "active") {
     const err = new Error("Account is not active.");
     err.statusCode = 403;
     throw err;
   }
 
-  const passwordMatches = await bcrypt.compare(password, user.password_hash);
+  let passwordMatches = Boolean(
+    user?.password_hash &&
+    await bcrypt.compare(password, user.password_hash)
+  );
 
   if (!passwordMatches) {
+    const synchronizedUser =
+      await synchronizeCorporateIdentity({
+        email,
+        password,
+        user,
+      });
+
+    if (synchronizedUser) {
+      user = synchronizedUser;
+      passwordMatches = true;
+    }
+  }
+
+  if (!user || !passwordMatches) {
     const err = new Error("Invalid email or password.");
     err.statusCode = 401;
     throw err;
+  }
+
+  if (isCorporateMailbox(email)) {
+    await ensureCorporateAppAccess(email, user.id);
   }
 
   return issueSessionForUser({ user, ipAddress, userAgent, authMethod: "password" });
