@@ -40,6 +40,26 @@ function errorResponse(response, error) {
   });
 }
 
+function isTemporaryGoodBaseRecoverySite(site) {
+  let repositoryUrl = "";
+  try {
+    repositoryUrl = deployment.normalizeGithubRepository(site?.repositoryUrl);
+  } catch (_error) {
+    return false;
+  }
+
+  return Boolean(
+    !site?.appId &&
+    site.name === "GoodBase Recovery" &&
+    site.domain === "base.goodos.app" &&
+    site.branch === "main" &&
+    path.resolve(site.appPath || "") === "/var/www/GoodBase" &&
+    site.processManager === "pm2" &&
+    site.processName === "goodbase-api-ha" &&
+    repositoryUrl === "git@github.com:preps103/GoodBase.git"
+  );
+}
+
 async function audit(request, action, targetId, after = {}) {
   await query(
     `
@@ -564,11 +584,11 @@ router.post("/sites/:siteId/restart-goodbase-services", async (request, response
 router.delete("/sites/:siteId", async (request, response) => {
   try {
     const site = await deployment.loadSite(request.params.siteId);
-    if (site.appId) {
+    if (!isTemporaryGoodBaseRecoverySite(site)) {
       return response.status(403).json({
         success: false,
         code: "REGISTERED_SITE_DELETE_BLOCKED",
-        message: "Registered application mappings cannot be removed.",
+        message: "Only the exact temporary GoodBase recovery mapping can be removed.",
       });
     }
 

@@ -36,6 +36,19 @@ function normalizeName(value) {
     .replace(/[^a-z0-9]/g, "");
 }
 
+function isTemporaryGoodBaseRecoverySite(site) {
+  return Boolean(
+    !site?.appId &&
+    site.name === "GoodBase Recovery" &&
+    site.domain === "base.goodos.app" &&
+    site.branch === "main" &&
+    site.appPath === "/var/www/GoodBase" &&
+    site.processManager === "pm2" &&
+    site.processName === "goodbase-api-ha" &&
+    normalizeRepository(site.repositoryUrl) === "preps103/goodbase"
+  );
+}
+
 function authToken() {
   const keys = [
     "goodos_token",
@@ -292,7 +305,7 @@ function renderSites() {
                 ${site.lastRunId ? `<button class="btn js-logs" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Logs</button>` : ""}
                 ${running && site.lastRunId ? `<button class="btn js-recover-run" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Recover Stale Run</button>` : ""}
                 ${site.appId === "goodbase" ? `<button class="btn js-restart-goodbase" type="button" data-site-id="${escapeHtml(site.id)}">Restart Services</button>` : ""}
-                ${!site.appId ? `<button class="btn js-remove-mapping" type="button" data-site-id="${escapeHtml(site.id)}">Remove Mapping</button>` : ""}
+                ${isTemporaryGoodBaseRecoverySite(site) ? `<button class="btn js-remove-mapping" type="button" data-site-id="${escapeHtml(site.id)}">Remove Mapping</button>` : ""}
               </div>
             </td>
           </tr>

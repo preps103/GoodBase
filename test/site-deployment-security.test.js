@@ -120,10 +120,16 @@ test("GoodBase self-deployment recovery is lock-protected and owner-controlled",
   assert.match(routes, /pg_try_advisory_lock/);
   assert.match(routes, /DEPLOYMENT_WORKER_ACTIVE/);
   assert.match(routes, /REGISTERED_SITE_DELETE_BLOCKED/);
+  assert.match(routes, /isTemporaryGoodBaseRecoverySite/);
+  assert.match(routes, /site\.name === "GoodBase Recovery"/);
+  assert.match(routes, /site\.domain === "base\.goodos\.app"/);
+  assert.match(routes, /site\.processName === "goodbase-api-ha"/);
+  assert.match(routes, /git@github\.com:preps103\/GoodBase\.git/);
   assert.match(routes, /restart-goodbase-services/);
   assert.match(page, /Recover Stale Run/);
   assert.match(page, /Restart Services/);
   assert.match(page, /Remove Mapping/);
+  assert.match(page, /isTemporaryGoodBaseRecoverySite\(site\)/);
   assert.match(
     restart,
     /PROCESSES = \["goodbase-worker", "goodbase-api-ha", "goodbase-api"\]/
