@@ -496,6 +496,7 @@ async function processEmailQueue(limit = 10) {
               sent_at = NOW(),
               last_attempt_at = NOW(),
               provider_message_id = $2,
+              error_message = NULL,
               updated_at = NOW()
           WHERE id = $1
         `,

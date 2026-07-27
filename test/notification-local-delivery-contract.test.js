@@ -20,4 +20,5 @@ test("company email delivery uses the local mail transport", () => {
   assert.match(source, /selectedTransporter\.sendMail/);
   assert.match(source, /connectionTimeout: 10000/);
   assert.match(source, /socketTimeout: 20000/);
+  assert.match(source, /error_message = NULL/);
 });
