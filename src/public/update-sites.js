@@ -290,6 +290,9 @@ function renderSites() {
                 <button class="btn js-test" type="button" data-site-id="${escapeHtml(site.id)}" ${configured ? "" : "disabled"}>Test</button>
                 <button class="btn primary js-update" type="button" data-site-id="${escapeHtml(site.id)}" ${configured && !running ? "" : "disabled"}>Update Site</button>
                 ${site.lastRunId ? `<button class="btn js-logs" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Logs</button>` : ""}
+                ${running && site.lastRunId ? `<button class="btn js-recover-run" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Recover Stale Run</button>` : ""}
+                ${site.appId === "goodbase" ? `<button class="btn js-restart-goodbase" type="button" data-site-id="${escapeHtml(site.id)}">Restart Services</button>` : ""}
+                ${!site.appId ? `<button class="btn js-remove-mapping" type="button" data-site-id="${escapeHtml(site.id)}">Remove Mapping</button>` : ""}
               </div>
             </td>
           </tr>
@@ -433,6 +436,43 @@ async function queueUpdate(siteId) {
   toast("Site update queued.");
   await loadSites(siteId);
   await viewRun(payload.runId);
+}
+
+async function recoverStaleRun(runId) {
+  try {
+    await api(`/api/update-sites/runs/${encodeURIComponent(runId)}/recover-stale`, {
+      method: "POST",
+      body: "{}",
+    });
+    toast("Stale deployment run recovered.");
+    await loadWorkspace();
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function restartGoodBase(siteId) {
+  try {
+    await api(
+      `/api/update-sites/sites/${encodeURIComponent(siteId)}/restart-goodbase-services`,
+      { method: "POST", body: "{}" }
+    );
+    toast("GoodBase service restart scheduled.");
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function removeTemporaryMapping(siteId) {
+  try {
+    await api(`/api/update-sites/sites/${encodeURIComponent(siteId)}`, {
+      method: "DELETE",
+    });
+    toast("Temporary deployment mapping removed.");
+    await loadWorkspace();
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
 async function updateSelected() {
@@ -719,7 +759,27 @@ function attachEvents() {
     }
 
     const logsButton = event.target.closest(".js-logs");
-    if (logsButton) viewRun(logsButton.dataset.runId);
+    if (logsButton) {
+      viewRun(logsButton.dataset.runId);
+      return;
+    }
+
+    const recoverButton = event.target.closest(".js-recover-run");
+    if (recoverButton) {
+      recoverStaleRun(recoverButton.dataset.runId);
+      return;
+    }
+
+    const restartButton = event.target.closest(".js-restart-goodbase");
+    if (restartButton) {
+      restartGoodBase(restartButton.dataset.siteId);
+      return;
+    }
+
+    const removeButton = event.target.closest(".js-remove-mapping");
+    if (removeButton) {
+      removeTemporaryMapping(removeButton.dataset.siteId);
+    }
   });
 }
 
