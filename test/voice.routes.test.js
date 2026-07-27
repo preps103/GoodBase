@@ -118,6 +118,156 @@ test("persists settings and provider credentials server-side", async () => {
   });
 });
 
+test("persists enterprise voice policies and reports readiness", async () => {
+  await withServer(async (baseUrl) => {
+    const settingsResponse = await fetch(`${baseUrl}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        supervisor_monitoring_enabled: true,
+        supervisor_whisper_enabled: true,
+        quality_min_mos: 3.8,
+        disposition_codes: ["Resolved", "Escalated"]
+      })
+    });
+    assert.equal(settingsResponse.status, 200);
+    const settings = await settingsResponse.json();
+    assert.equal(settings.supervisor_monitoring_enabled, true);
+    assert.equal(settings.supervisor_whisper_enabled, true);
+    assert.equal(settings.quality_min_mos, 3.8);
+    assert.deepEqual(settings.disposition_codes, ["Resolved", "Escalated"]);
+
+    const readiness = await (await fetch(`${baseUrl}/operations/readiness`)).json();
+    assert.equal(readiness.supervisor_controls.monitor, true);
+    assert.equal(readiness.quality_policy.minimum_mos, 3.8);
+    assert.ok(readiness.blockers.includes(
+      "No carrier-validated emergency calling location is configured."
+    ));
+  });
+});
+
+test("tracks emergency locations without claiming carrier validation", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/emergency-locations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        label: "Headquarters",
+        address_line_1: "123 Main Street",
+        city: "Anaheim",
+        region: "CA",
+        postal_code: "92805",
+        callback_number: "(714) 555-0100",
+        status: "validated"
+      })
+    });
+    assert.equal(response.status, 201);
+    const location = await response.json();
+    assert.equal(location.callback_number, "+17145550100");
+    assert.equal(location.status, "pending_provider");
+
+    const locations = await (await fetch(`${baseUrl}/emergency-locations`)).json();
+    assert.equal(locations.length, 1);
+    assert.equal(locations[0].label, "Headquarters");
+  });
+});
+
+test("tracks number-porting requests and prevents duplicate active numbers", async () => {
+  await withServer(async (baseUrl) => {
+    const payload = {
+      numbers: ["(714) 555-0199"],
+      losing_carrier: "Current Carrier",
+      account_name: "GoodVoice",
+      status: "submitted"
+    };
+    const firstResponse = await fetch(`${baseUrl}/port-requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(firstResponse.status, 201);
+    const request = await firstResponse.json();
+    assert.deepEqual(request.numbers, ["+17145550199"]);
+
+    const duplicateResponse = await fetch(`${baseUrl}/port-requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(duplicateResponse.status, 409);
+  });
+});
+
+test("creates post-call wrap-up, quality, and intelligence workflow records", async () => {
+  await withServer(async (baseUrl) => {
+    await fetch(`${baseUrl}/seed-demo`, { method: "POST" });
+    await fetch(`${baseUrl}/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        disposition_required: true,
+        disposition_codes: ["Resolved", "Escalated"],
+        conversation_intelligence_enabled: true,
+        ai_summary_enabled: true,
+        quality_monitoring_enabled: true,
+        quality_min_mos: 3.5
+      })
+    });
+
+    const routeResponse = await fetch(`${baseUrl}/route-call`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        call_id: "call_enterprise_test",
+        from_number: "+17145550199",
+        to_number: "+17145550102",
+        classification: "Support"
+      })
+    });
+    const route = await routeResponse.json();
+    assert.equal(route.action, "dial_agent");
+
+    const eventResponse = await fetch(`${baseUrl}/call-event`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        call_id: "call_enterprise_test",
+        event: "Hangup",
+        recording_url: "https://recordings.example.test/call.wav",
+        rtp_metrics: {
+          mos: 3.1,
+          jitter_ms: 45,
+          packet_loss_percent: 1.5
+        }
+      })
+    });
+    assert.equal(eventResponse.status, 201);
+    const event = await eventResponse.json();
+    assert.equal(event.event.event_type, "Hangup");
+    assert.equal(event.workflow.disposition_required, true);
+    assert.equal(event.workflow.conversation_intelligence, "queued");
+    assert.equal(event.workflow.quality.status, "degraded");
+
+    const logs = await (await fetch(`${baseUrl}/call-logs`)).json();
+    const log = logs.find((item) => item.call_id === "call_enterprise_test");
+    assert.equal(log.disposition_status, "pending");
+    assert.equal(log.intelligence_status, "queued");
+
+    const dispositionResponse = await fetch(`${baseUrl}/call-logs/${log.id}/disposition`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        disposition_code: "Resolved",
+        notes: "Customer request completed."
+      })
+    });
+    assert.equal(dispositionResponse.status, 200);
+    const disposed = await dispositionResponse.json();
+    assert.equal(disposed.disposition_status, "completed");
+    assert.equal(disposed.disposition_code, "Resolved");
+  });
+});
+
 test.after(() => {
   fs.rmSync(testDirectory, { recursive: true, force: true });
 });

@@ -28,7 +28,9 @@ const TABLES = {
   "call-logs": "voice_call_logs",
   "active-calls": "voice_active_calls",
   "call-events": "voice_call_events",
-  "route-decisions": "voice_route_decisions"
+  "route-decisions": "voice_route_decisions",
+  "emergency-locations": "voice_emergency_locations",
+  "port-requests": "voice_port_requests"
 };
 
 const DEFAULT_SETTINGS = {
@@ -55,7 +57,27 @@ const DEFAULT_SETTINGS = {
   sla_answer_seconds: 30,
   sla_abandon_rate_percent: 5,
   webhook_retry_count: 5,
-  webhook_retry_delay_seconds: 30
+  webhook_retry_delay_seconds: 30,
+  supervisor_monitoring_enabled: false,
+  supervisor_whisper_enabled: false,
+  supervisor_barge_enabled: false,
+  supervisor_takeover_enabled: false,
+  monitoring_announcement_enabled: true,
+  post_call_wrap_up_seconds: 30,
+  disposition_required: false,
+  disposition_codes: ["Resolved", "Follow-up", "Escalated", "No answer"],
+  conversation_intelligence_enabled: false,
+  ai_summary_enabled: false,
+  sentiment_analysis_enabled: false,
+  action_item_detection_enabled: false,
+  transcript_redaction_enabled: true,
+  quality_monitoring_enabled: true,
+  quality_min_mos: 3.5,
+  quality_max_jitter_ms: 30,
+  quality_max_packet_loss_percent: 2,
+  emergency_notifications_enabled: true,
+  emergency_notification_recipients: [],
+  stir_shaken_visibility_enabled: true
 };
 
 function nowIso() {
@@ -355,6 +377,126 @@ function crud(pathName, tableName, prefix) {
   router.delete(`${pathName}/:id`, deleteTableRecord(tableName));
 }
 
+function normalizeEmailList(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[,\n]/);
+  return [...new Set(
+    values
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter((item) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item))
+  )];
+}
+
+function normalizePhoneNumberList(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values.map(normalizeE164).filter(Boolean))];
+}
+
+function emergencyLocationPayload(body = {}) {
+  return {
+    label: String(body.label || "").trim().slice(0, 120),
+    address_line_1: String(body.address_line_1 || "").trim().slice(0, 160),
+    address_line_2: String(body.address_line_2 || "").trim().slice(0, 160),
+    city: String(body.city || "").trim().slice(0, 100),
+    region: String(body.region || "").trim().slice(0, 80),
+    postal_code: String(body.postal_code || "").trim().slice(0, 24),
+    country: String(body.country || "US").trim().toUpperCase().slice(0, 2),
+    callback_number: normalizeE164(body.callback_number),
+    notification_recipients: normalizeEmailList(body.notification_recipients),
+    assigned_number_ids: Array.isArray(body.assigned_number_ids)
+      ? [...new Set(body.assigned_number_ids.map(String))]
+      : [],
+    status: ["draft", "pending_provider", "validated"].includes(body.status)
+      ? body.status
+      : "draft",
+    provider_reference: String(body.provider_reference || "").trim().slice(0, 160),
+    notes: String(body.notes || "").trim().slice(0, 1000)
+  };
+}
+
+function validateEmergencyLocation(payload) {
+  const missing = [
+    ["label", payload.label],
+    ["address_line_1", payload.address_line_1],
+    ["city", payload.city],
+    ["region", payload.region],
+    ["postal_code", payload.postal_code],
+    ["callback_number", payload.callback_number]
+  ].filter(([, value]) => !value).map(([key]) => key);
+  return missing;
+}
+
+function portRequestPayload(body = {}) {
+  return {
+    numbers: normalizePhoneNumberList(body.numbers),
+    losing_carrier: String(body.losing_carrier || "").trim().slice(0, 120),
+    account_number_last4: String(body.account_number_last4 || "")
+      .replace(/\D/g, "")
+      .slice(-4),
+    account_name: String(body.account_name || "").trim().slice(0, 160),
+    requested_completion_date: String(body.requested_completion_date || "").trim().slice(0, 10),
+    status: [
+      "draft",
+      "submitted",
+      "carrier_review",
+      "confirmed",
+      "completed",
+      "rejected"
+    ].includes(body.status) ? body.status : "draft",
+    external_reference: String(body.external_reference || "").trim().slice(0, 160),
+    notes: String(body.notes || "").trim().slice(0, 2000)
+  };
+}
+
+function validatePortRequest(payload) {
+  const missing = [];
+  if (payload.numbers.length === 0) missing.push("numbers");
+  if (!payload.losing_carrier) missing.push("losing_carrier");
+  if (!payload.account_name) missing.push("account_name");
+  return missing;
+}
+
+function assessCallQuality(settings, metrics = {}) {
+  const mos = Number(metrics.mos);
+  const jitter = Number(metrics.jitter_ms);
+  const packetLoss = Number(metrics.packet_loss_percent);
+  const available = [mos, jitter, packetLoss].some(Number.isFinite);
+  if (!settings.quality_monitoring_enabled || !available) {
+    return {
+      status: settings.quality_monitoring_enabled ? "not_measured" : "disabled",
+      alerts: []
+    };
+  }
+
+  const alerts = [];
+  if (Number.isFinite(mos) && mos < Number(settings.quality_min_mos)) {
+    alerts.push(`MOS ${mos} is below ${settings.quality_min_mos}.`);
+  }
+  if (Number.isFinite(jitter) && jitter > Number(settings.quality_max_jitter_ms)) {
+    alerts.push(`Jitter ${jitter}ms exceeds ${settings.quality_max_jitter_ms}ms.`);
+  }
+  if (
+    Number.isFinite(packetLoss) &&
+    packetLoss > Number(settings.quality_max_packet_loss_percent)
+  ) {
+    alerts.push(
+      `Packet loss ${packetLoss}% exceeds ${settings.quality_max_packet_loss_percent}%.`
+    );
+  }
+
+  return {
+    status: alerts.length > 0 ? "degraded" : "good",
+    alerts,
+    metrics: {
+      mos: Number.isFinite(mos) ? mos : null,
+      jitter_ms: Number.isFinite(jitter) ? jitter : null,
+      packet_loss_percent: Number.isFinite(packetLoss) ? packetLoss : null,
+      latency_ms: Number.isFinite(Number(metrics.latency_ms))
+        ? Number(metrics.latency_ms)
+        : null
+    }
+  };
+}
+
 router.get("/health", async (req, res) => {
   let databaseConnected = false;
   let tablesReady = false;
@@ -404,7 +546,9 @@ router.get("/health", async (req, res) => {
       queues: db.voice_queues.length,
       voicemails: db.voice_voicemail_profiles.length,
       call_logs: db.voice_call_logs.length,
-      active_calls: db.voice_active_calls.length
+      active_calls: db.voice_active_calls.length,
+      emergency_locations: db.voice_emergency_locations.length,
+      port_requests: db.voice_port_requests.length
     } : {},
     last_gateway_event_at: (() => {
       try {
@@ -444,6 +588,205 @@ crud("/business-hours", TABLES["business-hours"], "hours");
 crud("/queues", TABLES.queues, "queue");
 crud("/voicemail-profiles", TABLES["voicemail-profiles"], "vm");
 crud("/call-logs", TABLES["call-logs"], "cdr");
+
+router.get("/emergency-locations", listTable(TABLES["emergency-locations"]));
+router.post("/emergency-locations", requireVoiceAdmin, (req, res) => {
+  const db = ensureDb();
+  const payload = emergencyLocationPayload(req.body);
+  const missing = validateEmergencyLocation(payload);
+  if (missing.length > 0) {
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_EMERGENCY_LOCATION",
+      message: `Complete the required emergency location fields: ${missing.join(", ")}.`,
+      missing
+    });
+  }
+
+  const record = {
+    id: makeId("e911"),
+    ...payload,
+    status: payload.status === "validated" && !payload.provider_reference
+      ? "pending_provider"
+      : payload.status,
+    created_at: nowIso(),
+    updated_at: nowIso()
+  };
+  db.voice_emergency_locations.push(record);
+  saveDb(db);
+  return res.status(201).json(record);
+});
+
+router.patch("/emergency-locations/:id", requireVoiceAdmin, (req, res) => {
+  const db = ensureDb();
+  const index = db.voice_emergency_locations.findIndex(
+    (row) => recordMatchesId(row, req.params.id)
+  );
+  if (index < 0) {
+    return res.status(404).json({ success: false, message: "Emergency location not found." });
+  }
+
+  const payload = emergencyLocationPayload({
+    ...db.voice_emergency_locations[index],
+    ...(req.body || {})
+  });
+  const missing = validateEmergencyLocation(payload);
+  if (missing.length > 0) {
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_EMERGENCY_LOCATION",
+      message: `Complete the required emergency location fields: ${missing.join(", ")}.`,
+      missing
+    });
+  }
+  if (payload.status === "validated" && !payload.provider_reference) {
+    payload.status = "pending_provider";
+  }
+
+  db.voice_emergency_locations[index] = {
+    ...db.voice_emergency_locations[index],
+    ...payload,
+    updated_at: nowIso()
+  };
+  saveDb(db);
+  return res.json(db.voice_emergency_locations[index]);
+});
+
+router.delete(
+  "/emergency-locations/:id",
+  requireVoiceAdmin,
+  deleteTableRecord(TABLES["emergency-locations"])
+);
+
+router.get("/port-requests", listTable(TABLES["port-requests"]));
+router.post("/port-requests", requireVoiceAdmin, (req, res) => {
+  const db = ensureDb();
+  const payload = portRequestPayload(req.body);
+  const missing = validatePortRequest(payload);
+  if (missing.length > 0) {
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_PORT_REQUEST",
+      message: `Complete the required port request fields: ${missing.join(", ")}.`,
+      missing
+    });
+  }
+  const duplicate = db.voice_port_requests.find(
+    (request) =>
+      request.status !== "completed" &&
+      request.status !== "rejected" &&
+      Array.isArray(request.numbers) &&
+      request.numbers.some((number) => payload.numbers.includes(number))
+  );
+  if (duplicate) {
+    return res.status(409).json({
+      success: false,
+      code: "DUPLICATE_PORT_REQUEST",
+      message: "One or more numbers already belong to an active port request."
+    });
+  }
+
+  const record = {
+    id: makeId("port"),
+    ...payload,
+    created_at: nowIso(),
+    updated_at: nowIso()
+  };
+  db.voice_port_requests.push(record);
+  saveDb(db);
+  return res.status(201).json(record);
+});
+
+router.patch("/port-requests/:id", requireVoiceAdmin, (req, res) => {
+  const db = ensureDb();
+  const index = db.voice_port_requests.findIndex(
+    (row) => recordMatchesId(row, req.params.id)
+  );
+  if (index < 0) {
+    return res.status(404).json({ success: false, message: "Port request not found." });
+  }
+  const payload = portRequestPayload({
+    ...db.voice_port_requests[index],
+    ...(req.body || {})
+  });
+  const missing = validatePortRequest(payload);
+  if (missing.length > 0) {
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_PORT_REQUEST",
+      message: `Complete the required port request fields: ${missing.join(", ")}.`,
+      missing
+    });
+  }
+  db.voice_port_requests[index] = {
+    ...db.voice_port_requests[index],
+    ...payload,
+    updated_at: nowIso()
+  };
+  saveDb(db);
+  return res.json(db.voice_port_requests[index]);
+});
+
+router.delete(
+  "/port-requests/:id",
+  requireVoiceAdmin,
+  deleteTableRecord(TABLES["port-requests"])
+);
+
+router.get("/operations/readiness", (req, res) => {
+  const db = ensureDb();
+  const settings = db.voice_settings;
+  const validatedLocations = db.voice_emergency_locations.filter(
+    (location) => location.status === "validated"
+  );
+  const activePortRequests = db.voice_port_requests.filter(
+    (request) => !["completed", "rejected"].includes(request.status)
+  );
+  const blockers = [];
+  if (validatedLocations.length === 0) {
+    blockers.push("No carrier-validated emergency calling location is configured.");
+  }
+  if (!settings.supervisor_monitoring_enabled) {
+    blockers.push("Supervisor call monitoring is disabled.");
+  }
+  if (!settings.quality_monitoring_enabled) {
+    blockers.push("Call-quality monitoring is disabled.");
+  }
+  if (settings.conversation_intelligence_enabled && !settings.transcript_redaction_enabled) {
+    blockers.push("Conversation intelligence is enabled without transcript redaction.");
+  }
+
+  return res.json({
+    status: blockers.length === 0 ? "ready" : "attention_required",
+    blockers,
+    emergency_locations: {
+      total: db.voice_emergency_locations.length,
+      validated: validatedLocations.length,
+      pending_provider: db.voice_emergency_locations.filter(
+        (location) => location.status === "pending_provider"
+      ).length
+    },
+    porting: {
+      active_requests: activePortRequests.length,
+      numbers_in_progress: activePortRequests.reduce(
+        (total, request) => total + request.numbers.length,
+        0
+      )
+    },
+    supervisor_controls: {
+      monitor: settings.supervisor_monitoring_enabled,
+      whisper: settings.supervisor_whisper_enabled,
+      barge: settings.supervisor_barge_enabled,
+      takeover: settings.supervisor_takeover_enabled
+    },
+    quality_policy: {
+      enabled: settings.quality_monitoring_enabled,
+      minimum_mos: settings.quality_min_mos,
+      maximum_jitter_ms: settings.quality_max_jitter_ms,
+      maximum_packet_loss_percent: settings.quality_max_packet_loss_percent
+    }
+  });
+});
 
 router.post("/numbers/import", requireVoiceAdmin, (req, res) => {
   const input = Array.isArray(req.body)
@@ -857,16 +1200,25 @@ router.post("/route-call", (req, res) => {
 
 router.post("/call-event", (req, res) => {
   const db = ensureDb();
+  let workflowDispositionRequired = false;
+  let workflowIntelligenceStatus = db.voice_settings.conversation_intelligence_enabled
+    ? "awaiting_recording"
+    : "disabled";
+  const quality = assessCallQuality(
+    db.voice_settings,
+    req.body.rtp_metrics || req.body.rtpMetrics || {}
+  );
 
   const event = {
     id: makeId("event"),
     call_id: req.body.call_id || req.body.callId || null,
-    event_type: req.body.event_type || req.body.eventType || "Unknown",
+    event_type: req.body.event_type || req.body.eventType || req.body.event || "Unknown",
     event_source: req.body.event_source || req.body.eventSource || "goodos_voice",
     event_timestamp: req.body.event_timestamp || req.body.eventTimestamp || nowIso(),
     channel_id: req.body.channel_id || req.body.channelId || null,
     agent_id: req.body.agent_id || req.body.agentId || null,
     message: req.body.message || "",
+    quality,
     raw_event: req.body.raw_event || req.body.rawEvent || req.body,
     created_at: nowIso()
   };
@@ -883,6 +1235,18 @@ router.post("/call-event", (req, res) => {
 
     if (["Hangup", "BridgeLeave", "Voicemail", "RouteFailed"].includes(event.event_type)) {
       db.voice_active_calls = db.voice_active_calls.filter((call) => String(call.call_id) !== String(callId));
+      const wrapUpRequired =
+        Boolean(db.voice_settings.disposition_required) &&
+        Boolean(active && active.selected_agent_id);
+      const wrapUpSeconds = Number(db.voice_settings.post_call_wrap_up_seconds || 0);
+      const wrapUpDueAt = new Date(Date.now() + wrapUpSeconds * 1000).toISOString();
+      const intelligenceRequested =
+        Boolean(db.voice_settings.conversation_intelligence_enabled) &&
+        Boolean(req.body.recording_url || req.body.recordingUrl);
+      workflowDispositionRequired = wrapUpRequired;
+      workflowIntelligenceStatus = intelligenceRequested
+        ? "queued"
+        : workflowIntelligenceStatus;
 
       db.voice_call_logs.push({
         id: makeId("cdr"),
@@ -893,6 +1257,18 @@ router.post("/call-event", (req, res) => {
         selected_agent_name: active ? active.selected_agent_name : null,
         action: active ? active.route_path : null,
         result: event.event_type,
+        disposition_status: wrapUpRequired ? "pending" : "not_required",
+        disposition_code: null,
+        wrap_up_due_at: wrapUpRequired ? wrapUpDueAt : null,
+        quality,
+        intelligence_status: intelligenceRequested ? "queued" : "not_requested",
+        intelligence_features: intelligenceRequested ? {
+          summary: Boolean(db.voice_settings.ai_summary_enabled),
+          sentiment: Boolean(db.voice_settings.sentiment_analysis_enabled),
+          action_items: Boolean(db.voice_settings.action_item_detection_enabled),
+          redaction: Boolean(db.voice_settings.transcript_redaction_enabled)
+        } : null,
+        recording_url: req.body.recording_url || req.body.recordingUrl || null,
         started_at: active ? active.started_at : null,
         ended_at: nowIso(),
         raw_payload: {
@@ -908,8 +1284,46 @@ router.post("/call-event", (req, res) => {
   saveDb(db);
   return res.status(201).json({
     success: true,
-    event
+    event,
+    workflow: {
+      disposition_required: workflowDispositionRequired,
+      wrap_up_seconds: Number(db.voice_settings.post_call_wrap_up_seconds || 0),
+      quality,
+      conversation_intelligence: workflowIntelligenceStatus
+    }
   });
+});
+
+router.patch("/call-logs/:id/disposition", (req, res) => {
+  const db = ensureDb();
+  const index = db.voice_call_logs.findIndex((row) => recordMatchesId(row, req.params.id));
+  if (index < 0) {
+    return res.status(404).json({ success: false, message: "Call log not found." });
+  }
+
+  const code = String(req.body.disposition_code || req.body.dispositionCode || "").trim();
+  const allowedCodes = Array.isArray(db.voice_settings.disposition_codes)
+    ? db.voice_settings.disposition_codes
+    : [];
+  if (!code || (allowedCodes.length > 0 && !allowedCodes.includes(code))) {
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_DISPOSITION",
+      message: "Choose one of the configured call disposition codes.",
+      allowed_dispositions: allowedCodes
+    });
+  }
+
+  db.voice_call_logs[index] = {
+    ...db.voice_call_logs[index],
+    disposition_code: code,
+    disposition_notes: String(req.body.notes || "").trim().slice(0, 2000),
+    disposition_status: "completed",
+    disposed_at: nowIso(),
+    updated_at: nowIso()
+  };
+  saveDb(db);
+  return res.json(db.voice_call_logs[index]);
 });
 
 router.post("/seed-demo", (req, res) => {
