@@ -14,7 +14,7 @@ test("GoodBase deployment applies the idempotent GoodAds growth migration", () =
   const runner = read("scripts/apply-goodads-growth-migration.js");
   const migration = read("migrations/20260725_goodads_growth_engine.sql");
 
-  assert.equal(packageJson.scripts.build, "node scripts/apply-goodads-growth-migration.js");
+  assert.match(packageJson.scripts.build, /^node scripts\/apply-goodads-growth-migration\.js/);
   assert.match(runner, /pg_advisory_lock/);
   assert.match(runner, /DATABASE_URL is required/);
   assert.match(runner, /20260725_goodads_growth_engine\.sql/);

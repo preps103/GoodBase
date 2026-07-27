@@ -385,6 +385,7 @@ app.use(
     allowedHeaders: [
       "Authorization",
       "Content-Type",
+      "Idempotency-Key",
       "X-Requested-With",
       "X-Goodbase-API-Key",
       "X-GoodOS-API-Key",
