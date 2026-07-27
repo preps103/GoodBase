@@ -1,0 +1,1 @@
+goodapp ALL=(root) NOPASSWD: /usr/local/sbin/goodos-pm2-control discover, /usr/local/sbin/goodos-pm2-control restart *, /usr/local/sbin/goodos-pm2-control save

@@ -21,6 +21,7 @@ const PM2_HOME = path.resolve(
   process.env.GOODOS_PM2_HOME ||
   "/home/mgoodlo3/.pm2"
 );
+const PM2_CONTROL_COMMAND = "/usr/local/sbin/goodos-pm2-control";
 
 function identifier(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -507,11 +508,23 @@ async function restartApplication(runId, site) {
   if (site.processManager === "pm2") {
     const processNames = pm2ProcessNamesForSite(site);
     for (const processName of processNames) {
-      await commandWithEvents(runId, "restart", "pm2", ["restart", processName, "--update-env"], {
+      await commandWithEvents(
+        runId,
+        "restart",
+        "sudo",
+        ["-n", PM2_CONTROL_COMMAND, "restart", processName],
+        {
         timeoutMs: 2 * 60 * 1000,
-      });
+        }
+      );
     }
-    await commandWithEvents(runId, "restart", "pm2", ["save"], { timeoutMs: 2 * 60 * 1000 });
+    await commandWithEvents(
+      runId,
+      "restart",
+      "sudo",
+      ["-n", PM2_CONTROL_COMMAND, "save"],
+      { timeoutMs: 2 * 60 * 1000 }
+    );
     return;
   }
 
@@ -808,11 +821,22 @@ async function discoverServerApps() {
       }
     );
   } catch {
-    throw statusError(
-      503,
-      "PM2 application discovery is unavailable. Verify GOODOS_PM2_HOME and deployment-worker permissions.",
-      "PM2_DISCOVERY_UNAVAILABLE"
-    );
+    try {
+      result = await runCommand(
+        "sudo",
+        ["-n", PM2_CONTROL_COMMAND, "discover"],
+        {
+          timeoutMs: 60000,
+          maxOutput: 5 * 1024 * 1024,
+        }
+      );
+    } catch {
+      throw statusError(
+        503,
+        "PM2 application discovery is unavailable. Verify the deployment control helper and permissions.",
+        "PM2_DISCOVERY_UNAVAILABLE"
+      );
+    }
   }
 
   const rawOutput = String(
