@@ -90,6 +90,25 @@ async function createTransporter() {
       servername: config.servername,
       rejectUnauthorized: true,
     },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
+  });
+}
+
+function isLocalCompanyRecipient(email) {
+  return /@(goodos\.app|ghostcreationz\.com)$/i.test(String(email || "").trim());
+}
+
+function createLocalCompanyTransporter() {
+  return nodemailer.createTransport({
+    host: "127.0.0.1",
+    port: 25,
+    secure: false,
+    ignoreTLS: true,
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 10000,
   });
 }
 
@@ -426,11 +445,16 @@ async function processEmailQueue(limit = 10) {
   );
 
   const transporter = await createTransporter();
+  const localCompanyTransporter = createLocalCompanyTransporter();
   const processed = [];
 
   for (const email of rows.rows) {
     try {
-      if (!transporter) {
+      const selectedTransporter = isLocalCompanyRecipient(email.to_email)
+        ? localCompanyTransporter
+        : transporter;
+
+      if (!selectedTransporter) {
         await dbQuery(
           `
             UPDATE backend_email_queue
@@ -455,7 +479,7 @@ async function processEmailQueue(limit = 10) {
         continue;
       }
 
-      const info = await transporter.sendMail({
+      const info = await selectedTransporter.sendMail({
         from: email.from_name ? `"${email.from_name}" <${email.from_email}>` : email.from_email,
         to: email.to_name ? `"${email.to_name}" <${email.to_email}>` : email.to_email,
         replyTo: email.reply_to_email || undefined,
@@ -509,6 +533,7 @@ async function processEmailQueue(limit = 10) {
     processedCount: processed.length,
     processed,
     smtpConfigured: Boolean(transporter),
+    localCompanyDelivery: true,
   };
 }
 
