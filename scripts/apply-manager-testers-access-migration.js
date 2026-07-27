@@ -1,7 +1,9 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const bcrypt = require("bcryptjs");
 const database = require("../src/config/database");
 const env = require("../src/config/env");
 
@@ -9,6 +11,83 @@ const MIGRATION_NAME = "20260727_manager_testers_access.sql";
 const MIGRATION_PATH = path.join(__dirname, "..", "migrations", MIGRATION_NAME);
 const LOCK_NAME = "goodbase:migration:manager-testers-access";
 const MANAGER_EMAILS = ["ryan@goodos.app", "marissa@goodos.app"];
+const MANAGER_PROFILES = [
+  {
+    email: "ryan@goodos.app",
+    firstName: "Ryan",
+    displayName: "Ryan",
+  },
+  {
+    email: "marissa@goodos.app",
+    firstName: "Marissa",
+    displayName: "Marissa",
+  },
+];
+
+function transactionBody(sql) {
+  return sql
+    .replace(/^\s*BEGIN;\s*/i, "")
+    .replace(/\s*COMMIT;\s*$/i, "");
+}
+
+async function provisionMissingAccounts(client) {
+  const provisioned = [];
+  for (const profile of MANAGER_PROFILES) {
+    const existing = await client.query(
+      "SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1",
+      [profile.email]
+    );
+    if (existing.rows[0]) continue;
+
+    const unavailablePassword =
+      `${crypto.randomBytes(48).toString("base64url")}Aa1!`;
+    const passwordHash = await bcrypt.hash(unavailablePassword, 12);
+    const result = await client.query(
+      `
+        INSERT INTO users (
+          email,
+          password_hash,
+          first_name,
+          display_name,
+          platform_role,
+          status,
+          email_verified,
+          password_updated_at,
+          auth_metadata_json
+        )
+        SELECT
+          $1,
+          $2,
+          $3,
+          $4,
+          'user',
+          'active',
+          TRUE,
+          NOW(),
+          $5::jsonb
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM users
+          WHERE LOWER(email) = $1
+        )
+        RETURNING LOWER(email) AS email
+      `,
+      [
+        profile.email,
+        passwordHash,
+        profile.firstName,
+        profile.displayName,
+        JSON.stringify({
+          registrationSource: "manager_access_provisioning",
+          requiresPasswordReset: true,
+          provisionedAt: new Date().toISOString(),
+        }),
+      ]
+    );
+    if (result.rows[0]) provisioned.push(result.rows[0].email);
+  }
+  return provisioned;
+}
 
 async function accessState(client) {
   const result = await client.query(
@@ -84,7 +163,13 @@ async function main() {
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [LOCK_NAME]);
     locked = true;
     const before = await accessState(client);
-    if (!ready(before)) await client.query(sql);
+    let provisioned = [];
+    if (!ready(before)) {
+      await client.query("BEGIN");
+      provisioned = await provisionMissingAccounts(client);
+      await client.query(transactionBody(sql));
+      await client.query("COMMIT");
+    }
     const after = await accessState(client);
     if (!ready(after)) {
       throw new Error("Ryan and Marissa manager access was not installed completely.");
@@ -92,6 +177,7 @@ async function main() {
     console.log(JSON.stringify({
       migration: MIGRATION_NAME,
       status: ready(before) ? "verified" : "applied",
+      provisioned,
       users: after.map((row) => ({
         email: row.email,
         platformRole: row.platform_role,

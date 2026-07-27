@@ -23,6 +23,11 @@ test("GoodBase deployment grants Ryan and Marissa verified manager access", () =
   assert.match(runner, /manager_memberships/);
   assert.match(runner, /active_manager_roles/);
   assert.match(runner, /password_configured/);
+  assert.match(runner, /provisionMissingAccounts/);
+  assert.match(runner, /requiresPasswordReset/);
+  assert.match(runner, /crypto\.randomBytes/);
+  assert.match(runner, /bcrypt\.hash/);
+  assert.match(runner, /transactionBody/);
   assert.doesNotMatch(runner, /process\.env\.(?:DATABASE_URL|JWT_SECRET)/);
 
   for (const email of ["ryan@goodos.app", "marissa@goodos.app"]) {
