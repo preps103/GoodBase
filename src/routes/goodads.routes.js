@@ -7,6 +7,7 @@ const tenantContext = require("../middleware/tenantContext");
 const { success, error } = require("../utils/response");
 const service = require("../services/goodads.service");
 const social = require("../services/goodads-social.service");
+const payments = require("../services/goodads-payments.service");
 
 const router = express.Router();
 const publicFormReadLimiter = rateLimit({
@@ -24,6 +25,18 @@ const publicFormWriteLimiter = rateLimit({
 const generationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const publicCheckoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const paymentWebhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 1200,
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
@@ -93,6 +106,39 @@ router.post("/public/forms/:slug/submissions", publicFormWriteLimiter, (req, res
     userAgent: req.get("User-Agent"),
   }))
 ));
+router.get("/public/payment-offers/:slug", publicFormReadLimiter, (req, res) => (
+  handle(res, "payment-offer.public", payments.getPublicOffer(req.params.slug))
+));
+router.post("/public/payment-offers/:slug/checkout", publicCheckoutLimiter, (req, res) => (
+  handle(res, "payment.checkout", payments.createCheckout({
+    slug: req.params.slug,
+    payload: req.body,
+    idempotencyKey: req.get("Idempotency-Key"),
+  }))
+));
+router.get("/public/payment-sessions/:id", publicFormReadLimiter, (req, res) => (
+  handle(res, "payment-session.public", payments.getPublicSession({
+    id: req.params.id,
+    accessToken: req.query.access,
+  }))
+));
+router.post("/public/payment-sessions/:id/paypal/capture", publicCheckoutLimiter, (req, res) => (
+  handle(res, "payment.paypal.capture", payments.capturePayPal({
+    id: req.params.id,
+    accessToken: req.body?.accessToken,
+    orderId: req.body?.orderId,
+    idempotencyKey: req.get("Idempotency-Key"),
+  }))
+));
+router.post("/public/payment-webhooks/:provider/:connectionId", paymentWebhookLimiter, (req, res) => (
+  handle(res, "payment.webhook", payments.handleWebhook({
+    provider: req.params.provider,
+    connectionId: req.params.connectionId,
+    rawBody: req.rawBody,
+    headers: req.headers,
+    payload: req.body,
+  }))
+));
 
 router.use(authRequired, tenantContext, requireGoodAdsAccess);
 
@@ -137,6 +183,51 @@ router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", s
   idempotencyKey: req.get("Idempotency-Key"),
   providers: req.body?.providers,
   content: req.body?.content,
+})));
+router.get("/payments/providers", (req, res) => handle(res, "payments.providers", payments.listProviders({
+  context: req.tenantContext,
+})));
+router.put("/payments/providers/:provider", (req, res) => handle(res, "payments.provider.configure", payments.configureProvider({
+  provider: req.params.provider,
+  environment: req.body?.environment,
+  credentials: req.body?.credentials,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/payments/providers/:provider", (req, res) => handle(res, "payments.provider.disconnect", payments.disconnectProvider({
+  provider: req.params.provider,
+  context: req.tenantContext,
+})));
+router.get("/payments/preferences", (req, res) => handle(res, "payments.preferences", payments.getPreferences({
+  context: req.tenantContext,
+})));
+router.patch("/payments/preferences", (req, res) => handle(res, "payments.preferences.update", payments.updatePreferences({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.get("/payments/offers", (req, res) => handle(res, "payments.offers.list", payments.listOffers({
+  context: req.tenantContext,
+})));
+router.post("/payments/offers", (req, res) => handle(res, "payments.offers.create", payments.saveOffer({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.put("/payments/offers/:id", (req, res) => handle(res, "payments.offers.update", payments.saveOffer({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/payments/offers/:id", (req, res) => handle(res, "payments.offers.archive", payments.archiveOffer({
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.get("/payments/sessions", (req, res) => handle(res, "payments.sessions", payments.listSessions({
+  context: req.tenantContext,
+  limit: req.query.limit,
 })));
 
 function registerResource(path, type) {

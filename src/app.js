@@ -400,6 +400,11 @@ app.use(
 app.use(
   express.json({
     limit: "10mb",
+    verify: (req, _res, buffer) => {
+      if (req.originalUrl?.startsWith("/api/apps/goodads/v1/public/payment-webhooks/")) {
+        req.rawBody = Buffer.from(buffer);
+      }
+    },
 
     type: [
       "application/json",
