@@ -315,8 +315,23 @@ async function generateMockup(payload) {
   assertDesignerPayload(payload);
   const source = parseDataImage(payload.designTextureUrl);
   const clothingType = boundedString(payload.clothingType, "Clothing type", 100, false) || "garment";
+  const options = payload.options && typeof payload.options === "object" ? payload.options : {};
+  const placement = options.placement && typeof options.placement === "object" ? options.placement : {};
+  const scale = Math.max(0.25, Math.min(1.6, Number(placement.scale) || 0.82));
+  const horizontal = Math.max(-1, Math.min(1, Number(placement.x) || 0));
+  const vertical = Math.max(-1, Math.min(1, Number(placement.y) || 0));
+  const rotation = Math.max(-180, Math.min(180, Number(placement.rotation) || 0));
+  const garmentColor = boundedString(options.garmentColor, "Garment color", 32, false) || "match the supplied reference";
+  const material = boundedString(options.material, "Material", 100, false) || "premium production fabric";
   const imageUrl = await generateImage({
-    prompt: `Apply the supplied artwork faithfully to a photorealistic premium ${clothingType}. Show one complete garment on a neutral studio background. Preserve artwork colors, proportions, and placement. No extra text, labels, watermarks, or duplicate garments.`,
+    prompt: [
+      `Convert the supplied interactive 3D reference into a photorealistic premium ${clothingType} production mockup.`,
+      `Garment color: ${garmentColor}. Material: ${material}.`,
+      `Preserve the uploaded graphic exactly, including its colors, proportions, and garment placement.`,
+      `Placement metadata: horizontal ${horizontal.toFixed(2)}, vertical ${vertical.toFixed(2)}, scale ${scale.toFixed(2)}, rotation ${rotation.toFixed(0)} degrees.`,
+      "Render realistic fabric texture, seams, drape, folds, print interaction, and three-quarter studio lighting.",
+      "Show one complete garment on a neutral seamless background. No model, hanger, mannequin, extra text, labels, watermarks, or duplicate garments.",
+    ].join("\n"),
     images: [`data:${source.mimeType};base64,${source.buffer.toString("base64")}`],
     background: "opaque",
     quality: "high",
@@ -326,23 +341,82 @@ async function generateMockup(payload) {
 
 async function generatePhotoshoot(payload) {
   assertDesignerPayload(payload);
-  const source = parseDataImage(payload.clothingImageUrl);
+  const source = await loadImageAsset(payload.clothingImageUrl);
   const options = payload.options && typeof payload.options === "object" ? payload.options : {};
+  const avatar = options.avatarImageUrl ? await loadImageAsset(options.avatarImageUrl) : null;
+  const references = [
+    `data:${source.mimeType};base64,${source.buffer.toString("base64")}`,
+  ];
+  if (avatar) references.push(`data:${avatar.mimeType};base64,${avatar.buffer.toString("base64")}`);
   const imageUrl = await generateImage({
     prompt: [
       "Create a professional fashion editorial photograph using the supplied garment design.",
+      avatar
+        ? "Reference image 1 is the garment. Reference image 2 is the adult model/avatar. Preserve the avatar's identity, facial features, complexion, hair, and body proportions."
+        : "Use one original adult fashion model.",
       `Model: ${boundedString(options.gender, "Model", 80, false) || "adult fashion model"}.`,
       `Appearance: ${boundedString(options.appearance, "Appearance", 200, false) || "editorial casting"}.`,
       `Pose: ${boundedString(options.pose, "Pose", 200, false) || "natural full-body pose"}.`,
       `Setting: ${boundedString(options.setting, "Setting", 200, false) || "professional studio"}.`,
-      "Preserve the garment artwork, cut, colors, and material. Show one adult model, one complete outfit, realistic anatomy, no trademarks, labels, text, or watermarks.",
+      "Fit the supplied garment naturally to the model while preserving its artwork, cut, colors, construction, and material.",
+      "Show one adult model, one complete outfit, realistic anatomy, realistic hands, and production-quality lighting. No trademarks, labels, added text, or watermarks.",
     ].join("\n"),
-    images: [`data:${source.mimeType};base64,${source.buffer.toString("base64")}`],
+    images: references,
     size: "1024x1536",
     background: "opaque",
     quality: "high",
   });
   return { imageUrl };
+}
+
+function campaignShotCount(value) {
+  const parsed = Math.floor(Number(value) || 4);
+  return Math.max(1, Math.min(4, parsed));
+}
+
+async function generateCampaign(payload) {
+  assertDesignerPayload(payload);
+  const garment = await loadImageAsset(payload.garmentImageUrl);
+  const avatar = payload.avatarImageUrl ? await loadImageAsset(payload.avatarImageUrl) : null;
+  const options = payload.options && typeof payload.options === "object" ? payload.options : {};
+  const campaignName = boundedString(options.name, "Campaign name", 120, false) || "GoodDesigner Campaign";
+  const creativeDirection = boundedString(options.creativeDirection, "Creative direction", 1200);
+  const location = boundedString(options.location, "Campaign location", 180, false) || "professional fashion studio";
+  const mood = boundedString(options.mood, "Campaign mood", 180, false) || "premium editorial";
+  const shotCount = campaignShotCount(options.shotCount);
+  const references = [
+    `data:${garment.mimeType};base64,${garment.buffer.toString("base64")}`,
+  ];
+  if (avatar) references.push(`data:${avatar.mimeType};base64,${avatar.buffer.toString("base64")}`);
+
+  const shotDirections = [
+    "Hero full-body portrait with a confident straight-on pose and the complete garment clearly visible.",
+    "Dynamic three-quarter movement shot showing natural fabric drape, side construction, and garment fit.",
+    "Editorial medium portrait emphasizing the model identity, garment neckline, graphic placement, and material texture.",
+    "Wide campaign composition with environmental storytelling while keeping the model and full outfit recognizable.",
+  ];
+
+  const imageUrls = await Promise.all(shotDirections.slice(0, shotCount).map((shotDirection, index) => generateImage({
+    prompt: [
+      `Create shot ${index + 1} of a cohesive fashion campaign titled "${campaignName}".`,
+      "Reference image 1 is the approved garment mockup.",
+      avatar
+        ? "Reference image 2 is the approved adult model/avatar. Preserve the exact same recognizable identity, facial features, complexion, hair, and body proportions in every shot."
+        : "Use the same original adult fashion model identity consistently across the campaign.",
+      `Creative direction: ${creativeDirection}.`,
+      `Location: ${location}. Mood and lighting: ${mood}.`,
+      `Shot direction: ${shotDirection}`,
+      "Preserve the garment artwork, color, silhouette, seams, trim, material, and fit exactly across the entire campaign.",
+      "Use realistic anatomy and hands, professional editorial photography, coherent color grading, and commercial production quality.",
+      "Show one adult model only. No duplicate people, extra garments, trademarks, labels, captions, text, collages, or watermarks.",
+    ].join("\n"),
+    images: references,
+    size: "1024x1536",
+    background: "opaque",
+    quality: "high",
+  })));
+
+  return { campaignName, imageUrls };
 }
 
 function validVideoJobId(value) {
@@ -417,6 +491,7 @@ module.exports = {
   explodeDesign,
   generateMockup,
   generatePhotoshoot,
+  generateCampaign,
   generateAnimation,
   animationStatus,
   animationContent,
@@ -424,5 +499,6 @@ module.exports = {
     validatedSvg,
     parseDataImage,
     imageSizeForAspectRatio,
+    campaignShotCount,
   },
 };
