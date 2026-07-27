@@ -395,17 +395,37 @@ router.get("/postman/goodos-postman-collection.json", (req, res) => {
   res.type("json").sendFile(developerPublicFile("postman/goodos-postman-collection.json"));
 });
 
-function sendGoodBaseFavicon(res) {
+function sendGoodBaseBrandAsset(res, contentType, relativePath) {
   res.set("Cache-Control", "public, max-age=300, must-revalidate");
-  res.type("image/svg+xml").sendFile(developerPublicFile("favicon.svg"));
+  res.type(contentType).sendFile(developerPublicFile(relativePath));
 }
 
 router.get("/favicon.svg", (req, res) => {
-  sendGoodBaseFavicon(res);
+  sendGoodBaseBrandAsset(res, "image/svg+xml", "favicon.svg");
 });
 
 router.get("/favicon.ico", (req, res) => {
-  sendGoodBaseFavicon(res);
+  sendGoodBaseBrandAsset(res, "image/x-icon", "favicon.ico");
+});
+
+router.get("/favicon-16x16.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "favicon-16x16.png");
+});
+
+router.get("/favicon-32x32.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "favicon-32x32.png");
+});
+
+router.get("/apple-touch-icon.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "apple-touch-icon.png");
+});
+
+router.get("/icons/goodbase-192.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "icons/goodbase-192.png");
+});
+
+router.get("/icons/goodbase-512.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "icons/goodbase-512.png");
 });
 
 router.get("/site.webmanifest", (req, res) => {
