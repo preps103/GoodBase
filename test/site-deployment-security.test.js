@@ -94,7 +94,7 @@ test("deployment PM2 control is restricted to the root-owned helper", () => {
   assert.match(deploymentSource, /PM2_CONTROL_COMMAND = "\/usr\/local\/sbin\/goodos-pm2-control"/);
   assert.match(deploymentSource, /\["-n", PM2_CONTROL_COMMAND, "discover"\]/);
   assert.match(deploymentSource, /\["-n", PM2_CONTROL_COMMAND, "restart", processName\]/);
-  assert.match(helper, /case "\$\{process_name\}"/);
+  assert.match(helper, /case "\$\{candidate\}"/);
   assert.match(helper, /goodbase-api\|goodbase-api-ha\|goodbase-worker/);
   assert.doesNotMatch(helper, /eval|sh -c/);
   assert.match(sudoers, /^goodapp ALL=\(root\) NOPASSWD: /);

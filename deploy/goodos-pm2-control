@@ -6,8 +6,8 @@ readonly PM2_RUNTIME="/root/.pm2"
 readonly action="${1:-}"
 
 allowed_process() {
-  local process_name="$1"
-  case "${process_name}" in
+  local candidate="$1"
+  case "${candidate}" in
     goodads|goodbase-api|goodbase-api-ha|goodbase-worker|goodboost|goodbuilder|\
     goodcustoms|gooddesigner|goodeditor|goodescrow|goodfleet|goodid|goodos|\
     goodqr|goodscan|goodspeech|goodswapz|goodtrusts|goodvoice)
@@ -26,9 +26,9 @@ case "${action}" in
     ;;
   restart)
     [[ "$#" -eq 2 ]]
-    readonly process_name="$2"
-    allowed_process "${process_name}"
-    exec env PM2_HOME="${PM2_RUNTIME}" "${PM2_BIN}" restart "${process_name}" --update-env
+    readonly requested_process="$2"
+    allowed_process "${requested_process}"
+    exec env PM2_HOME="${PM2_RUNTIME}" "${PM2_BIN}" restart "${requested_process}" --update-env
     ;;
   save)
     [[ "$#" -eq 1 ]]
