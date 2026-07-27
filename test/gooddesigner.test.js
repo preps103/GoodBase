@@ -36,3 +36,11 @@ test("GoodDesigner accepts safe SVG and rejects active content", () => {
     /unsafe/
   );
 });
+
+test("GoodDesigner bounds production campaign shot counts", () => {
+  assert.equal(service._internal.campaignShotCount(undefined), 4);
+  assert.equal(service._internal.campaignShotCount(0), 4);
+  assert.equal(service._internal.campaignShotCount(2), 2);
+  assert.equal(service._internal.campaignShotCount(9), 4);
+  assert.equal(service._internal.campaignShotCount(-3), 1);
+});
