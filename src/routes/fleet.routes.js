@@ -213,6 +213,26 @@ function bookingPayload(row) {
   };
 }
 
+function paymentPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id || undefined,
+    amount: Number(row.amount),
+    currency: row.currency,
+    status: row.status === "succeeded"
+      ? "completed"
+      : row.status === "failed"
+        ? "failed"
+        : "pending",
+    method: row.request_json?.method || "Recorded payment",
+    transactionId: row.provider_reference || undefined,
+    createdAt: row.created_at,
+    description: row.request_json?.description || row.operation_type.replaceAll("_", " "),
+    type: row.operation_type === "refund" ? "refund" : "rental",
+    refunded: row.operation_type === "refund" && row.status === "succeeded"
+  };
+}
+
 async function audit(client, request, action, entityType, entityId, before, after) {
   await client.query(
     `INSERT INTO fleet_audit_events
@@ -250,10 +270,11 @@ router.get("/health", async (request, response, next) => {
 router.get("/bootstrap", async (request, response, next) => {
   try {
     const org = organization(request);
-    const [vehicles, customers, bookings, workspace, auditEvents, members] = await Promise.all([
+    const [vehicles, customers, bookings, payments, workspace, auditEvents, members] = await Promise.all([
       query(`SELECT * FROM fleet_vehicles WHERE organization_id=$1 AND archived_at IS NULL ORDER BY created_at DESC`, [org]),
       query(`SELECT * FROM fleet_customers WHERE organization_id=$1 AND archived_at IS NULL ORDER BY created_at DESC`, [org]),
       query(`SELECT * FROM fleet_bookings WHERE organization_id=$1 AND archived_at IS NULL ORDER BY pickup_at DESC`, [org]),
+      query(`SELECT * FROM fleet_payment_operations WHERE organization_id=$1 ORDER BY created_at DESC`, [org]),
       query(`SELECT state_json,version,updated_at FROM fleet_workspace_state WHERE organization_id=$1`, [org]),
       query(
         `SELECT * FROM fleet_audit_events
@@ -276,6 +297,7 @@ router.get("/bootstrap", async (request, response, next) => {
       vehicles: vehicles.rows.map(vehiclePayload),
       customers: customers.rows.map(customerPayload),
       bookings: bookings.rows.map(bookingPayload),
+      payments: payments.rows.map(paymentPayload),
       workspace: {
         state: workspaceRow?.state_json || {},
         version: workspaceRow?.version || 0,
