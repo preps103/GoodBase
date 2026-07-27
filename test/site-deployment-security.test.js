@@ -100,3 +100,32 @@ test("deployment PM2 control is restricted to the root-owned helper", () => {
   assert.match(sudoers, /^goodapp ALL=\(root\) NOPASSWD: /);
   assert.doesNotMatch(sudoers, /\/bin\/sh|\/bin\/bash/);
 });
+
+test("GoodBase self-deployment recovery is lock-protected and owner-controlled", () => {
+  const routes = fs.readFileSync(
+    path.join(__dirname, "..", "src", "routes", "update-sites.routes.js"),
+    "utf8"
+  );
+  const page = fs.readFileSync(
+    path.join(__dirname, "..", "src", "public", "update-sites.js"),
+    "utf8"
+  );
+  const restart = fs.readFileSync(
+    path.join(__dirname, "..", "scripts", "restart-goodbase-services.js"),
+    "utf8"
+  );
+
+  assert.match(routes, /router\.use\(authRequired\)/);
+  assert.match(routes, /router\.use\(requireOwnerOrAdmin\)/);
+  assert.match(routes, /pg_try_advisory_lock/);
+  assert.match(routes, /DEPLOYMENT_WORKER_ACTIVE/);
+  assert.match(routes, /REGISTERED_SITE_DELETE_BLOCKED/);
+  assert.match(routes, /restart-goodbase-services/);
+  assert.match(page, /Recover Stale Run/);
+  assert.match(page, /Restart Services/);
+  assert.match(page, /Remove Mapping/);
+  assert.match(
+    restart,
+    /PROCESSES = \["goodbase-worker", "goodbase-api-ha", "goodbase-api"\]/
+  );
+});

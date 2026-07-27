@@ -8,7 +8,8 @@ const database = require("../config/database");
 const deployment = require("../services/site-deployment.service");
 
 const router = express.Router();
-const { query } = database;
+const { pool, query } = database;
+const STALE_DEPLOYMENT_AGE_MS = 15 * 1000;
 
 function roleOf(request) {
   return String(
@@ -397,6 +398,205 @@ router.post("/sites/:siteId/update", async (request, response) => {
       status: "queued",
       message: "Site update was queued.",
     });
+  } catch (error) {
+    return errorResponse(response, error);
+  }
+});
+
+router.post("/runs/:runId/recover-stale", async (request, response) => {
+  const runId = String(request.params.runId || "").trim();
+  const lockClient = await pool.connect();
+  let lockHeld = false;
+  let lockKey = "";
+
+  try {
+    const runResult = await lockClient.query(
+      `
+        SELECT
+          run.id,
+          run.site_id AS "siteId",
+          run.status,
+          run.updated_at AS "updatedAt",
+          site.name AS "siteName"
+        FROM backend_deployment_runs run
+        JOIN backend_deployment_sites site ON site.id = run.site_id
+        WHERE run.id = $1
+        LIMIT 1
+      `,
+      [runId]
+    );
+    const run = runResult.rows[0];
+    if (!run) {
+      return response.status(404).json({
+        success: false,
+        code: "DEPLOYMENT_RUN_NOT_FOUND",
+        message: "Deployment run was not found.",
+      });
+    }
+
+    if (!["queued", "running"].includes(run.status)) {
+      return response.json({ success: true, recovered: false, run });
+    }
+
+    const ageMs = Date.now() - new Date(run.updatedAt).getTime();
+    if (!Number.isFinite(ageMs) || ageMs < STALE_DEPLOYMENT_AGE_MS) {
+      return response.status(409).json({
+        success: false,
+        code: "DEPLOYMENT_RUN_NOT_STALE",
+        message: "This deployment is still recent. Wait for it to finish before recovering it.",
+      });
+    }
+
+    lockKey = `goodos-deployment:${run.siteId}`;
+    const lockResult = await lockClient.query(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [lockKey]
+    );
+    lockHeld = lockResult.rows[0]?.locked === true;
+    if (!lockHeld) {
+      return response.status(409).json({
+        success: false,
+        code: "DEPLOYMENT_WORKER_ACTIVE",
+        message: "The deployment worker is still active, so this run cannot be recovered yet.",
+      });
+    }
+
+    await lockClient.query("BEGIN");
+    await lockClient.query(
+      `
+        UPDATE backend_deployment_runs
+        SET
+          status = 'failed',
+          completed_at = NOW(),
+          error_message = 'Recovered after the deployment worker stopped reporting progress.',
+          summary_json = COALESCE(summary_json, '{}'::jsonb) ||
+            '{"staleRunRecovered":true}'::jsonb,
+          updated_at = NOW()
+        WHERE id = $1
+          AND status IN ('queued','running')
+      `,
+      [run.id]
+    );
+    await lockClient.query(
+      `
+        UPDATE backend_deployment_sites
+        SET status = 'ready', updated_at = NOW()
+        WHERE id = $1
+          AND last_run_id = $2
+      `,
+      [run.siteId, run.id]
+    );
+    await lockClient.query("COMMIT");
+
+    await deployment.addEvent(
+      run.id,
+      "recovery",
+      `Stale deployment recovered by ${request.user?.email || "owner"}.`,
+      "warning"
+    );
+    await audit(request, "deployment.run.recover_stale", run.siteId, {
+      runId: run.id,
+      previousStatus: run.status,
+    });
+
+    return response.json({
+      success: true,
+      recovered: true,
+      runId: run.id,
+      siteId: run.siteId,
+    });
+  } catch (error) {
+    await lockClient.query("ROLLBACK").catch(() => {});
+    return errorResponse(response, error);
+  } finally {
+    if (lockHeld && lockKey) {
+      await lockClient
+        .query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey])
+        .catch(() => {});
+    }
+    lockClient.release();
+  }
+});
+
+router.post("/sites/:siteId/restart-goodbase-services", async (request, response) => {
+  try {
+    const site = await deployment.loadSite(request.params.siteId);
+    const isCanonicalGoodBase =
+      site.appId === "goodbase" &&
+      site.name === "GoodBase" &&
+      path.resolve(site.appPath || "") === "/var/www/GoodBase";
+
+    if (!isCanonicalGoodBase) {
+      return response.status(403).json({
+        success: false,
+        code: "GOODBASE_RESTART_TARGET_REQUIRED",
+        message: "Only the canonical GoodBase production mapping can restart GoodBase services.",
+      });
+    }
+
+    const workerPath = path.join(
+      process.cwd(),
+      "scripts",
+      "restart-goodbase-services.js"
+    );
+    const child = spawn(process.execPath, [workerPath], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env },
+    });
+    child.unref();
+
+    await audit(request, "deployment.goodbase.restart_requested", site.id, {
+      processes: ["goodbase-worker", "goodbase-api-ha", "goodbase-api"],
+    });
+
+    return response.status(202).json({
+      success: true,
+      status: "scheduled",
+      message: "GoodBase service restart was scheduled.",
+    });
+  } catch (error) {
+    return errorResponse(response, error);
+  }
+});
+
+router.delete("/sites/:siteId", async (request, response) => {
+  try {
+    const site = await deployment.loadSite(request.params.siteId);
+    if (site.appId) {
+      return response.status(403).json({
+        success: false,
+        code: "REGISTERED_SITE_DELETE_BLOCKED",
+        message: "Registered application mappings cannot be removed.",
+      });
+    }
+
+    const active = await query(
+      `
+        SELECT id
+        FROM backend_deployment_runs
+        WHERE site_id = $1
+          AND status IN ('queued','running')
+        LIMIT 1
+      `,
+      [site.id]
+    );
+    if (active.rows[0]) {
+      return response.status(409).json({
+        success: false,
+        code: "DEPLOYMENT_ALREADY_RUNNING",
+        message: "Recover or finish the active deployment before removing this mapping.",
+      });
+    }
+
+    await audit(request, "deployment.site.remove_temporary", site.id, {
+      name: site.name,
+      domain: site.domain,
+      appPath: site.appPath,
+    });
+    await query("DELETE FROM backend_deployment_sites WHERE id = $1", [site.id]);
+    return response.json({ success: true, removed: true, siteId: site.id });
   } catch (error) {
     return errorResponse(response, error);
   }
