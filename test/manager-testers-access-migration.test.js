@@ -35,7 +35,8 @@ test("GoodBase deployment grants Ryan and Marissa verified manager access", () =
   }
   assert.match(migration, /platform_role = 'admin'/);
   assert.match(migration, /'accessLevel', 'manager'/);
-  assert.match(migration, /role = 'manager'/);
+  assert.match(migration, /role = 'admin'/);
+  assert.match(migration, /role_name = 'manager'/);
   assert.match(migration, /application\.status = 'active'/);
   assert.match(migration, /email_verified = TRUE/);
   assert.match(migration, /failed_login_count = 0/);

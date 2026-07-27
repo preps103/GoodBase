@@ -122,7 +122,7 @@ INSERT INTO app_memberships (
 SELECT
   account.id,
   application.id,
-  'manager',
+  'admin',
   'active',
   COALESCE(application.organization_id, 'org_goodos'),
   COALESCE(application.project_id, 'proj_goodos_platform'),
@@ -133,7 +133,7 @@ WHERE LOWER(account.email) IN ('ryan@goodos.app', 'marissa@goodos.app')
   AND application.status = 'active'
 ON CONFLICT (user_id, app_id) DO UPDATE
 SET
-  role = 'manager',
+  role = 'admin',
   status = 'active',
   organization_id = EXCLUDED.organization_id,
   project_id = EXCLUDED.project_id,

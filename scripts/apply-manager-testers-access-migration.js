@@ -111,7 +111,7 @@ async function accessState(client) {
           FROM app_memberships membership
           JOIN apps application ON application.id = membership.app_id
           WHERE membership.user_id = account.id
-            AND membership.role = 'manager'
+            AND membership.role = 'admin'
             AND membership.status = 'active'
             AND application.status = 'active'
         ) AS manager_memberships,
