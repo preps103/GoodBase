@@ -395,7 +395,25 @@ router.get("/postman/goodos-postman-collection.json", (req, res) => {
   res.type("json").sendFile(developerPublicFile("postman/goodos-postman-collection.json"));
 });
 
-router.get("/favicon.ico", (req, res) => res.status(204).end());
+function sendGoodBaseFavicon(res) {
+  res.set("Cache-Control", "public, max-age=300, must-revalidate");
+  res.type("image/svg+xml").sendFile(developerPublicFile("favicon.svg"));
+}
+
+router.get("/favicon.svg", (req, res) => {
+  sendGoodBaseFavicon(res);
+});
+
+router.get("/favicon.ico", (req, res) => {
+  sendGoodBaseFavicon(res);
+});
+
+router.get("/site.webmanifest", (req, res) => {
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res
+    .type("application/manifest+json")
+    .sendFile(developerPublicFile("site.webmanifest"));
+});
 
 
 /* GOODOS_SETTINGS_LIVE_V1_MOUNT */

@@ -1,0 +1,17 @@
+{
+  "name": "GoodBase",
+  "short_name": "GoodBase",
+  "description": "GoodBase backend and application platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    {
+      "src": "/favicon.svg?v=20260726",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">GoodBase favicon</title>
+  <defs>
+    <linearGradient id="surface" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e9ecff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#surface)"/>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="15.25" fill="none" stroke="#c9cee8" stroke-width="1.5"/>
+  <g fill="none" stroke="#0b1220" stroke-linecap="round" stroke-linejoin="round" stroke-width="4">
+    <ellipse cx="32" cy="17" rx="16" ry="6"/>
+    <path d="M16 17v11c0 3.3 7.2 6 16 6s16-2.7 16-6V17"/>
+    <path d="M16 28v11c0 3.3 7.2 6 16 6s16-2.7 16-6V28"/>
+    <path d="M16 39v8c0 3.3 7.2 6 16 6s16-2.7 16-6v-8"/>
+  </g>
+</svg>
