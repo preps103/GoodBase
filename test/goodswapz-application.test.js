@@ -8,11 +8,12 @@ const test = require("node:test");
 const root = path.join(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-test("GoodSwapz upgrades legacy listings without mixing application data", () => {
+test("GoodSwapz imports legacy listings without changing their ownership boundary", () => {
   const migration = read("migrations/20260726_goodswapz_marketplace_handoff.sql");
-  assert.match(migration, /ADD COLUMN IF NOT EXISTS organization_id/);
-  assert.match(migration, /seller_user_id = COALESCE\(seller_user_id, user_id\)/);
-  assert.match(migration, /ROUND\(price \* 100\)::bigint/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS goodswapz_marketplace_listings/);
+  assert.match(migration, /FROM goodswapz_listings AS legacy/);
+  assert.match(migration, /ROUND\(legacy\.price \* 100\)::bigint/);
+  assert.doesNotMatch(migration, /ALTER TABLE goodswapz_listings/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodswapz_handoffs/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodswapz_handoff_steps/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodswapz_escrow_webhook_events/);

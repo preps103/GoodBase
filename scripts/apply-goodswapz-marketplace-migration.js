@@ -13,7 +13,7 @@ async function schemaState(client) {
   const result = await client.query(
     `
       SELECT
-        to_regclass('public.goodswapz_listings') IS NOT NULL AS listings,
+        to_regclass('public.goodswapz_marketplace_listings') IS NOT NULL AS listings,
         to_regclass('public.goodswapz_offers') IS NOT NULL AS offers,
         to_regclass('public.goodswapz_identity_verifications') IS NOT NULL AS identity,
         to_regclass('public.goodswapz_escrow_transactions') IS NOT NULL AS transactions,
@@ -23,14 +23,14 @@ async function schemaState(client) {
           SELECT 1
           FROM information_schema.columns
           WHERE table_schema = 'public'
-            AND table_name = 'goodswapz_listings'
+            AND table_name = 'goodswapz_marketplace_listings'
             AND column_name = 'organization_id'
         ) AS organization_scope,
         EXISTS (
           SELECT 1
           FROM information_schema.columns
           WHERE table_schema = 'public'
-            AND table_name = 'goodswapz_listings'
+            AND table_name = 'goodswapz_marketplace_listings'
             AND column_name = 'price_cents'
         ) AS integer_money
     `
