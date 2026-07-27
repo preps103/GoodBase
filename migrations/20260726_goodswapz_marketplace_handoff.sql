@@ -71,8 +71,8 @@ SET
 -- without changing or weakening the original table's permissions.
 CREATE TABLE IF NOT EXISTS goodswapz_marketplace_listings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  seller_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  organization_id TEXT NOT NULL,
+  seller_user_id UUID NOT NULL,
   platform TEXT NOT NULL CHECK (platform IN ('youtube', 'instagram', 'tiktok', 'twitter', 'telegram')),
   title TEXT NOT NULL,
   handle TEXT NOT NULL,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS goodswapz_marketplace_listings (
   transfer_method TEXT NOT NULL,
   ownership_verification_code TEXT NOT NULL UNIQUE,
   ownership_verified_at TIMESTAMPTZ,
-  ownership_verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  ownership_verified_by UUID,
   review_note TEXT,
   audience_age_range JSONB NOT NULL DEFAULT '{}'::jsonb,
   audience_top_locations JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -195,9 +195,9 @@ WHERE status IN ('pending_review', 'active', 'reserved');
 
 CREATE TABLE IF NOT EXISTS goodswapz_offers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE CASCADE,
-  buyer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  buyer_user_id UUID NOT NULL,
   amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
   message TEXT,
   status TEXT NOT NULL DEFAULT 'pending'
@@ -219,8 +219,8 @@ ON goodswapz_offers(buyer_user_id, idempotency_key)
 WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS goodswapz_watchlist (
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
+  user_id UUID NOT NULL,
   listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, listing_id)
@@ -228,13 +228,13 @@ CREATE TABLE IF NOT EXISTS goodswapz_watchlist (
 
 CREATE TABLE IF NOT EXISTS goodswapz_identity_verifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
+  user_id UUID NOT NULL,
   id_type TEXT NOT NULL CHECK (id_type IN ('license', 'passport')),
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
   review_note TEXT,
-  reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by UUID,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -257,10 +257,10 @@ CREATE TABLE IF NOT EXISTS goodswapz_identity_documents (
 
 CREATE TABLE IF NOT EXISTS goodswapz_escrow_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE RESTRICT,
-  buyer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  seller_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  buyer_user_id UUID NOT NULL,
+  seller_user_id UUID NOT NULL,
   offer_id UUID REFERENCES goodswapz_offers(id) ON DELETE SET NULL,
   amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
   fee_cents BIGINT NOT NULL CHECK (fee_cents >= 0),
@@ -286,11 +286,11 @@ WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS goodswapz_handoffs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE RESTRICT,
   transaction_id UUID NOT NULL UNIQUE REFERENCES goodswapz_escrow_transactions(id) ON DELETE RESTRICT,
-  buyer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  seller_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  buyer_user_id UUID NOT NULL,
+  seller_user_id UUID NOT NULL,
   platform TEXT NOT NULL CHECK (platform IN ('youtube', 'instagram', 'tiktok', 'twitter', 'telegram')),
   status TEXT NOT NULL DEFAULT 'awaiting_funding'
     CHECK (status IN ('awaiting_funding', 'ready', 'in_progress', 'buyer_review', 'completed', 'disputed', 'cancelled')),
@@ -334,7 +334,7 @@ ON goodswapz_handoff_steps(handoff_id, sequence_number);
 CREATE TABLE IF NOT EXISTS goodswapz_handoff_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   handoff_id UUID NOT NULL REFERENCES goodswapz_handoffs(id) ON DELETE CASCADE,
-  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  actor_user_id UUID,
   event_type TEXT NOT NULL,
   from_status TEXT,
   to_status TEXT,

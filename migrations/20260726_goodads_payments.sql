@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS goodads_payment_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   provider TEXT NOT NULL CHECK (provider IN ('stripe', 'paypal', 'square')),
   environment TEXT NOT NULL DEFAULT 'sandbox' CHECK (environment IN ('sandbox', 'live')),
   credential_ciphertext TEXT NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS goodads_payment_connections (
   status TEXT NOT NULL DEFAULT 'pending_webhook'
     CHECK (status IN ('pending_webhook', 'connected', 'error', 'disconnected')),
   capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
-  connected_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  connected_by UUID NOT NULL,
   connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_verified_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -24,18 +24,18 @@ CREATE INDEX IF NOT EXISTS idx_goodads_payment_connections_tenant
   ON goodads_payment_connections (organization_id, status, provider);
 
 CREATE TABLE IF NOT EXISTS goodads_payment_preferences (
-  organization_id TEXT PRIMARY KEY REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT PRIMARY KEY,
   default_provider TEXT CHECK (default_provider IS NULL OR default_provider IN ('stripe', 'paypal', 'square')),
   enabled_providers TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]
     CHECK (enabled_providers <@ ARRAY['stripe', 'paypal', 'square']::TEXT[]),
   currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency ~ '^[A-Z]{3}$'),
-  updated_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  updated_by UUID NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS goodads_payment_offers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   name TEXT NOT NULL,
   public_slug TEXT NOT NULL UNIQUE,
   description TEXT NOT NULL DEFAULT '',
@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS goodads_payment_offers (
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'archived')),
   success_message TEXT NOT NULL DEFAULT 'Payment received. Thank you.',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  updated_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_by UUID NOT NULL,
+  updated_by UUID NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   archived_at TIMESTAMPTZ
@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_goodads_payment_offers_tenant
 
 CREATE TABLE IF NOT EXISTS goodads_payment_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   offer_id UUID NOT NULL REFERENCES goodads_payment_offers(id) ON DELETE RESTRICT,
   provider TEXT NOT NULL CHECK (provider IN ('stripe', 'paypal', 'square')),
   idempotency_key TEXT NOT NULL,
@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_goodads_payment_sessions_offer
 
 CREATE TABLE IF NOT EXISTS goodads_payment_webhook_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   connection_id UUID NOT NULL REFERENCES goodads_payment_connections(id) ON DELETE CASCADE,
   provider TEXT NOT NULL CHECK (provider IN ('stripe', 'paypal', 'square')),
   provider_event_id TEXT NOT NULL,
