@@ -65,7 +65,11 @@ SET
   environment_id = EXCLUDED.environment_id,
   updated_at = NOW();
 
-CREATE TABLE IF NOT EXISTS goodswapz_listings (
+-- Keep the original listing-only table intact. It was created by an earlier
+-- deployment role, so the application deployment role cannot safely ALTER it.
+-- The protected marketplace owns a dedicated table and imports legacy rows
+-- without changing or weakening the original table's permissions.
+CREATE TABLE IF NOT EXISTS goodswapz_marketplace_listings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
   seller_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -100,154 +104,99 @@ CREATE TABLE IF NOT EXISTS goodswapz_listings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Upgrade the listing-only GoodSwapz schema already present in production.
--- Legacy columns remain readable during the rollout, while all new writes use
--- the organization-scoped integer-money contract below.
-ALTER TABLE goodswapz_listings
-  ADD COLUMN IF NOT EXISTS organization_id TEXT REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  ADD COLUMN IF NOT EXISTS seller_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,
-  ADD COLUMN IF NOT EXISTS price_cents BIGINT,
-  ADD COLUMN IF NOT EXISTS monthly_revenue_cents BIGINT DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS escrow_accepted BOOLEAN DEFAULT TRUE,
-  ADD COLUMN IF NOT EXISTS audience_report BOOLEAN DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS ownership_verified_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS ownership_verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS review_note TEXT,
-  ADD COLUMN IF NOT EXISTS audience_age_range JSONB DEFAULT '{}'::jsonb,
-  ADD COLUMN IF NOT EXISTS audience_top_locations JSONB DEFAULT '{}'::jsonb,
-  ADD COLUMN IF NOT EXISTS metadata_json JSONB DEFAULT '{}'::jsonb;
-
-ALTER TABLE goodswapz_listings
-  DROP CONSTRAINT IF EXISTS goodswapz_listings_platform_check,
-  DROP CONSTRAINT IF EXISTS goodswapz_listings_status_check,
-  DROP CONSTRAINT IF EXISTS goodswapz_listings_subscribers_check,
-  DROP CONSTRAINT IF EXISTS goodswapz_listings_price_cents_check,
-  DROP CONSTRAINT IF EXISTS goodswapz_listings_monthly_revenue_cents_check;
-
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'user_id'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET seller_user_id = COALESCE(seller_user_id, user_id)';
-    EXECUTE 'ALTER TABLE goodswapz_listings ALTER COLUMN user_id DROP NOT NULL';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'price'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET price_cents = COALESCE(price_cents, ROUND(price * 100)::bigint)';
-    EXECUTE 'ALTER TABLE goodswapz_listings ALTER COLUMN price DROP NOT NULL';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'monthly_revenue'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET monthly_revenue_cents = ROUND(monthly_revenue * 100)::bigint';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'audience_report_available'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET audience_report = audience_report_available';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'audience_age_json'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET audience_age_range = audience_age_json';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'audience_locations_json'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET audience_top_locations = audience_locations_json';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'reviewed_at'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET ownership_verified_at = COALESCE(ownership_verified_at, reviewed_at) WHERE status = ''active''';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'goodswapz_listings' AND column_name = 'reviewed_by'
-  ) THEN
-    EXECUTE 'UPDATE goodswapz_listings SET ownership_verified_by = COALESCE(ownership_verified_by, reviewed_by) WHERE status = ''active''';
+  IF to_regclass('public.goodswapz_listings') IS NOT NULL THEN
+    INSERT INTO goodswapz_marketplace_listings (
+      id,
+      organization_id,
+      seller_user_id,
+      platform,
+      title,
+      handle,
+      account_url,
+      subscribers,
+      price_cents,
+      monthly_revenue_cents,
+      description,
+      status,
+      category,
+      engagement_rate,
+      image_url,
+      country,
+      original_email_included,
+      audience_male_percent,
+      escrow_accepted,
+      instant_delivery,
+      audience_report,
+      transfer_method,
+      ownership_verification_code,
+      ownership_verified_at,
+      ownership_verified_by,
+      audience_age_range,
+      audience_top_locations,
+      metadata_json,
+      created_at,
+      updated_at
+    )
+    SELECT
+      legacy.id,
+      'org_goodos',
+      legacy.user_id,
+      CASE legacy.platform
+        WHEN 'YouTube' THEN 'youtube'
+        WHEN 'Instagram' THEN 'instagram'
+        WHEN 'TikTok' THEN 'tiktok'
+        WHEN 'Twitter/X' THEN 'twitter'
+        WHEN 'Telegram' THEN 'telegram'
+        ELSE LOWER(legacy.platform)
+      END,
+      legacy.title,
+      legacy.handle,
+      legacy.account_url,
+      legacy.subscribers,
+      ROUND(legacy.price * 100)::bigint,
+      ROUND(legacy.monthly_revenue * 100)::bigint,
+      legacy.description,
+      legacy.status,
+      legacy.category,
+      legacy.engagement_rate,
+      legacy.image_url,
+      legacy.country,
+      legacy.original_email_included,
+      legacy.audience_male_percent,
+      TRUE,
+      legacy.instant_delivery,
+      legacy.audience_report_available,
+      legacy.transfer_method,
+      legacy.ownership_verification_code,
+      CASE WHEN legacy.status = 'active' THEN legacy.reviewed_at ELSE NULL END,
+      CASE WHEN legacy.status = 'active' THEN legacy.reviewed_by ELSE NULL END,
+      legacy.audience_age_json,
+      legacy.audience_locations_json,
+      jsonb_build_object('migratedFrom', 'goodswapz_listings'),
+      legacy.created_at,
+      legacy.updated_at
+    FROM goodswapz_listings AS legacy
+    ON CONFLICT (id) DO NOTHING;
   END IF;
 END
 $$;
 
-UPDATE goodswapz_listings
-SET
-  organization_id = COALESCE(organization_id, 'org_goodos'),
-  platform = CASE platform
-    WHEN 'YouTube' THEN 'youtube'
-    WHEN 'Instagram' THEN 'instagram'
-    WHEN 'TikTok' THEN 'tiktok'
-    WHEN 'Twitter/X' THEN 'twitter'
-    WHEN 'Telegram' THEN 'telegram'
-    ELSE LOWER(platform)
-  END,
-  monthly_revenue_cents = COALESCE(monthly_revenue_cents, 0),
-  escrow_accepted = COALESCE(escrow_accepted, TRUE),
-  audience_report = COALESCE(audience_report, FALSE),
-  audience_age_range = COALESCE(audience_age_range, '{}'::jsonb),
-  audience_top_locations = COALESCE(audience_top_locations, '{}'::jsonb),
-  metadata_json = COALESCE(metadata_json, '{}'::jsonb);
+CREATE INDEX IF NOT EXISTS idx_goodswapz_marketplace_listings_marketplace
+ON goodswapz_marketplace_listings(organization_id, status, created_at DESC);
 
-ALTER TABLE goodswapz_listings
-  ALTER COLUMN organization_id SET DEFAULT 'org_goodos',
-  ALTER COLUMN organization_id SET NOT NULL,
-  ALTER COLUMN seller_user_id SET NOT NULL,
-  ALTER COLUMN price_cents SET NOT NULL,
-  ALTER COLUMN monthly_revenue_cents SET DEFAULT 0,
-  ALTER COLUMN monthly_revenue_cents SET NOT NULL,
-  ALTER COLUMN escrow_accepted SET DEFAULT TRUE,
-  ALTER COLUMN escrow_accepted SET NOT NULL,
-  ALTER COLUMN audience_report SET DEFAULT FALSE,
-  ALTER COLUMN audience_report SET NOT NULL,
-  ALTER COLUMN audience_age_range SET DEFAULT '{}'::jsonb,
-  ALTER COLUMN audience_age_range SET NOT NULL,
-  ALTER COLUMN audience_top_locations SET DEFAULT '{}'::jsonb,
-  ALTER COLUMN audience_top_locations SET NOT NULL,
-  ALTER COLUMN metadata_json SET DEFAULT '{}'::jsonb,
-  ALTER COLUMN metadata_json SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_goodswapz_marketplace_listings_seller
+ON goodswapz_marketplace_listings(seller_user_id, created_at DESC);
 
-ALTER TABLE goodswapz_listings
-  ADD CONSTRAINT goodswapz_listings_platform_check
-    CHECK (platform IN ('youtube', 'instagram', 'tiktok', 'twitter', 'telegram')),
-  ADD CONSTRAINT goodswapz_listings_status_check
-    CHECK (status IN ('draft', 'pending_review', 'active', 'reserved', 'rejected', 'sold', 'archived')),
-  ADD CONSTRAINT goodswapz_listings_subscribers_check
-    CHECK (subscribers >= 0),
-  ADD CONSTRAINT goodswapz_listings_price_cents_check
-    CHECK (price_cents > 0),
-  ADD CONSTRAINT goodswapz_listings_monthly_revenue_cents_check
-    CHECK (monthly_revenue_cents >= 0);
-
-CREATE INDEX IF NOT EXISTS idx_goodswapz_listings_marketplace
-ON goodswapz_listings(organization_id, status, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_goodswapz_listings_seller
-ON goodswapz_listings(seller_user_id, created_at DESC);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_goodswapz_listings_active_handle
-ON goodswapz_listings(organization_id, platform, LOWER(handle))
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goodswapz_marketplace_listings_active_handle
+ON goodswapz_marketplace_listings(organization_id, platform, LOWER(handle))
 WHERE status IN ('pending_review', 'active', 'reserved');
 
 CREATE TABLE IF NOT EXISTS goodswapz_offers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  listing_id UUID NOT NULL REFERENCES goodswapz_listings(id) ON DELETE CASCADE,
+  listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE CASCADE,
   buyer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
   message TEXT,
@@ -272,7 +221,7 @@ WHERE idempotency_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS goodswapz_watchlist (
   organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  listing_id UUID NOT NULL REFERENCES goodswapz_listings(id) ON DELETE CASCADE,
+  listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, listing_id)
 );
@@ -309,7 +258,7 @@ CREATE TABLE IF NOT EXISTS goodswapz_identity_documents (
 CREATE TABLE IF NOT EXISTS goodswapz_escrow_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  listing_id UUID NOT NULL REFERENCES goodswapz_listings(id) ON DELETE RESTRICT,
+  listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE RESTRICT,
   buyer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   seller_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   offer_id UUID REFERENCES goodswapz_offers(id) ON DELETE SET NULL,
@@ -338,7 +287,7 @@ WHERE idempotency_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS goodswapz_handoffs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  listing_id UUID NOT NULL REFERENCES goodswapz_listings(id) ON DELETE RESTRICT,
+  listing_id UUID NOT NULL REFERENCES goodswapz_marketplace_listings(id) ON DELETE RESTRICT,
   transaction_id UUID NOT NULL UNIQUE REFERENCES goodswapz_escrow_transactions(id) ON DELETE RESTRICT,
   buyer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   seller_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,

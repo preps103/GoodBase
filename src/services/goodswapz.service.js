@@ -517,7 +517,7 @@ async function notifyUser({
 async function health() {
   const result = await query(`
     SELECT
-      to_regclass('public.goodswapz_listings') IS NOT NULL AS listings_ready,
+      to_regclass('public.goodswapz_marketplace_listings') IS NOT NULL AS listings_ready,
       to_regclass('public.goodswapz_escrow_transactions') IS NOT NULL AS transactions_ready,
       to_regclass('public.goodswapz_handoffs') IS NOT NULL AS handoffs_ready,
       to_regclass('public.goodswapz_handoff_steps') IS NOT NULL AS steps_ready
@@ -540,7 +540,7 @@ async function listListings({ context, userId }) {
   const result = await query(
     `
       SELECT ${listingProjection("listing")}
-      FROM goodswapz_listings AS listing
+      FROM goodswapz_marketplace_listings AS listing
       JOIN users AS seller ON seller.id = listing.seller_user_id
       WHERE listing.organization_id = $1
         AND (
@@ -581,7 +581,7 @@ async function createListing({ context, userId, payload, ipAddress }) {
   const verificationCode = `GSW-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
   const result = await query(
     `
-      INSERT INTO goodswapz_listings (
+      INSERT INTO goodswapz_marketplace_listings (
         organization_id, seller_user_id, platform, title, handle, account_url,
         subscribers, price_cents, monthly_revenue_cents, description, status,
         category, engagement_rate, image_url, country, original_email_included,
@@ -643,7 +643,7 @@ async function getListingForParticipant({ listingId, context, userId, includePen
   const result = await query(
     `
       SELECT ${listingProjection("listing")}
-      FROM goodswapz_listings AS listing
+      FROM goodswapz_marketplace_listings AS listing
       JOIN users AS seller ON seller.id = listing.seller_user_id
       WHERE listing.id = $1::uuid
         AND listing.organization_id = $2
@@ -682,7 +682,7 @@ async function reviewListing({ context, reviewerUserId, listingId, decision, not
     const sellerResult = await query(
       `
         SELECT seller_user_id AS "sellerUserId"
-        FROM goodswapz_listings
+        FROM goodswapz_marketplace_listings
         WHERE id = $1::uuid
           AND organization_id = $2
           AND status = 'pending_review'
@@ -701,7 +701,7 @@ async function reviewListing({ context, reviewerUserId, listingId, decision, not
   }
   const result = await query(
     `
-      UPDATE goodswapz_listings
+      UPDATE goodswapz_marketplace_listings
       SET
         status = $1,
         ownership_verified_at = CASE WHEN $1 = 'active' THEN NOW() ELSE NULL END,
@@ -747,7 +747,7 @@ async function toggleWatchlist({ context, userId, listingId }) {
   const id = validUuid(listingId, "Listing identifier");
   const result = await withTransaction(async (client) => {
     const listing = await client.query(
-      "SELECT id FROM goodswapz_listings WHERE id = $1::uuid AND organization_id = $2 AND status = 'active' LIMIT 1",
+      "SELECT id FROM goodswapz_marketplace_listings WHERE id = $1::uuid AND organization_id = $2 AND status = 'active' LIMIT 1",
       [id, context.organizationId]
     );
     if (!listing.rows[0]) throw serviceError("Active listing not found.", 404, "LISTING_NOT_FOUND");
@@ -835,7 +835,7 @@ async function createOffer({ context, userId, listingId, payload, idempotencyKey
     const listingResult = await client.query(
       `
         SELECT id, seller_user_id AS "sellerUserId", price_cents AS "priceCents", title
-        FROM goodswapz_listings
+        FROM goodswapz_marketplace_listings
         WHERE id = $1::uuid AND organization_id = $2 AND status = 'active'
         FOR UPDATE
       `,
@@ -901,7 +901,7 @@ async function respondToOffer({ context, userId, offerId, decision, ipAddress })
     `
       UPDATE goodswapz_offers AS offer
       SET status = $1, responded_at = NOW(), updated_at = NOW()
-      FROM goodswapz_listings AS listing
+      FROM goodswapz_marketplace_listings AS listing
       WHERE offer.id = $2::uuid
         AND offer.listing_id = listing.id
         AND offer.organization_id = $3
@@ -1014,7 +1014,7 @@ async function initiateTransaction({
     const listingResult = await client.query(
       `
         SELECT id, seller_user_id AS "sellerUserId", platform, title, price_cents AS "priceCents", status
-        FROM goodswapz_listings
+        FROM goodswapz_marketplace_listings
         WHERE id = $1::uuid AND organization_id = $2
         FOR UPDATE
       `,
@@ -1289,7 +1289,7 @@ async function processEscrowWebhook({ payload, signature, timestamp }) {
         [handoff.id]
       );
       await client.query(
-        "UPDATE goodswapz_listings SET status = 'reserved', updated_at = NOW() WHERE id = $1::uuid",
+        "UPDATE goodswapz_marketplace_listings SET status = 'reserved', updated_at = NOW() WHERE id = $1::uuid",
         [transaction.listingId]
       );
     } else if (["failed", "cancelled"].includes(nextStatus)) {
@@ -1423,7 +1423,7 @@ async function loadHandoff({ context, userId, handoffId, client = database }) {
         buyer.display_name AS "buyerName",
         seller.display_name AS "sellerName"
       FROM goodswapz_handoffs AS handoff
-      JOIN goodswapz_listings AS listing ON listing.id = handoff.listing_id
+      JOIN goodswapz_marketplace_listings AS listing ON listing.id = handoff.listing_id
       JOIN goodswapz_escrow_transactions AS transaction ON transaction.id = handoff.transaction_id
       JOIN users AS buyer ON buyer.id = handoff.buyer_user_id
       JOIN users AS seller ON seller.id = handoff.seller_user_id
@@ -1690,7 +1690,7 @@ async function confirmReceipt({ context, userId, handoffId, ipAddress }) {
       [handoff.transactionId]
     );
     await client.query(
-      "UPDATE goodswapz_listings SET status = 'sold', updated_at = NOW() WHERE id = $1::uuid",
+      "UPDATE goodswapz_marketplace_listings SET status = 'sold', updated_at = NOW() WHERE id = $1::uuid",
       [handoff.listingId]
     );
     await client.query(
