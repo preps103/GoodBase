@@ -9,6 +9,24 @@ const APP_URL = "https://custom.goodos.app";
 const DEFAULT_ROOM_ID = "00000000-0000-4000-8000-000000000001";
 const MANAGEMENT_ROLES = new Set(["owner", "manager"]);
 
+async function health() {
+  const result = await database.query(`
+    SELECT
+      TO_REGCLASS('public.goodcustom_staff') IS NOT NULL AS "staffReady",
+      TO_REGCLASS('public.goodcustom_chat_rooms') IS NOT NULL AS "roomsReady",
+      TO_REGCLASS('public.goodcustom_chat_room_members') IS NOT NULL AS "membersReady",
+      TO_REGCLASS('public.goodcustom_chat_messages') IS NOT NULL AS "messagesReady"
+  `);
+  const tables = result.rows[0] || {};
+  const schemaReady = Object.values(tables).every(Boolean);
+  return {
+    service: "GoodCustom Chat",
+    status: schemaReady ? "ok" : "setup_required",
+    schemaReady,
+    tables,
+  };
+}
+
 function serviceError(message, statusCode = 400, code = "GOODCUSTOM_CHAT_REQUEST_FAILED") {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -878,6 +896,7 @@ module.exports = {
   deleteMessage,
   editMessage,
   getMessages,
+  health,
   isPlatformManager,
   markRead,
   requireStaff,
