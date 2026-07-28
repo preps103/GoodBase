@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260727-2">
   <link rel="manifest" href="/site.webmanifest?v=20260727-2">
   <link rel="canonical" href="https://base.goodos.app/auth/ui">
-  <link rel="stylesheet" href="/backend-login.css?v=20260724">
+  <link rel="stylesheet" href="/backend-login.css?v=20260728">
   <style>
     :root{--goodbase-login-accent:#6555f5;--goodbase-login-brand-bg:#080b12}
     .base-brand{box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;justify-content:space-between;padding:64px;background:radial-gradient(circle at 76% 18%,rgba(101,85,245,.3),transparent 35%),radial-gradient(circle at 28% 100%,rgba(6,182,212,.18),transparent 38%),#080b12}
@@ -71,11 +71,17 @@
           </label>
           <label data-goodbase-login-field id="password-field">
             <span><span id="password-label">Password</span><button data-goodbase-login-recovery id="forgot" type="button">Forgot your password?</button></span>
-            <input id="password" type="password" autocomplete="current-password" maxlength="128" required placeholder="Enter your password">
+            <span data-goodbase-login-password>
+              <input id="password" type="password" autocomplete="current-password" maxlength="128" required placeholder="Enter your password">
+              <button data-goodbase-login-password-toggle id="password-toggle" type="button" aria-label="Show password" aria-pressed="false">Show</button>
+            </span>
           </label>
           <label data-goodbase-login-field id="confirm-field" class="hidden">
             Confirm new password
-            <input id="confirm-password" type="password" autocomplete="new-password" maxlength="128">
+            <span data-goodbase-login-password>
+              <input id="confirm-password" type="password" autocomplete="new-password" maxlength="128">
+              <button data-goodbase-login-password-toggle id="confirm-password-toggle" type="button" aria-label="Show confirmation password" aria-pressed="false">Show</button>
+            </span>
           </label>
           <button data-goodbase-login-submit id="submit" type="submit">Sign in securely →</button>
         </form>
@@ -85,6 +91,6 @@
       </div>
     </section>
   </main>
-  <script src="/goodbase-auth.js?v=20260724" defer></script>
+  <script src="/goodbase-auth.js?v=20260728" defer></script>
 </body>
 </html>

@@ -122,6 +122,32 @@ button { appearance: none; }
   font-weight: 500;
   line-height: 20px;
 }
+[data-goodbase-login-password] {
+  position: relative;
+  display: block;
+}
+[data-goodbase-login-password] input {
+  padding-right: 72px;
+}
+[data-goodbase-login-password-toggle] {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  min-width: 44px;
+  min-height: 36px;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--goodbase-login-muted);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+[data-goodbase-login-password-toggle]:hover {
+  background: color-mix(in srgb, var(--goodbase-login-accent) 8%, transparent);
+  color: var(--goodbase-login-accent);
+}
 [data-goodbase-login-divider] {
   display: flex;
   align-items: center;

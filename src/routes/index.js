@@ -244,7 +244,7 @@ router.get("/backend-topbar.css", (req, res) => {
 });
 
 router.get("/backend-login.css", (req, res) => {
-  res.set("Cache-Control", "public, max-age=300");
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Cross-Origin-Resource-Policy", "cross-origin");
   res.type("text/css");
   res.sendFile(path.join(__dirname, "../public/backend-login.css"));

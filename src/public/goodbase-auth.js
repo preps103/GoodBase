@@ -10,7 +10,9 @@ const nodes = {
   confirmField: document.querySelector("#confirm-field"),
   email: document.querySelector("#email"),
   password: document.querySelector("#password"),
+  passwordToggle: document.querySelector("#password-toggle"),
   confirmPassword: document.querySelector("#confirm-password"),
+  confirmPasswordToggle: document.querySelector("#confirm-password-toggle"),
   nameFields: document.querySelector("#name-fields"),
   firstName: document.querySelector("#first-name"),
   lastName: document.querySelector("#last-name"),
@@ -26,6 +28,30 @@ const nodes = {
   notice: document.querySelector("#notice"),
   passwordLabel: document.querySelector("#password-label")
 };
+
+function setPasswordVisibility(input, button, visible, label = "password") {
+  input.type = visible ? "text" : "password";
+  button.textContent = visible ? "Hide" : "Show";
+  button.setAttribute("aria-label", `${visible ? "Hide" : "Show"} ${label}`);
+  button.setAttribute("aria-pressed", String(visible));
+}
+
+nodes.passwordToggle.addEventListener("click", () => {
+  setPasswordVisibility(
+    nodes.password,
+    nodes.passwordToggle,
+    nodes.password.type === "password"
+  );
+});
+
+nodes.confirmPasswordToggle.addEventListener("click", () => {
+  setPasswordVisibility(
+    nodes.confirmPassword,
+    nodes.confirmPasswordToggle,
+    nodes.confirmPassword.type === "password",
+    "confirmation password"
+  );
+});
 
 const query = new URLSearchParams(location.search);
 const resetToken = query.get("reset_token") || "";
