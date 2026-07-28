@@ -13,6 +13,14 @@ const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"
 const CUSTOMER_SEND_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const NOTIFICATION_CATEGORIES = new Set(["reservation", "payment", "trip", "support", "general"]);
 const NOTIFICATION_CHANNELS = new Set(["in_app", "email"]);
+const CUSTOMER_SUPPORT_CATEGORIES = new Set(["reservation", "roadside", "billing", "documents", "other"]);
+const CUSTOMER_CHECKIN_BOOKING_STATUSES = new Set(["confirmed", "assigned"]);
+const REQUIRED_CHECKIN_ACKNOWLEDGEMENTS = [
+  "contactConfirmed",
+  "rentalTermsAccepted",
+  "conditionPolicyAcknowledged",
+  "arrivalInstructionsReviewed",
+];
 
 function clean(value, max = 4000) {
   return String(value ?? "").trim().slice(0, max);
@@ -127,6 +135,72 @@ function customerBookingPayload(row) {
     paidAmount: Number(row.paid_amount),
     createdAt: row.created_at
   };
+}
+
+function customerCheckinPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    customerId: row.customer_id,
+    status: row.status,
+    checklist: row.checklist_json || {},
+    submittedAt: row.submitted_at,
+    reviewedAt: row.reviewed_at,
+    reviewNote: row.review_note || null,
+    updatedAt: row.updated_at,
+  };
+}
+
+function customerSupportTicketPayload(row, messages = []) {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    bookingId: row.booking_id || null,
+    ticketNumber: row.ticket_number,
+    subject: row.subject,
+    category: row.category,
+    priority: row.priority,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    messages: messages.map(message => ({
+      id: message.id,
+      senderType: message.sender_type,
+      body: message.body,
+      createdAt: message.created_at,
+    })),
+  };
+}
+
+async function customerRecordForIdentity(client, request) {
+  const email = clean(request.user.email, 320).toLowerCase();
+  const result = await client.query(
+    `SELECT *
+       FROM fleet_customers
+      WHERE lower(email)=lower($1) AND archived_at IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 1`,
+    [email],
+  );
+  return result.rows[0] || null;
+}
+
+async function auditCustomerAction(client, request, organizationId, action, entityType, entityId, after) {
+  await client.query(
+    `INSERT INTO fleet_audit_events
+      (organization_id,actor_id,action,entity_type,entity_id,after_json,request_id,ip_address)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)`,
+    [
+      organizationId,
+      request.user.id,
+      action,
+      entityType,
+      entityId,
+      JSON.stringify(after || {}),
+      request.id || request.get("X-Request-ID") || null,
+      request.ip || null,
+    ],
+  );
 }
 
 async function audit(client, request, action, entityType, entityId, after) {
@@ -541,6 +615,155 @@ router.post("/customer-notifications", employeeScope, requireCustomerSender, asy
   }
 });
 
+router.get("/checkins", employeeScope, requireCustomerSender, async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT checkin.*,
+              booking.reservation_number,
+              customer.full_name AS customer_name,
+              customer.email AS customer_email
+         FROM fleet_customer_checkins checkin
+         JOIN fleet_bookings booking
+           ON booking.organization_id=checkin.organization_id AND booking.id=checkin.booking_id
+         JOIN fleet_customers customer
+           ON customer.organization_id=checkin.organization_id AND customer.id=checkin.customer_id
+        WHERE checkin.organization_id=$1
+        ORDER BY checkin.updated_at DESC
+        LIMIT 200`,
+      [organization(request)],
+    );
+    response.json({
+      success: true,
+      data: result.rows.map(row => ({
+        ...customerCheckinPayload(row),
+        reservationNumber: row.reservation_number,
+        customerName: row.customer_name,
+        customerEmail: row.customer_email,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/checkins/:checkinId", employeeScope, requireCustomerSender, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const status = clean(request.body?.status, 40);
+    const reviewNote = clean(request.body?.reviewNote, 2000) || null;
+    if (!["approved", "rejected"].includes(status)) {
+      return fail(response, 400, "INVALID_CHECKIN_REVIEW", "Choose approved or rejected.");
+    }
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE fleet_customer_checkins
+          SET status=$3,review_note=$4,reviewed_by=$5,reviewed_at=NOW(),updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2
+        RETURNING *`,
+      [organization(request), request.params.checkinId, status, reviewNote, request.user.id],
+    );
+    if (!result.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CHECKIN_NOT_FOUND", "Digital check-in not found.");
+    }
+    await audit(client, request, `customer.checkin.${status}`, "customer_checkin", result.rows[0].id, {
+      bookingId: result.rows[0].booking_id,
+      reviewNote,
+    });
+    await client.query("COMMIT");
+    response.json({ success: true, data: customerCheckinPayload(result.rows[0]) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/support-tickets", employeeScope, requireCustomerSender, async (request, response, next) => {
+  try {
+    const tickets = await query(
+      `SELECT ticket.*, customer.full_name AS customer_name, customer.email AS customer_email
+         FROM fleet_customer_support_tickets ticket
+         JOIN fleet_customers customer
+           ON customer.organization_id=ticket.organization_id AND customer.id=ticket.customer_id
+        WHERE ticket.organization_id=$1
+        ORDER BY ticket.updated_at DESC
+        LIMIT 200`,
+      [organization(request)],
+    );
+    const messages = tickets.rowCount
+      ? await query(
+        `SELECT *
+           FROM fleet_customer_support_messages
+          WHERE organization_id=$1 AND ticket_id=ANY($2::uuid[])
+          ORDER BY created_at`,
+        [organization(request), tickets.rows.map(ticket => ticket.id)],
+      )
+      : { rows: [] };
+    response.json({
+      success: true,
+      data: tickets.rows.map(ticket => ({
+        ...customerSupportTicketPayload(
+          ticket,
+          messages.rows.filter(message => message.ticket_id === ticket.id),
+        ),
+        customerName: ticket.customer_name,
+        customerEmail: ticket.customer_email,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/support-tickets/:ticketId/messages", employeeScope, requireCustomerSender, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const body = clean(request.body?.body, 4000);
+    const nextStatus = clean(request.body?.status || "in_progress", 40);
+    if (!body) return fail(response, 400, "SUPPORT_MESSAGE_REQUIRED", "Enter a support response.");
+    if (!["open", "in_progress", "waiting_on_customer", "resolved", "closed"].includes(nextStatus)) {
+      return fail(response, 400, "INVALID_SUPPORT_STATUS", "Choose a valid support status.");
+    }
+    await client.query("BEGIN");
+    const ticket = await client.query(
+      `UPDATE fleet_customer_support_tickets
+          SET status=$3,
+              assigned_to=COALESCE(assigned_to,$4),
+              resolved_at=CASE WHEN $3 IN ('resolved','closed') THEN NOW() ELSE NULL END,
+              updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2
+        RETURNING *`,
+      [organization(request), request.params.ticketId, nextStatus, request.user.id],
+    );
+    if (!ticket.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "SUPPORT_TICKET_NOT_FOUND", "Support ticket not found.");
+    }
+    const message = await client.query(
+      `INSERT INTO fleet_customer_support_messages
+        (organization_id,ticket_id,sender_type,sender_user_id,body)
+       VALUES ($1,$2,'employee',$3,$4)
+       RETURNING *`,
+      [organization(request), ticket.rows[0].id, request.user.id, body],
+    );
+    await audit(client, request, "customer.support.responded", "customer_support_ticket", ticket.rows[0].id, {
+      status: nextStatus,
+    });
+    await client.query("COMMIT");
+    response.status(201).json({
+      success: true,
+      data: customerSupportTicketPayload(ticket.rows[0], message.rows),
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.get("/customer-inbox", async (request, response, next) => {
   try {
     const email = clean(request.user.email, 320).toLowerCase();
@@ -569,6 +792,244 @@ router.get("/customer-inbox", async (request, response, next) => {
     response.json({ success: true, data: result.rows.map(notificationPayload) });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/customer-checkins", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const customer = await customerRecordForIdentity(client, request);
+    if (!customer) return response.json({ success: true, data: [] });
+    const result = await client.query(
+      `SELECT checkin.*
+         FROM fleet_customer_checkins checkin
+        WHERE checkin.organization_id=$1 AND checkin.customer_id=$2
+        ORDER BY checkin.updated_at DESC`,
+      [customer.organization_id, customer.id],
+    );
+    response.json({ success: true, data: result.rows.map(customerCheckinPayload) });
+  } catch (error) {
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/customer-checkins", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const bookingId = clean(request.body?.bookingId, 80);
+    const checklist = request.body?.checklist && typeof request.body.checklist === "object"
+      ? request.body.checklist
+      : {};
+    if (!bookingId) return fail(response, 400, "BOOKING_REQUIRED", "Choose a reservation to check in.");
+    if (!REQUIRED_CHECKIN_ACKNOWLEDGEMENTS.every(key => checklist[key] === true)) {
+      return fail(response, 400, "CHECKIN_ACKNOWLEDGEMENTS_REQUIRED", "Complete every check-in acknowledgement.");
+    }
+    const customer = await customerRecordForIdentity(client, request);
+    if (!customer) return fail(response, 404, "CUSTOMER_ACCOUNT_NOT_FOUND", "A GoodFleet customer record is required.");
+    if (customer.license_verification_status !== "verified") {
+      return fail(response, 409, "CUSTOMER_VERIFICATION_REQUIRED", "Driver license verification must be completed before digital check-in.");
+    }
+    const booking = await client.query(
+      `SELECT *
+         FROM fleet_bookings
+        WHERE organization_id=$1 AND id=$2 AND customer_id=$3 AND archived_at IS NULL
+        LIMIT 1`,
+      [customer.organization_id, bookingId, customer.id],
+    );
+    if (!booking.rowCount) return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    if (!CUSTOMER_CHECKIN_BOOKING_STATUSES.has(booking.rows[0].status)) {
+      return fail(response, 409, "BOOKING_NOT_READY_FOR_CHECKIN", "This reservation is not ready for digital check-in.");
+    }
+    if (booking.rows[0].payment_status !== "paid") {
+      return fail(response, 409, "PAYMENT_REQUIRED", "The reservation balance must be paid before digital check-in.");
+    }
+    await client.query("BEGIN");
+    const saved = await client.query(
+      `INSERT INTO fleet_customer_checkins
+        (organization_id,booking_id,customer_id,status,checklist_json,submitted_by,submitted_at)
+       VALUES ($1,$2,$3,'submitted',$4::jsonb,$5,NOW())
+       ON CONFLICT (organization_id,booking_id)
+       DO UPDATE SET
+         status='submitted',
+         checklist_json=EXCLUDED.checklist_json,
+         submitted_by=EXCLUDED.submitted_by,
+         submitted_at=NOW(),
+         reviewed_by=NULL,
+         reviewed_at=NULL,
+         review_note=NULL,
+         updated_at=NOW()
+       RETURNING *`,
+      [
+        customer.organization_id,
+        bookingId,
+        customer.id,
+        JSON.stringify(checklist),
+        request.user.id,
+      ],
+    );
+    await auditCustomerAction(
+      client,
+      request,
+      customer.organization_id,
+      "customer.checkin.submitted",
+      "customer_checkin",
+      saved.rows[0].id,
+      { bookingId, customerId: customer.id },
+    );
+    await client.query("COMMIT");
+    response.status(201).json({ success: true, data: customerCheckinPayload(saved.rows[0]) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/customer-support-tickets", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const customer = await customerRecordForIdentity(client, request);
+    if (!customer) return response.json({ success: true, data: [] });
+    const tickets = await client.query(
+      `SELECT *
+         FROM fleet_customer_support_tickets
+        WHERE organization_id=$1 AND customer_id=$2
+        ORDER BY updated_at DESC`,
+      [customer.organization_id, customer.id],
+    );
+    const messages = tickets.rowCount
+      ? await client.query(
+        `SELECT *
+           FROM fleet_customer_support_messages
+          WHERE organization_id=$1 AND ticket_id=ANY($2::uuid[])
+          ORDER BY created_at`,
+        [customer.organization_id, tickets.rows.map(ticket => ticket.id)],
+      )
+      : { rows: [] };
+    response.json({
+      success: true,
+      data: tickets.rows.map(ticket => customerSupportTicketPayload(
+        ticket,
+        messages.rows.filter(message => message.ticket_id === ticket.id),
+      )),
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/customer-support-tickets", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const subject = clean(request.body?.subject, 160);
+    const body = clean(request.body?.body, 4000);
+    const category = clean(request.body?.category || "other", 40);
+    const bookingId = clean(request.body?.bookingId, 80) || null;
+    if (!subject || !body) return fail(response, 400, "SUPPORT_DETAILS_REQUIRED", "Subject and message are required.");
+    if (!CUSTOMER_SUPPORT_CATEGORIES.has(category)) {
+      return fail(response, 400, "INVALID_SUPPORT_CATEGORY", "Choose a valid support category.");
+    }
+    const customer = await customerRecordForIdentity(client, request);
+    if (!customer) return fail(response, 404, "CUSTOMER_ACCOUNT_NOT_FOUND", "A GoodFleet customer record is required.");
+    if (bookingId) {
+      const booking = await client.query(
+        `SELECT id FROM fleet_bookings
+          WHERE organization_id=$1 AND id=$2 AND customer_id=$3 AND archived_at IS NULL`,
+        [customer.organization_id, bookingId, customer.id],
+      );
+      if (!booking.rowCount) return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    }
+    const ticketNumber = `GF-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+    const priority = category === "roadside" ? "urgent" : "normal";
+    await client.query("BEGIN");
+    const inserted = await client.query(
+      `INSERT INTO fleet_customer_support_tickets
+        (organization_id,customer_id,booking_id,ticket_number,subject,category,priority,status,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8)
+       RETURNING *`,
+      [customer.organization_id, customer.id, bookingId, ticketNumber, subject, category, priority, request.user.id],
+    );
+    const message = await client.query(
+      `INSERT INTO fleet_customer_support_messages
+        (organization_id,ticket_id,sender_type,sender_user_id,body)
+       VALUES ($1,$2,'customer',$3,$4)
+       RETURNING *`,
+      [customer.organization_id, inserted.rows[0].id, request.user.id, body],
+    );
+    await auditCustomerAction(
+      client,
+      request,
+      customer.organization_id,
+      "customer.support.opened",
+      "customer_support_ticket",
+      inserted.rows[0].id,
+      { customerId: customer.id, category, bookingId },
+    );
+    await client.query("COMMIT");
+    response.status(201).json({
+      success: true,
+      data: customerSupportTicketPayload(inserted.rows[0], message.rows),
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/customer-support-tickets/:ticketId/messages", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const body = clean(request.body?.body, 4000);
+    if (!body) return fail(response, 400, "SUPPORT_MESSAGE_REQUIRED", "Enter a support message.");
+    const customer = await customerRecordForIdentity(client, request);
+    if (!customer) return fail(response, 404, "CUSTOMER_ACCOUNT_NOT_FOUND", "A GoodFleet customer record is required.");
+    await client.query("BEGIN");
+    const ticket = await client.query(
+      `UPDATE fleet_customer_support_tickets
+          SET status=CASE WHEN status='waiting_on_customer' THEN 'open' ELSE status END,
+              updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2 AND customer_id=$3
+          AND status NOT IN ('closed')
+        RETURNING *`,
+      [customer.organization_id, request.params.ticketId, customer.id],
+    );
+    if (!ticket.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "SUPPORT_TICKET_NOT_FOUND", "Open support ticket not found.");
+    }
+    const message = await client.query(
+      `INSERT INTO fleet_customer_support_messages
+        (organization_id,ticket_id,sender_type,sender_user_id,body)
+       VALUES ($1,$2,'customer',$3,$4)
+       RETURNING *`,
+      [customer.organization_id, ticket.rows[0].id, request.user.id, body],
+    );
+    await auditCustomerAction(
+      client,
+      request,
+      customer.organization_id,
+      "customer.support.replied",
+      "customer_support_ticket",
+      ticket.rows[0].id,
+      { customerId: customer.id },
+    );
+    await client.query("COMMIT");
+    response.status(201).json({
+      success: true,
+      data: customerSupportTicketPayload(ticket.rows[0], message.rows),
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
   }
 });
 
