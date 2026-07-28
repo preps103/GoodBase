@@ -140,6 +140,87 @@ function timestamp(date, time, field) {
   return parsed.toISOString();
 }
 
+function rentalDays(pickupAt, returnAt) {
+  return Math.max(1, Math.ceil(
+    (new Date(returnAt).getTime() - new Date(pickupAt).getTime()) / 86_400_000
+  ));
+}
+
+async function calculateBookingPrice(client, org, input, pickupAt, returnAt) {
+  const pricingVehicleId = text(input.carId || input.requestedCarId, 80);
+  if (!pricingVehicleId) {
+    const error = new Error("A requested vehicle is required to calculate the reservation price.");
+    error.statusCode = 400;
+    error.code = "VEHICLE_REQUIRED";
+    throw error;
+  }
+  const [vehicleResult, workspaceResult] = await Promise.all([
+    client.query(
+      `SELECT id,daily_rate FROM fleet_vehicles
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+      [org, pricingVehicleId]
+    ),
+    client.query(
+      `SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`,
+      [org]
+    )
+  ]);
+  if (!vehicleResult.rowCount) {
+    const error = new Error("Requested vehicle not found.");
+    error.statusCode = 404;
+    error.code = "VEHICLE_NOT_FOUND";
+    throw error;
+  }
+  const state = workspaceResult.rows[0]?.state_json || {};
+  const days = rentalDays(pickupAt, returnAt);
+  const dailyRate = Number(vehicleResult.rows[0].daily_rate);
+  const base = dailyRate * days;
+  const suppliedCode = text(input.discountCode || input.promoCode, 80).toLowerCase();
+  const discountRecord = Array.isArray(state.discounts)
+    ? state.discounts.find(item =>
+      String(item?.status || "").toLowerCase() === "active" &&
+      String(item?.code || "").trim().toLowerCase() === suppliedCode
+    )
+    : null;
+  let discount = 0;
+  if (discountRecord) {
+    const value = Math.max(0, Number(discountRecord.value) || 0);
+    discount = discountRecord.type === "percentage"
+      ? base * Math.min(value, 100) / 100
+      : Math.min(value, base);
+  }
+  const discountedBase = Math.max(0, base - discount);
+  const mandatoryFees = (Array.isArray(state.fees) ? state.fees : [])
+    .filter(item =>
+      String(item?.status || "").toLowerCase() === "active" &&
+      String(item?.type || "").toLowerCase() === "mandatory"
+    )
+    .reduce((sum, fee) => {
+      const value = Math.max(0, Number(fee.value) || 0);
+      if (fee.calculationType === "per_day") return sum + value * days;
+      if (fee.calculationType === "percentage") return sum + discountedBase * value / 100;
+      return sum + value;
+    }, 0);
+  const branch = (Array.isArray(state.branches) ? state.branches : [])
+    .find(item => String(item?.id || "") === String(input.pickupLocationId || ""));
+  const configuredTax = Number(branch?.financialConfig?.taxRate ?? state.billingSettings?.taxRate ?? 0);
+  const taxRate = Number.isFinite(configuredTax) ? Math.min(Math.max(configuredTax, 0), 100) : 0;
+  const additionalCharges = (Array.isArray(input.additionalCharges) ? input.additionalCharges : [])
+    .reduce((sum, charge) => sum + Math.max(0, Number(charge?.amount) || 0), 0);
+  const tax = (discountedBase + mandatoryFees + additionalCharges) * taxRate / 100;
+  return {
+    days,
+    dailyRate: Number(dailyRate.toFixed(2)),
+    base: Number(base.toFixed(2)),
+    discount: Number(discount.toFixed(2)),
+    mandatoryFees: Number(mandatoryFees.toFixed(2)),
+    additionalCharges: Number(additionalCharges.toFixed(2)),
+    taxRate: Number(taxRate.toFixed(4)),
+    tax: Number(tax.toFixed(2)),
+    total: Number((discountedBase + mandatoryFees + additionalCharges + tax).toFixed(2))
+  };
+}
+
 function dateOnly(value) {
   if (!value) return null;
   if (typeof value === "string") return value.slice(0, 10);
@@ -249,22 +330,31 @@ function bookingPayload(row) {
 }
 
 function paymentPayload(row) {
+  const completed = ["succeeded", "captured"].includes(row.status);
+  const refunded = ["refunded", "partially_refunded", "voided"].includes(row.status) ||
+    (row.operation_type === "refund" && completed);
+  const storedType = row.request_json?.type;
   return {
     id: row.id,
     bookingId: row.booking_id || undefined,
     amount: Number(row.amount),
     currency: row.currency,
-    status: row.status === "succeeded"
-      ? "completed"
-      : row.status === "failed"
-        ? "failed"
-        : "pending",
+    status: refunded
+      ? "refunded"
+      : completed || row.status === "authorized"
+        ? "completed"
+        : row.status === "failed"
+          ? "failed"
+          : "pending",
     method: row.request_json?.method || "Recorded payment",
     transactionId: row.provider_reference || undefined,
     createdAt: row.created_at,
     description: row.request_json?.description || row.operation_type.replaceAll("_", " "),
-    type: row.operation_type === "refund" ? "refund" : "rental",
-    refunded: row.operation_type === "refund" && row.status === "succeeded"
+    type: row.operation_type === "refund"
+      ? "refund"
+      : storedType === "deposit" ? "deposit"
+        : storedType === "fine" ? "fine" : "rental",
+    refunded
   };
 }
 
@@ -612,6 +702,12 @@ router.post("/bookings", async (request, response, next) => {
       }
     }
 
+    const price = await calculateBookingPrice(client, org, body, pickupAt, returnAt);
+    const storedPayload = cleanPayload({
+      ...body,
+      totalAmount: price.total,
+      pricing: price
+    });
     const reservation = text(body.reservationNumber, 80) || `GF-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
     const result = await client.query(
       `INSERT INTO fleet_bookings
@@ -620,8 +716,8 @@ router.post("/bookings", async (request, response, next) => {
       [org, reservation, body.customerId, body.carId || null, pickupAt, returnAt,
         required(body.pickupLocationId, "pickupLocationId", 200),
         required(body.returnLocationId, "returnLocationId", 200),
-        money(body.totalAmount, "totalAmount"), money(body.depositAmount || 0, "depositAmount"),
-        money(body.paidAmount || 0, "paidAmount"), JSON.stringify(body), actor(request)]
+        money(price.total, "totalAmount"), money(body.depositAmount || 0, "depositAmount"),
+        "0.00", JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
     await audit(client, request, "booking.created", "booking", booking.id, null, booking);
@@ -839,6 +935,159 @@ router.post("/customers/:customerId/license-verification", requireLicenseVerifie
   } finally { client.release(); }
 });
 
+router.post("/bookings/quote", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const body = request.body || {};
+    const org = organization(request);
+    const pickupAt = timestamp(body.startDate, body.pickupTime, "pickupAt");
+    const returnAt = timestamp(body.endDate, body.dropoffTime, "returnAt");
+    if (new Date(returnAt) <= new Date(pickupAt)) {
+      return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
+    }
+    const price = await calculateBookingPrice(client, org, body, pickupAt, returnAt);
+    const assignedVehicleId = text(body.carId, 80);
+    let available = true;
+    if (assignedVehicleId) {
+      const conflict = await client.query(
+        `SELECT id,reservation_number FROM fleet_bookings
+          WHERE organization_id=$1 AND vehicle_id=$2 AND archived_at IS NULL
+            AND id::text<>COALESCE(NULLIF($5,''),'00000000-0000-0000-0000-000000000000')
+            AND status=ANY($6::text[])
+            AND tsrange(
+              (pickup_at AT TIME ZONE 'UTC') - interval '2 hours',
+              (return_at AT TIME ZONE 'UTC') + interval '2 hours',
+              '[)'
+            ) && tsrange(
+              ($3::timestamptz AT TIME ZONE 'UTC') - interval '2 hours',
+              ($4::timestamptz AT TIME ZONE 'UTC') + interval '2 hours',
+              '[)'
+            )
+          LIMIT 1`,
+        [org, assignedVehicleId, pickupAt, returnAt, text(body.bookingId, 80), ACTIVE_BOOKING_STATUSES]
+      );
+      available = !conflict.rowCount;
+    }
+    response.json({
+      success: true,
+      data: {
+        ...price,
+        available,
+        currency: "USD"
+      }
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/bookings/:bookingId/extensions", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const days = Number(request.body?.days);
+    if (!Number.isInteger(days) || days < 1 || days > 90) {
+      return fail(response, 400, "INVALID_EXTENSION", "Extension days must be between 1 and 90.");
+    }
+    const key = text(request.get("Idempotency-Key"), 255);
+    if (!key) {
+      return fail(response, 400, "IDEMPOTENCY_KEY_REQUIRED", "An Idempotency-Key header is required.");
+    }
+    await client.query("BEGIN");
+    const duplicate = await client.query(
+      `SELECT booking.* FROM fleet_payment_operations operation
+        JOIN fleet_bookings booking
+          ON booking.organization_id=operation.organization_id
+         AND booking.id=operation.booking_id
+       WHERE operation.organization_id=$1 AND operation.idempotency_key=$2`,
+      [org, key]
+    );
+    if (duplicate.rowCount) {
+      await client.query("COMMIT");
+      return response.json({ success: true, data: bookingPayload(duplicate.rows[0]) });
+    }
+    const existing = await client.query(
+      `SELECT * FROM fleet_bookings
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+      [org, request.params.bookingId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    }
+    const before = bookingPayload(existing.rows[0]);
+    if (!["confirmed", "assigned", "checked_in", "checked_out", "extended", "overdue"].includes(before.status)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "BOOKING_CANNOT_BE_EXTENDED", "Only active confirmed rentals can be extended.");
+    }
+    const nextReturn = new Date(existing.rows[0].return_at);
+    nextReturn.setUTCDate(nextReturn.getUTCDate() + days);
+    const merged = cleanPayload({
+      ...before,
+      endDate: nextReturn.toISOString().slice(0, 10),
+      dropoffTime: nextReturn.toISOString().slice(11, 16)
+    });
+    if (merged.carId) {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${merged.carId}`]);
+    }
+    const price = await calculateBookingPrice(
+      client,
+      org,
+      merged,
+      existing.rows[0].pickup_at,
+      nextReturn.toISOString()
+    );
+    const additionalAmount = Math.max(0, price.total - Number(existing.rows[0].total_amount));
+    const paymentStatus = Number(existing.rows[0].paid_amount) <= 0 ? "unpaid" : "partial";
+    const storedPayload = cleanPayload({
+      ...merged,
+      totalAmount: price.total,
+      paymentStatus,
+      pricing: price,
+      lastExtension: {
+        days,
+        additionalAmount: Number(additionalAmount.toFixed(2)),
+        requestedAt: new Date().toISOString(),
+        requestedBy: actor(request)
+      }
+    });
+    const updated = await client.query(
+      `UPDATE fleet_bookings
+          SET return_at=$3,status='extended',payment_status=$4,total_amount=$5,
+              payload=$6::jsonb,version=version+1,updated_by=$7,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2 RETURNING *`,
+      [org, request.params.bookingId, nextReturn.toISOString(), paymentStatus,
+        price.total.toFixed(2), JSON.stringify(storedPayload), actor(request)]
+    );
+    if (additionalAmount > 0) {
+      await client.query(
+        `INSERT INTO fleet_payment_operations
+          (organization_id,booking_id,customer_id,operation_type,provider,idempotency_key,
+           amount,currency,status,request_json,created_by)
+         VALUES ($1,$2,$3,'invoice','internal',$4,$5,'USD','pending',$6::jsonb,$7)`,
+        [org, request.params.bookingId, existing.rows[0].customer_id, key,
+          additionalAmount.toFixed(2), JSON.stringify({
+            method: "Credit Card",
+            description: `${days}-day rental extension`,
+            type: "rental"
+          }), actor(request)]
+      );
+    }
+    const booking = bookingPayload(updated.rows[0]);
+    await audit(client, request, "booking.extended", "booking", booking.id, before, booking);
+    await client.query("COMMIT");
+    response.json({ success: true, data: booking });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23P01") return fail(response, 409, "VEHICLE_NOT_AVAILABLE", "This vehicle is already committed during the requested extension.");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.patch("/bookings/:bookingId", async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -854,12 +1103,35 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
       return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
     }
     const before = bookingPayload(existing.rows[0]);
+    const tripFields = new Set([
+      "customerId", "carId", "requestedCarId", "startDate", "endDate",
+      "pickupTime", "dropoffTime", "pickupLocationId", "returnLocationId",
+      "insuranceSelection", "discountCode", "promoCode"
+    ]);
+    const changesTrip = Object.keys(request.body || {}).some(key => tripFields.has(key));
+    if (changesTrip && ["completed", "cancelled", "refunded"].includes(before.status)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "BOOKING_NOT_EDITABLE", "Completed, cancelled, and refunded reservations cannot have trip details changed.");
+    }
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
     const pickupAt = timestamp(merged.startDate, merged.pickupTime, "pickupAt");
     const returnAt = timestamp(merged.endDate, merged.dropoffTime, "returnAt");
     if (new Date(returnAt) <= new Date(pickupAt)) {
       await client.query("ROLLBACK");
       return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
+    }
+    const customerRecord = await client.query(
+      `SELECT status FROM fleet_customers
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR SHARE`,
+      [org, merged.customerId]
+    );
+    if (!customerRecord.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found.");
+    }
+    if (customerRecord.rows[0].status !== "active") {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CUSTOMER_NOT_ELIGIBLE", "Customer account must be active.");
     }
     if (merged.status === "checked_out") {
       if (!merged.carId) {
@@ -901,6 +1173,22 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         return fail(response, 409, "VEHICLE_NOT_ELIGIBLE", "Vehicle is unavailable or has expired compliance documents.");
       }
     }
+    const price = await calculateBookingPrice(client, org, merged, pickupAt, returnAt);
+    const paidAmount = Number(before.paidAmount);
+    const paymentStatus = before.paymentStatus === "disputed"
+      ? "disputed"
+      : before.paymentStatus === "refunded"
+        ? "refunded"
+        : paidAmount <= 0
+          ? "unpaid"
+          : paidAmount + 0.005 >= price.total ? "paid" : "partial";
+    const storedPayload = cleanPayload({
+      ...merged,
+      totalAmount: price.total,
+      paidAmount,
+      paymentStatus,
+      pricing: price
+    });
     const result = await client.query(
       `UPDATE fleet_bookings SET
         reservation_number=$3,customer_id=$4,vehicle_id=$5,pickup_at=$6,return_at=$7,
@@ -913,10 +1201,10 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         required(merged.pickupLocationId, "pickupLocationId", 200),
         required(merged.returnLocationId, "returnLocationId", 200),
         enumValue(merged.status, BOOKING_STATUSES, "status"),
-        enumValue(merged.paymentStatus, PAYMENT_STATUSES, "paymentStatus"),
-        money(merged.totalAmount, "totalAmount"),
+        enumValue(paymentStatus, PAYMENT_STATUSES, "paymentStatus"),
+        money(price.total, "totalAmount"),
         money(merged.depositAmount || 0, "depositAmount"),
-        money(merged.paidAmount || 0, "paidAmount"), JSON.stringify(merged), actor(request)]
+        money(paidAmount, "paidAmount"), JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
     if (booking.status === "checked_out" && booking.carId && before.status !== "checked_out") {
@@ -938,6 +1226,42 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
             status: "checked_out",
             bookingId: booking.id,
             details: `Vehicle released for reservation ${booking.reservationNumber}`
+          });
+      }
+    }
+    if (
+      ["completed", "cancelled"].includes(booking.status) &&
+      booking.carId &&
+      !["completed", "cancelled"].includes(before.status)
+    ) {
+      const nextVehicleStatus = booking.status === "completed" &&
+        storedPayload.checkinCleanliness &&
+        storedPayload.checkinCleanliness !== "clean"
+        ? "cleaning"
+        : "available";
+      const vehicleBefore = await client.query(
+        `SELECT * FROM fleet_vehicles
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+        [org, booking.carId]
+      );
+      if (vehicleBefore.rowCount) {
+        await client.query(
+          `UPDATE fleet_vehicles
+              SET status=$3,
+                  payload=payload || $4::jsonb,
+                  version=version+1,updated_by=$5,updated_at=NOW()
+            WHERE organization_id=$1 AND id=$2`,
+          [org, booking.carId, nextVehicleStatus, JSON.stringify({
+            mileage: storedPayload.checkinMileage,
+            fuelLevel: storedPayload.checkinFuelLevel
+          }), actor(request)]
+        );
+        await audit(client, request, "vehicle.returned", "vehicle", booking.carId,
+          vehiclePayload(vehicleBefore.rows[0]), {
+            id: booking.carId,
+            status: nextVehicleStatus,
+            bookingId: booking.id,
+            details: `Vehicle returned for reservation ${booking.reservationNumber}`
           });
       }
     }

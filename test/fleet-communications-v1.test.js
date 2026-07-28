@@ -24,6 +24,9 @@ test("Employee chat is tenant scoped, access checked, and idempotent", () => {
   assert.match(routes, /appMembership/);
   assert.match(routes, /client_message_id/);
   assert.match(routes, /ON CONFLICT \(organization_id,sender_id,client_message_id\)/);
+  assert.match(routes, /visibility='management'/);
+  assert.match(routes, /MANAGEMENT_ROLES/);
+  assert.match(routes, /router\.post\("\/channels\/group"/);
 });
 
 test("Customer notifications can only be read by their recipient identity", () => {
@@ -42,4 +45,7 @@ test("Communication schema contains read receipts, delivery state, and audit-rea
   assert.match(migration, /fleet_customer_notification_deliveries/);
   assert.match(migration, /client_request_id/);
   assert.match(migration, /created_by uuid NOT NULL REFERENCES users/);
+  const staffChatMigration = read("migrations/20260728_goodfleet_staff_chat_v2.sql");
+  assert.match(staffChatMigration, /visibility IN \('workspace', 'management', 'private'\)/);
+  assert.match(staffChatMigration, /fleet_chat_channels_visibility_idx/);
 });

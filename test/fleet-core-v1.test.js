@@ -97,6 +97,11 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /router\.patch\("\/vehicles\/:vehicleId"/);
   assert.match(routes, /router\.patch\("\/customers\/:customerId"/);
   assert.match(routes, /router\.patch\("\/bookings\/:bookingId"/);
+  assert.match(routes, /router\.post\("\/bookings\/quote"/);
+  assert.match(routes, /router\.post\("\/bookings\/:bookingId\/extensions"/);
+  assert.match(routes, /calculateBookingPrice/);
+  assert.match(routes, /BOOKING_NOT_EDITABLE/);
+  assert.match(routes, /additionalCharges/);
   assert.match(routes, /router\.delete\("\/vehicles\/:vehicleId"/);
   assert.match(routes, /router\.post\("\/staff\/invitations"/);
   assert.match(routes, /router\.patch\("\/staff\/:userId"/);
@@ -113,14 +118,23 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(migration, /fleet_bookings_organization_id_id_v2_key/);
 });
 
-test("Fleet payment boundary is mounted but fails closed until processing is activated", () => {
+test("Fleet payments stay disabled without credentials and expose the complete provider workflow", () => {
   const routes = read("src/routes/fleet-payments.routes.js");
   const index = read("src/routes/index.js");
   const migration = read("migrations/20260726_goodfleet_readiness_v2.sql");
-  assert.match(routes, /router\.use\(authRequired, tenantContext\)/);
+  const productionMigration = read("migrations/20260728_goodfleet_payments_v3.sql");
+  assert.match(routes, /router\.use\(authRequired, tenantContext, requirePaymentEmployee\)/);
   assert.match(routes, /PAYMENTS_NOT_ACTIVATED/);
-  assert.match(routes, /acceptingPayments: false/);
+  assert.match(routes, /acceptingPayments: credentialsReady/);
   assert.match(routes, /STRIPE_WEBHOOK_SECRET/);
+  assert.match(routes, /router\.post\("\/webhooks\/stripe"/);
+  assert.match(routes, /constructEvent/);
+  assert.match(routes, /router\.post\("\/checkout-sessions"/);
+  assert.match(routes, /router\.post\("\/manual-payments"/);
+  assert.match(routes, /router\.post\("\/authorizations"/);
+  assert.match(routes, /router\.post\("\/:paymentId\/capture"/);
+  assert.match(routes, /router\.post\("\/:paymentId\/refunds"/);
+  assert.match(routes, /router\.post\("\/:paymentId\/void"/);
   assert.match(index, /router\.use\("\/api\/fleet\/v1\/payments", fleetPaymentsRoutes\)/);
   assert.match(migration, /fleet_payment_operations/);
   assert.match(migration, /fleet_payment_webhook_events/);
@@ -128,6 +142,8 @@ test("Fleet payment boundary is mounted but fails closed until processing is act
   assert.match(migration, /UNIQUE USING INDEX fleet_bookings_org_id_unique_idx/);
   assert.match(migration, /UNIQUE \(organization_id, idempotency_key\)/);
   assert.match(migration, /TO goodapp_backend_user/);
+  assert.match(productionMigration, /manual_payment/);
+  assert.match(productionMigration, /parent_operation_id/);
 });
 
 test("Public availability exposes sanitized inventory and honors booking conflicts", () => {
