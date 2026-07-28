@@ -102,6 +102,12 @@ function handle(res, label, operation, statusCode = 200) {
     });
 }
 
+router.get(
+  "/health",
+  readLimiter,
+  (req, res) => handle(res, "health", chat.health()),
+);
+
 router.use(authRequired, requireGoodCustomAccess);
 
 router.get(

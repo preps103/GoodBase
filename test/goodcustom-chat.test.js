@@ -23,6 +23,33 @@ test("GoodCustom chat only bootstraps platform leadership automatically", () => 
   assert.equal(chat.isPlatformManager({}), false);
 });
 
+test("GoodCustom chat health reports whether every required table is installed", async () => {
+  const originalQuery = database.query;
+  database.query = async () => ({
+    rows: [{
+      staffReady: true,
+      roomsReady: true,
+      membersReady: true,
+      messagesReady: true,
+    }],
+  });
+  try {
+    assert.deepEqual(await chat.health(), {
+      service: "GoodCustom Chat",
+      status: "ok",
+      schemaReady: true,
+      tables: {
+        staffReady: true,
+        roomsReady: true,
+        membersReady: true,
+        messagesReady: true,
+      },
+    });
+  } finally {
+    database.query = originalQuery;
+  }
+});
+
 test("GoodCustom customers are not treated as staff members", async () => {
   const originalQuery = database.query;
   database.query = async () => ({ rows: [] });
