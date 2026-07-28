@@ -20,6 +20,7 @@ const teamsRoutes = require("./teams.routes");
 const goodAdsRoutes = require("./goodads.routes");
 const goodDesignerRoutes = require("./gooddesigner.routes");
 const goodSwapzRoutes = require("./goodswapz.routes");
+const goodCustomChatRoutes = require("./goodcustom-chat.routes");
 
 
 const billingRoutes = require("./billing.routes");
@@ -200,6 +201,7 @@ router.use("/health", healthRoutes);
 router.use("/api/apps/goodads/v1", goodAdsRoutes);
 router.use("/api/gooddesigner/v1", goodDesignerRoutes);
 router.use("/api/swapz/v1", goodSwapzRoutes);
+router.use("/api/apps/goodcustom/v1/chat", goodCustomChatRoutes);
 router.use("/api/apps", appsRoutes);
 router.use("/api/db", dbRoutes);
 router.use("/api/auth", authRoutes);
