@@ -215,7 +215,7 @@ function fillTargetOptions() {
     '<option value="">Select a server application target</option>',
     ...state.targets.map(
       (target) =>
-        `<option value="${escapeHtml(target.processName)}">${escapeHtml(target.processName)} — ${escapeHtml(target.appPath || "Unknown path")}${target.repositoryUrl ? ` — ${escapeHtml(normalizeRepository(target.repositoryUrl))}` : ""}</option>`
+        `<option value="${escapeHtml(target.processName)}">${escapeHtml(target.processName)} — deploy ${escapeHtml(target.deploymentPath || target.appPath || "Unknown path")}${target.runtimePath && target.runtimePath !== (target.deploymentPath || target.appPath) ? ` — runs from ${escapeHtml(target.runtimePath)}` : ""}${target.repositoryUrl ? ` — ${escapeHtml(normalizeRepository(target.repositoryUrl))}` : ""}</option>`
     ),
   ].join("");
 
@@ -264,10 +264,13 @@ function matchTargetByRepository(repositoryUrl) {
 
 function renderSites() {
   $("siteCount").textContent = state.sites.length;
-  $("readyCount").textContent = state.sites.filter((site) => site.status === "ready").length;
+  $("readyCount").textContent = state.sites.filter((site) => site.configuration?.ready).length;
   $("runningCount").textContent = state.sites.filter((site) => ["queued", "deploying"].includes(site.status)).length;
   $("failedCount").textContent = state.sites.filter(
-    (site) => site.status === "failed" || site.lastRunStatus === "rolled_back"
+    (site) =>
+      site.configuration?.ready === false ||
+      site.status === "failed" ||
+      site.lastRunStatus === "rolled_back"
   ).length;
 
   $("sitesBody").innerHTML =
@@ -279,6 +282,17 @@ function renderSites() {
             (site.processManager === "none" || site.processName)
         );
         const running = ["queued", "deploying"].includes(site.status);
+        const ready = site.configuration?.ready === true;
+        const displayedStatus = running
+          ? site.status
+          : site.status === "failed"
+            ? site.status
+            : ready
+              ? "ready"
+              : "needs_attention";
+        const configurationDetail = ready
+          ? `${site.configuration.deploymentMode === "staged-release" ? "Staged release" : "Managed checkout"} · path and process aligned`
+          : (site.configuration?.issues || []).join(" ");
 
         return `
           <tr>
@@ -286,6 +300,7 @@ function renderSites() {
               <strong>${escapeHtml(site.name)}</strong>
               <div class="muted">${escapeHtml(site.domain || "No subdomain")}</div>
               <div class="mono">${escapeHtml(site.appPath || "Target not selected")}</div>
+              <div class="muted">${escapeHtml(configurationDetail)}</div>
             </td>
             <td>
               <div class="mono">${escapeHtml(site.repositoryUrl || "Repository not selected")}</div>
@@ -295,13 +310,13 @@ function renderSites() {
               ${escapeHtml(site.processManager || "pm2")}
               <div class="muted">${escapeHtml(site.processName || "Process not selected")}</div>
             </td>
-            <td>${badge(site.status)}</td>
+            <td>${badge(displayedStatus)}</td>
             <td>
               <div class="actions">
                 <button class="btn js-select" type="button" data-site-id="${escapeHtml(site.id)}">Select</button>
                 <button class="btn js-configure" type="button" data-site-id="${escapeHtml(site.id)}">Configure</button>
                 <button class="btn js-test" type="button" data-site-id="${escapeHtml(site.id)}" ${configured ? "" : "disabled"}>Test</button>
-                <button class="btn primary js-update" type="button" data-site-id="${escapeHtml(site.id)}" ${configured && !running ? "" : "disabled"}>Update Site</button>
+                <button class="btn primary js-update" type="button" data-site-id="${escapeHtml(site.id)}" ${configured && ready && !running ? "" : "disabled"}>Update Site</button>
                 ${site.lastRunId ? `<button class="btn js-logs" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Logs</button>` : ""}
                 ${running && site.lastRunId ? `<button class="btn js-recover-run" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Recover Stale Run</button>` : ""}
                 ${site.appId === "goodbase" ? `<button class="btn js-restart-goodbase" type="button" data-site-id="${escapeHtml(site.id)}">Restart Services</button>` : ""}
@@ -357,7 +372,8 @@ function updateSummary() {
 
   $("summarySite").textContent = site?.name || "None";
   $("summaryDomain").textContent = site?.domain || "None";
-  $("summaryPath").textContent = target?.appPath || site?.appPath || "None";
+  $("summaryPath").textContent =
+    target?.deploymentPath || target?.appPath || site?.appPath || "None";
   $("summaryProcess").textContent = target?.processName || site?.processName || "None";
 
   const valid = Boolean(
@@ -381,7 +397,7 @@ function mappingPayload() {
   if (!site) throw new Error("Select the site or application.");
   if (!repositoryUrl) throw new Error("Select the GitHub repository.");
 
-  const appPath = target?.appPath || site.appPath;
+  const appPath = target?.deploymentPath || target?.appPath || site.appPath;
   const processManager = target?.processManager || site.processManager || "pm2";
   const processName =
     processManager === "none" ? "" : target?.processName || site.processName;

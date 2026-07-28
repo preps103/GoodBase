@@ -101,6 +101,116 @@ test("deployment PM2 control is restricted to the root-owned helper", () => {
   assert.doesNotMatch(sudoers, /\/bin\/sh|\/bin\/bash/);
 });
 
+test("canonical deployment mappings include every product and platform service", () => {
+  delete require.cache[require.resolve("../src/services/site-deployment.service")];
+  const deployment = require("../src/services/site-deployment.service");
+  const sites = deployment.canonicalDeploymentSites();
+
+  assert.equal(sites.length, 17);
+  assert.equal(new Set(sites.map((site) => site.appId)).size, 17);
+  assert.deepEqual(
+    sites.find((site) => site.appId === "goodvoice"),
+    {
+      appId: "goodvoice",
+      name: "GoodVoice",
+      domain: "voice.goodos.app",
+      repositoryUrl: "git@github.com:preps103/GoodVoice-v1.3.git",
+      appPath: "/home/mgoodlo3/GoodVoice",
+      processName: "goodvoice",
+      branch: "main",
+      processManager: "pm2",
+      healthUrl: "https://voice.goodos.app",
+    }
+  );
+  assert.equal(
+    sites.find((site) => site.appId === "goodbuilder").appPath,
+    "/home/mgoodlo3/GoodBuilder"
+  );
+  assert.equal(
+    sites.find((site) => site.appId === "goodcustoms").domain,
+    "custom.goodos.app"
+  );
+});
+
+test("PM2 discovery separates the live runtime folder from the deployment source folder", async (context) => {
+  const childProcess = require("node:child_process");
+  const originalSpawn = childProcess.spawn;
+
+  childProcess.spawn = (_command, _args, _options) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    process.nextTick(() => {
+      child.stdout.emit(
+        "data",
+        JSON.stringify([
+          {
+            name: "goodads",
+            pid: 123,
+            pm2_env: {
+              status: "online",
+              pm_cwd: "/home/mgoodlo3/GoodAds/dist",
+              env: {},
+            },
+          },
+        ])
+      );
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+
+  context.after(() => {
+    childProcess.spawn = originalSpawn;
+  });
+
+  delete require.cache[require.resolve("../src/services/site-deployment.service")];
+  const deployment = require("../src/services/site-deployment.service");
+  const targets = await deployment.discoverServerApps();
+
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].runtimePath, "/home/mgoodlo3/GoodAds/dist");
+  assert.equal(targets[0].deploymentPath, "/home/mgoodlo3/GoodAds");
+  assert.equal(targets[0].appPath, "/home/mgoodlo3/GoodAds");
+  assert.equal(
+    targets[0].repositoryUrl,
+    "git@github.com:preps103/GoodAds-v1.2.git"
+  );
+});
+
+test("non-GoodBase applications use build-first staged releases with rollback copies", () => {
+  const service = fs.readFileSync(
+    path.join(__dirname, "..", "src", "services", "site-deployment.service.js"),
+    "utf8"
+  );
+  const routes = fs.readFileSync(
+    path.join(__dirname, "..", "src", "routes", "update-sites.routes.js"),
+    "utf8"
+  );
+  const page = fs.readFileSync(
+    path.join(__dirname, "..", "src", "public", "update-sites.js"),
+    "utf8"
+  );
+  const provisioning = fs.readFileSync(
+    path.join(__dirname, "..", "deploy", "provision-update-sites-access.sh"),
+    "utf8"
+  );
+
+  assert.match(service, /executeStagedRelease/);
+  assert.match(service, /Using a staged release/);
+  assert.match(service, /"rsync"/);
+  assert.match(service, /"--delete"/);
+  assert.match(service, /copyPreservedRuntimeState/);
+  assert.match(service, /restoreStagedBackup/);
+  assert.match(routes, /reconcileCanonicalDeploymentSites/);
+  assert.match(routes, /Staged release \(the live folder is replaced only after a successful build\)/);
+  assert.match(page, /target\?\.deploymentPath \|\| target\?\.appPath \|\| site\.appPath/);
+  assert.match(page, /site\.configuration\?\.ready/);
+  assert.match(provisioning, /chown -R "\$\{deployment_user\}:\$\{deployment_group\}"/);
+  assert.match(provisioning, /\/home\/mgoodlo3\/GoodVoice/);
+  assert.match(provisioning, /\/var\/www\/GoodID/);
+});
+
 test("GoodBase self-deployment recovery is lock-protected and owner-controlled", () => {
   const routes = fs.readFileSync(
     path.join(__dirname, "..", "src", "routes", "update-sites.routes.js"),
