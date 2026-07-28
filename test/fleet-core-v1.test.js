@@ -35,6 +35,27 @@ test("Fleet booking creation serializes by tenant and vehicle", () => {
   assert.match(routes, /VEHICLE_NOT_AVAILABLE/);
 });
 
+test("Pending reservations preserve requested vehicles without unsafe assignment", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  assert.match(routes, /requestedVehicleId = text\(body\.requestedCarId \|\| body\.carId/);
+  assert.match(routes, /else if \(requestedVehicleId\)/);
+  assert.match(routes, /Requested vehicle not found/);
+  assert.match(routes, /customer\.status !== "active" \|\| new Date\(customer\.license_expiry\)/);
+  assert.doesNotMatch(
+    routes,
+    /customer\.status !== "active" \|\| customer\.license_verification_status !== "verified"/
+  );
+});
+
+test("Vehicle checkout requires an assigned vehicle and verified renter ID", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  assert.match(routes, /merged\.status === "checked_out"/);
+  assert.match(routes, /VEHICLE_ASSIGNMENT_REQUIRED/);
+  assert.match(routes, /ID_VERIFICATION_REQUIRED/);
+  assert.match(routes, /license_verification_status !== "verified"/);
+  assert.match(routes, /Verify a valid government-issued driver license before vehicle checkout/);
+});
+
 test("Fleet schema enforces tenant uniqueness, compliance, and buffered booking exclusion", () => {
   const migration = read("migrations/20260722_goodfleet_core_v1.sql");
   assert.match(migration, /UNIQUE \(organization_id, vin\)/);
