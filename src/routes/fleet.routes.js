@@ -19,7 +19,7 @@ const WORKSPACE_ARRAY_KEYS = new Set([
   "supportTickets", "rates", "seasonalAdjustments", "dynamicPricingInsights",
   "discounts", "fees", "expenses", "addons", "onboardingSteps"
 ]);
-const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings"]);
+const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings", "ownerSettings"]);
 const MAX_WORKSPACE_BYTES = 2 * 1024 * 1024;
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
 const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
@@ -33,6 +33,11 @@ const BOOKING_STATUSES = new Set([
   "extended", "completed", "no_show", "cancelled", "refunded", "overdue"
 ]);
 const PAYMENT_STATUSES = new Set(["unpaid", "partial", "paid", "refunded", "disputed", "failed"]);
+const ONBOARDING_MODULES = new Set([
+  "overview", "reservations", "calendar", "vehicles", "turnaround", "tracking",
+  "communications", "customers", "revenue", "staff-access", "integrations",
+  "audit-history", "help", "documentation", "settings"
+]);
 
 function actor(request) {
   return request.user?.id || null;
@@ -57,6 +62,14 @@ function goodFleetAccessRole(request) {
   const appRole = goodFleetAppRole(request);
   if (EMPLOYEE_ROLES.has(appRole)) return appRole;
   return organizationRole;
+}
+
+function normalizedFleetRole(request) {
+  const role = goodFleetAccessRole(request);
+  if (role === "owner") return "owner";
+  if (role === "admin" || role === "manager") return "manager";
+  if (role === "mechanic") return "mechanic";
+  return "staff";
 }
 
 function requireEmployee(request, response, next) {
@@ -380,6 +393,7 @@ router.get("/health", async (request, response, next) => {
         to_regclass('public.fleet_workspace_state') IS NOT NULL AS workspace_ready,
         to_regclass('public.fleet_chat_messages') IS NOT NULL AS chat_ready,
         to_regclass('public.fleet_customer_notifications') IS NOT NULL AS notifications_ready,
+        to_regclass('public.fleet_staff_onboarding_progress') IS NOT NULL AS onboarding_ready,
         to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready`
     );
     const readiness = result.rows[0];
@@ -547,6 +561,139 @@ router.delete("/staff/:userId", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+router.get("/staff-onboarding", async (request, response, next) => {
+  try {
+    const progress = await query(
+      `SELECT tour_version,completed_modules,last_module,started_at,dismissed_at,
+              completed_at,updated_at
+         FROM fleet_staff_onboarding_progress
+        WHERE organization_id=$1 AND user_id=$2`,
+      [organization(request), actor(request)]
+    );
+    const row = progress.rows[0];
+    response.json({
+      success: true,
+      data: {
+        role: normalizedFleetRole(request),
+        tourVersion: row?.tour_version || 1,
+        completedModules: row?.completed_modules || [],
+        lastModule: row?.last_module || null,
+        startedAt: row?.started_at || null,
+        dismissedAt: row?.dismissed_at || null,
+        completedAt: row?.completed_at || null,
+        updatedAt: row?.updated_at || null
+      }
+    });
+  } catch (error) { next(error); }
+});
+
+router.put("/staff-onboarding", async (request, response, next) => {
+  try {
+    const rawModules = request.body?.completedModules;
+    if (!Array.isArray(rawModules)) {
+      return fail(response, 400, "INVALID_ONBOARDING_PROGRESS", "Completed training modules must be an array.");
+    }
+    const completedModules = [...new Set(rawModules.map(value => text(value, 80)))];
+    if (completedModules.some(moduleId => !ONBOARDING_MODULES.has(moduleId))) {
+      return fail(response, 400, "INVALID_ONBOARDING_MODULE", "Training progress includes an unknown module.");
+    }
+    const lastModule = text(request.body?.lastModule, 80) || null;
+    if (lastModule && !ONBOARDING_MODULES.has(lastModule)) {
+      return fail(response, 400, "INVALID_ONBOARDING_MODULE", "The last training module is unknown.");
+    }
+    const tourVersion = Number(request.body?.tourVersion || 1);
+    if (!Number.isInteger(tourVersion) || tourVersion < 1 || tourVersion > 100) {
+      return fail(response, 400, "INVALID_ONBOARDING_VERSION", "A valid training version is required.");
+    }
+    const saved = await query(
+      `INSERT INTO fleet_staff_onboarding_progress (
+         organization_id,user_id,tour_version,completed_modules,last_module,
+         role_at_start,dismissed_at,completed_at
+       ) VALUES (
+         $1,$2,$3,$4::text[],$5,$6,
+         CASE WHEN $7 THEN NOW() ELSE NULL END,
+         CASE WHEN $8 THEN NOW() ELSE NULL END
+       )
+       ON CONFLICT (organization_id,user_id) DO UPDATE SET
+         tour_version=EXCLUDED.tour_version,
+         completed_modules=EXCLUDED.completed_modules,
+         last_module=EXCLUDED.last_module,
+         role_at_start=EXCLUDED.role_at_start,
+         dismissed_at=EXCLUDED.dismissed_at,
+         completed_at=EXCLUDED.completed_at,
+         updated_at=NOW()
+       RETURNING tour_version,completed_modules,last_module,started_at,dismissed_at,
+                 completed_at,updated_at`,
+      [
+        organization(request), actor(request), tourVersion, completedModules, lastModule,
+        normalizedFleetRole(request), request.body?.dismissed === true,
+        request.body?.completed === true
+      ]
+    );
+    const row = saved.rows[0];
+    response.json({
+      success: true,
+      data: {
+        role: normalizedFleetRole(request),
+        tourVersion: row.tour_version,
+        completedModules: row.completed_modules,
+        lastModule: row.last_module,
+        startedAt: row.started_at,
+        dismissedAt: row.dismissed_at,
+        completedAt: row.completed_at,
+        updatedAt: row.updated_at
+      }
+    });
+  } catch (error) { next(error); }
+});
+
+router.get("/staff-onboarding/team", async (request, response, next) => {
+  try {
+    if (!["owner", "admin", "manager"].includes(goodFleetAccessRole(request))) {
+      return fail(response, 403, "ONBOARDING_OVERVIEW_FORBIDDEN", "Management access is required to view team training progress.");
+    }
+    const result = await query(
+      `SELECT account.id,account.email,account.display_name,account.first_name,
+              account.last_name,app_membership.role,
+              progress.tour_version,progress.completed_modules,progress.last_module,
+              progress.started_at,progress.dismissed_at,progress.completed_at,
+              progress.updated_at
+         FROM app_memberships app_membership
+         JOIN users account ON account.id=app_membership.user_id
+         LEFT JOIN fleet_staff_onboarding_progress progress
+           ON progress.organization_id=app_membership.organization_id
+          AND progress.user_id=app_membership.user_id
+        WHERE app_membership.organization_id=$1
+          AND app_membership.app_id='goodfleet'
+          AND app_membership.status='active'
+        ORDER BY account.display_name,account.email`,
+      [organization(request)]
+    );
+    response.json({
+      success: true,
+      data: result.rows.map(member => ({
+        userId: member.id,
+        name: member.display_name ||
+          [member.first_name, member.last_name].filter(Boolean).join(" ") ||
+          member.email,
+        email: member.email,
+        role: member.role === "owner"
+          ? "owner"
+          : member.role === "manager" || member.role === "admin"
+            ? "manager"
+            : member.role === "mechanic" ? "mechanic" : "staff",
+        tourVersion: member.tour_version || 1,
+        completedModules: member.completed_modules || [],
+        lastModule: member.last_module || null,
+        startedAt: member.started_at || null,
+        dismissedAt: member.dismissed_at || null,
+        completedAt: member.completed_at || null,
+        updatedAt: member.updated_at || null
+      }))
+    });
+  } catch (error) { next(error); }
+});
+
 router.put("/workspace", async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -567,6 +714,9 @@ router.put("/workspace", async (request, response, next) => {
       return fail(response, 409, "WORKSPACE_VERSION_CONFLICT", "Workspace changed in another session.", {
         currentVersion
       });
+    }
+    if (goodFleetAccessRole(request) !== "owner" && "ownerSettings" in state) {
+      state.ownerSettings = current.rows[0]?.state_json?.ownerSettings || {};
     }
     const saved = current.rowCount
       ? await client.query(
