@@ -80,4 +80,16 @@ test("GoodCustom chat migration enforces membership, room, and message integrity
   assert.match(migration, /CHECK \(char_length\(body\) BETWEEN 1 AND 4000\)/);
   assert.match(migration, /ON DELETE CASCADE/);
   assert.match(migration, /GRANT SELECT, INSERT, UPDATE, DELETE ON goodcustom_chat_messages/);
+  assert.doesNotMatch(migration, /REFERENCES users/);
+});
+
+test("GoodCustom chat ships an idempotent production migration runner", () => {
+  const runner = fs.readFileSync(
+    path.join(__dirname, "../scripts/apply-goodcustom-chat-migration.js"),
+    "utf8",
+  );
+  assert.match(runner, /DATABASE_URL is required/);
+  assert.match(runner, /pg_advisory_lock/);
+  assert.match(runner, /schemaState/);
+  assert.match(runner, /20260728_goodcustom_internal_chat\.sql/);
 });
