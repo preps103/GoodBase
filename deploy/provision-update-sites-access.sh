@@ -32,9 +32,9 @@ readonly -a application_paths=(
 
 getent passwd "${deployment_user}" >/dev/null
 getent group "${deployment_group}" >/dev/null
+command -v setfacl >/dev/null
 
-chgrp "${deployment_group}" "${product_home}"
-chmod g+rx "${product_home}"
+setfacl -m "u:${deployment_user}:--x" "${product_home}"
 
 for application_path in "${application_paths[@]}"; do
   if [[ ! -d "${application_path}" ]]; then
@@ -42,9 +42,10 @@ for application_path in "${application_paths[@]}"; do
     exit 66
   fi
 
-  chown -R "${deployment_user}:${deployment_group}" "${application_path}"
-  find "${application_path}" -type d -exec chmod u+rwx {} +
-  find "${application_path}" -type f -exec chmod u+rw {} +
+  find "${application_path}" -type d -exec \
+    setfacl -m "u:${deployment_user}:rwx" -m "d:u:${deployment_user}:rwx" {} +
+  find "${application_path}" -type f -exec \
+    setfacl -m "u:${deployment_user}:rw-" {} +
 done
 
 install -d -m 0700 -o "${deployment_user}" -g "${deployment_group}" "${backup_root}"

@@ -206,7 +206,9 @@ test("non-GoodBase applications use build-first staged releases with rollback co
   assert.match(routes, /Staged release \(the live folder is replaced only after a successful build\)/);
   assert.match(page, /target\?\.deploymentPath \|\| target\?\.appPath \|\| site\.appPath/);
   assert.match(page, /site\.configuration\?\.ready/);
-  assert.match(provisioning, /chown -R "\$\{deployment_user\}:\$\{deployment_group\}"/);
+  assert.match(provisioning, /setfacl -m "u:\$\{deployment_user\}:--x"/);
+  assert.match(provisioning, /"d:u:\$\{deployment_user\}:rwx"/);
+  assert.doesNotMatch(provisioning, /chown -R|chmod -R/);
   assert.match(provisioning, /\/home\/mgoodlo3\/GoodVoice/);
   assert.match(provisioning, /\/var\/www\/GoodID/);
 });
