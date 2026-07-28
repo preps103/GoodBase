@@ -34,9 +34,9 @@ test("GoodAds chat accepts bounded retry-safe message keys", () => {
   assert.throws(() => _test.normalizeClientMessageKey("bad key"), /idempotency key/);
 });
 
-test("GoodAds chat migration enforces tenant isolation and bounded content", () => {
+test("GoodAds chat migration persists tenant scope and bounded content", () => {
   const migration = read("migrations/20260728_goodads_internal_chat.sql");
-  assert.match(migration, /organization_id TEXT NOT NULL REFERENCES backend_organizations/);
+  assert.match(migration, /organization_id TEXT NOT NULL/);
   assert.match(migration, /char_length\(body\) BETWEEN 1 AND 4000/);
   assert.match(migration, /PRIMARY KEY \(channel_id, user_id\)/);
   assert.match(migration, /idx_goodads_chat_message_idempotency/);

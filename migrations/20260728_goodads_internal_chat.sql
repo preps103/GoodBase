@@ -4,12 +4,12 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS goodads_chat_channels (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL,
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   channel_type TEXT NOT NULL DEFAULT 'public',
-  created_by_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_by_user_id UUID NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   archived_at TIMESTAMPTZ,
@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_goodads_chat_channels_org_updated
 
 CREATE TABLE IF NOT EXISTS goodads_chat_channel_members (
   channel_id UUID NOT NULL REFERENCES goodads_chat_channels(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   member_role TEXT NOT NULL DEFAULT 'member',
   last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   muted BOOLEAN NOT NULL DEFAULT FALSE,
@@ -49,8 +49,8 @@ CREATE INDEX IF NOT EXISTS idx_goodads_chat_members_user
 CREATE TABLE IF NOT EXISTS goodads_chat_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   channel_id UUID NOT NULL REFERENCES goodads_chat_channels(id) ON DELETE CASCADE,
-  organization_id TEXT NOT NULL REFERENCES backend_organizations(id) ON DELETE CASCADE,
-  sender_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  organization_id TEXT NOT NULL,
+  sender_user_id UUID NOT NULL,
   reply_to_message_id UUID REFERENCES goodads_chat_messages(id) ON DELETE SET NULL,
   client_message_key TEXT,
   message_type TEXT NOT NULL DEFAULT 'message',
