@@ -16,6 +16,60 @@ function rentalTimestamp(value, fallbackTime) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+function clean(value, max = 500) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+function publicLocation(branch) {
+  const hours = branch?.operatingHours && typeof branch.operatingHours === "object"
+    ? Object.fromEntries(
+      Object.entries(branch.operatingHours).map(([day, schedule]) => [
+        clean(day, 20),
+        {
+          open: clean(schedule?.open, 10),
+          close: clean(schedule?.close, 10),
+          closed: Boolean(schedule?.closed),
+        },
+      ]),
+    )
+    : {};
+  return {
+    id: clean(branch?.id, 100),
+    name: clean(branch?.name, 160),
+    address: clean(branch?.address, 300),
+    phone: clean(branch?.phone, 40),
+    timezone: clean(branch?.timezone, 80),
+    operatingHours: hours,
+    allowAfterHoursDropOff: Boolean(branch?.locationRules?.allowAfterHoursDropOff),
+  };
+}
+
+function publicOffer(discount) {
+  return {
+    id: clean(discount?.id, 100),
+    name: clean(discount?.name, 160),
+    code: clean(discount?.code, 80),
+    type: discount?.type === "fixed" ? "fixed" : "percentage",
+    value: Math.max(Number(discount?.value) || 0, 0),
+    minDays: Math.max(Number(discount?.minDays) || 0, 0) || null,
+    maxDays: Math.max(Number(discount?.maxDays) || 0, 0) || null,
+    startDate: clean(discount?.startDate, 10) || null,
+    endDate: clean(discount?.endDate, 10) || null,
+    branchId: clean(discount?.branchId, 100) || null,
+  };
+}
+
+async function publicWorkspaceState() {
+  const result = await query(
+    `SELECT state_json
+       FROM fleet_workspace_state
+      WHERE organization_id=$1
+      LIMIT 1`,
+    [PUBLIC_ORGANIZATION_ID],
+  );
+  return result.rows[0]?.state_json || {};
+}
+
 router.get("/availability", async (request, response, next) => {
   try {
     const pickupAt = rentalTimestamp(request.query.start, "10:00");
@@ -80,6 +134,34 @@ router.get("/availability", async (request, response, next) => {
         imageUrl: vehicle.image_url || null
       }))
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/locations", async (_request, response, next) => {
+  try {
+    const state = await publicWorkspaceState();
+    const locations = (Array.isArray(state.branches) ? state.branches : [])
+      .map(publicLocation)
+      .filter(location => location.id && location.name);
+    response.json({ success: true, data: locations });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/offers", async (_request, response, next) => {
+  try {
+    const state = await publicWorkspaceState();
+    const now = new Date().toISOString().slice(0, 10);
+    const offers = (Array.isArray(state.discounts) ? state.discounts : [])
+      .filter(discount => discount?.status === "active")
+      .filter(discount => !discount.startDate || clean(discount.startDate, 10) <= now)
+      .filter(discount => !discount.endDate || clean(discount.endDate, 10) >= now)
+      .map(publicOffer)
+      .filter(offer => offer.id && offer.name && offer.value > 0);
+    response.json({ success: true, data: offers });
   } catch (error) {
     next(error);
   }
