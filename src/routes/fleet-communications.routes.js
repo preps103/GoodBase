@@ -40,7 +40,15 @@ function organization(request) {
 }
 
 function membershipRole(request) {
-  return clean(request.tenantContext.organization?.membershipRole, 40).toLowerCase();
+  const organizationRole = clean(request.tenantContext.organization?.membershipRole, 40).toLowerCase();
+  if (["owner", "admin", "manager"].includes(organizationRole)) return organizationRole;
+  const appMembership = (request.apps || []).find(app =>
+    clean(app?.membershipStatus, 40).toLowerCase() === "active" &&
+    (clean(app?.id, 80).toLowerCase() === "goodfleet" ||
+      clean(app?.domain, 160).toLowerCase() === "fleet.goodos.app")
+  );
+  const appRole = clean(appMembership?.role, 40).toLowerCase();
+  return EMPLOYEE_ROLES.has(appRole) ? appRole : organizationRole;
 }
 
 function requireEmployee(request, response, next) {

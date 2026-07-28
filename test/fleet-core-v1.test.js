@@ -14,6 +14,8 @@ test("Fleet API is authenticated, tenant scoped, and mounted at a versioned path
   assert.match(routes, /router\.use\(authRequired, tenantContext\)/);
   assert.match(routes, /router\.use\(requireEmployee\)/);
   assert.match(routes, /EMPLOYEE_ACCESS_REQUIRED/);
+  assert.match(routes, /goodFleetAppRole/);
+  assert.match(routes, /fleet\.goodos\.app/);
   assert.match(routes, /request\.tenantContext\.organizationId/);
   assert.match(index, /router\.use\("\/api\/fleet\/v1", fleetRoutes\)/);
   assert.ok(
@@ -40,7 +42,8 @@ test("Pending reservations preserve requested vehicles without unsafe assignment
   assert.match(routes, /requestedVehicleId = text\(body\.requestedCarId \|\| body\.carId/);
   assert.match(routes, /else if \(requestedVehicleId\)/);
   assert.match(routes, /Requested vehicle not found/);
-  assert.match(routes, /customer\.status !== "active" \|\| new Date\(customer\.license_expiry\)/);
+  assert.match(routes, /if \(customer\.status !== "active"\)/);
+  assert.doesNotMatch(routes, /new Date\(customer\.license_expiry\) < new Date\(pickupAt\)/);
   assert.doesNotMatch(
     routes,
     /customer\.status !== "active" \|\| customer\.license_verification_status !== "verified"/
@@ -54,6 +57,24 @@ test("Vehicle checkout requires an assigned vehicle and verified renter ID", () 
   assert.match(routes, /ID_VERIFICATION_REQUIRED/);
   assert.match(routes, /license_verification_status !== "verified"/);
   assert.match(routes, /Verify a valid government-issued driver license before vehicle checkout/);
+  assert.match(routes, /SET status='checked_out',version=version\+1/);
+  assert.match(routes, /vehicle\.checked_out/);
+});
+
+test("Customer intake defers identification and in-person verification is audited", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260728_goodfleet_checkout_identity.sql");
+  assert.match(routes, /text\(body\.licenseNumber, 100\) \|\| null/);
+  assert.match(routes, /text\(body\.licenseExpiry, 20\) \|\| null/);
+  assert.match(routes, /router\.post\("\/customers\/:customerId\/license-verification", requireLicenseVerifier/);
+  assert.match(routes, /customer\.license_verified/);
+  assert.match(routes, /license_verification_method='in_person'/);
+  assert.match(migration, /ALTER COLUMN license_number DROP NOT NULL/);
+  assert.match(migration, /ALTER COLUMN license_expiry DROP NOT NULL/);
+  assert.match(migration, /license_verified_at/);
+  assert.match(migration, /license_verified_by/);
+  assert.match(migration, /INSERT INTO backend_organization_memberships/);
+  assert.match(migration, /membership\.app_id = 'goodfleet'/);
 });
 
 test("Fleet schema enforces tenant uniqueness, compliance, and buffered booking exclusion", () => {
@@ -82,6 +103,9 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /router\.delete\("\/staff\/:userId"/);
   assert.match(routes, /inviteTeamMemberForUser/);
   assert.match(routes, /updateTeamMemberForUser/);
+  assert.match(routes, /INSERT INTO app_memberships/);
+  assert.match(routes, /app_id='goodfleet'/);
+  assert.match(routes, /app_role=\$2/);
   assert.match(routes, /fleet_payment_operations WHERE organization_id=\$1/);
   assert.match(routes, /payments: payments\.rows\.map\(paymentPayload\)/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS fleet_workspace_state/);
