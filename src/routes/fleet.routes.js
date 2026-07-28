@@ -394,7 +394,8 @@ router.get("/health", async (request, response, next) => {
         to_regclass('public.fleet_chat_messages') IS NOT NULL AS chat_ready,
         to_regclass('public.fleet_customer_notifications') IS NOT NULL AS notifications_ready,
         to_regclass('public.fleet_staff_onboarding_progress') IS NOT NULL AS onboarding_ready,
-        to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready`
+        to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready,
+        to_regclass('public.fleet_contract_envelopes') IS NOT NULL AS contract_schema_ready`
     );
     const readiness = result.rows[0];
     response.json({

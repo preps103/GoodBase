@@ -27,6 +27,7 @@ const fleetCommunicationsRoutes = require("./fleet-communications.routes");
 const goodDesignerRoutes = require("./gooddesigner.routes");
 const fleetPaymentsRoutes = require("./fleet-payments.routes");
 const fleetPublicRoutes = require("./fleet-public.routes");
+const fleetContractsRoutes = require("./fleet-contracts.routes");
 const goodCustomChatRoutes = require("./goodcustom-chat.routes");
 const goodCustomQuotesRoutes = require("./goodcustom-quotes.routes");
 
@@ -343,6 +344,7 @@ router.use("/api/teams", teamsRoutes);
 router.use("/api/fleet/v1/public", fleetPublicRoutes);
 router.use("/api/fleet/v1/communications", fleetCommunicationsRoutes);
 router.use("/api/fleet/v1/payments", fleetPaymentsRoutes);
+router.use("/api/fleet/v1/contracts", fleetContractsRoutes);
 router.use("/api/fleet/v1", fleetRoutes);
 router.use(
   "/storage/v2",
