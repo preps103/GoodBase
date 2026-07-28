@@ -1,12 +1,14 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS goodcustom_staff (
-  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  -- Core GoodBase accounts are owner-controlled. The application deployment
+  -- role stores account identifiers without altering that ownership boundary.
+  user_id UUID PRIMARY KEY,
   role TEXT NOT NULL DEFAULT 'employee'
     CHECK (role IN ('owner', 'manager', 'employee')),
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'suspended')),
-  invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  invited_by UUID,
   joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_seen_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -20,7 +22,7 @@ CREATE TABLE IF NOT EXISTS goodcustom_chat_rooms (
   description TEXT,
   direct_key TEXT UNIQUE,
   is_default BOOLEAN NOT NULL DEFAULT false,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_by UUID,
   archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -36,7 +38,7 @@ WHERE is_default = true AND archived_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS goodcustom_chat_room_members (
   room_id UUID NOT NULL REFERENCES goodcustom_chat_rooms(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   role TEXT NOT NULL DEFAULT 'member'
     CHECK (role IN ('admin', 'member')),
   last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -52,7 +54,7 @@ ON goodcustom_chat_room_members(user_id, removed_at);
 CREATE TABLE IF NOT EXISTS goodcustom_chat_messages (
   id UUID PRIMARY KEY,
   room_id UUID NOT NULL REFERENCES goodcustom_chat_rooms(id) ON DELETE CASCADE,
-  sender_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  sender_user_id UUID NOT NULL,
   body TEXT NOT NULL CHECK (char_length(body) BETWEEN 1 AND 4000),
   reply_to_message_id UUID REFERENCES goodcustom_chat_messages(id) ON DELETE SET NULL,
   edited_at TIMESTAMPTZ,
