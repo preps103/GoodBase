@@ -20,6 +20,8 @@ test("Employee chat is tenant scoped, access checked, and idempotent", () => {
   const routes = read("src/routes/fleet-communications.routes.js");
   assert.match(routes, /channel\.organization_id=\$1/);
   assert.match(routes, /EMPLOYEE_ROLES/);
+  assert.match(routes, /fleet\.goodos\.app/);
+  assert.match(routes, /appMembership/);
   assert.match(routes, /client_message_id/);
   assert.match(routes, /ON CONFLICT \(organization_id,sender_id,client_message_id\)/);
 });

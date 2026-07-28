@@ -22,12 +22,12 @@ const WORKSPACE_ARRAY_KEYS = new Set([
 const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings"]);
 const MAX_WORKSPACE_BYTES = 2 * 1024 * 1024;
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
+const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
   "inspection", "maintenance", "out_of_service", "retired", "blocked", "recalled"
 ]);
 const CUSTOMER_STATUSES = new Set(["active", "suspended", "blacklisted"]);
-const LICENSE_STATUSES = new Set(["verified", "pending", "failed"]);
 const BOOKING_STATUSES = new Set([
   "quote", "pending_payment", "confirmed", "assigned", "checked_in", "checked_out",
   "extended", "completed", "no_show", "cancelled", "refunded", "overdue"
@@ -42,10 +42,35 @@ function organization(request) {
   return request.tenantContext.organizationId;
 }
 
+function goodFleetAppRole(request) {
+  const membership = (request.apps || []).find(app =>
+    text(app?.membershipStatus, 40).toLowerCase() === "active" &&
+    (text(app?.id, 80).toLowerCase() === "goodfleet" ||
+      text(app?.domain, 160).toLowerCase() === "fleet.goodos.app")
+  );
+  return text(membership?.role, 40).toLowerCase();
+}
+
+function goodFleetAccessRole(request) {
+  const organizationRole = text(request.tenantContext.organization?.membershipRole, 40).toLowerCase();
+  if (["owner", "admin", "manager"].includes(organizationRole)) return organizationRole;
+  const appRole = goodFleetAppRole(request);
+  if (EMPLOYEE_ROLES.has(appRole)) return appRole;
+  return organizationRole;
+}
+
 function requireEmployee(request, response, next) {
-  const role = text(request.tenantContext.organization?.membershipRole, 40).toLowerCase();
+  const role = goodFleetAccessRole(request);
   if (!EMPLOYEE_ROLES.has(role)) {
     return fail(response, 403, "EMPLOYEE_ACCESS_REQUIRED", "GoodFleet employee access is required.");
+  }
+  return next();
+}
+
+function requireLicenseVerifier(request, response, next) {
+  const role = goodFleetAccessRole(request);
+  if (!LICENSE_VERIFIER_ROLES.has(role)) {
+    return fail(response, 403, "LICENSE_VERIFIER_ACCESS_REQUIRED", "Front-desk or management access is required to verify renter identification.");
   }
   return next();
 }
@@ -113,6 +138,13 @@ function timestamp(date, time, field) {
     throw error;
   }
   return parsed.toISOString();
+}
+
+function dateOnly(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
 function sanitizeWorkspace(input) {
@@ -191,8 +223,11 @@ function customerPayload(row) {
   return {
     ...(row.payload || {}), id: row.id, name: row.full_name, email: row.email,
     phone: row.phone, status: row.status, licenseNumber: row.license_number,
-    licenseExpiry: row.license_expiry,
+    licenseExpiry: dateOnly(row.license_expiry),
     licenseVerificationStatus: row.license_verification_status,
+    licenseVerifiedAt: row.license_verified_at,
+    licenseVerifiedBy: row.license_verified_by,
+    licenseVerificationMethod: row.license_verification_method,
     version: row.version, createdAt: row.created_at, updatedAt: row.updated_at
   };
 }
@@ -284,9 +319,14 @@ router.get("/bootstrap", async (request, response, next) => {
       query(
         `SELECT account.id,account.email,account.display_name,account.first_name,
                 account.last_name,account.platform_role,account.status,account.avatar_url,
-                membership.role AS organization_role
+                membership.role AS organization_role,
+                app_membership.role AS app_role
          FROM backend_organization_memberships membership
          JOIN users account ON account.id=membership.user_id
+         LEFT JOIN app_memberships app_membership
+           ON app_membership.user_id=account.id
+          AND app_membership.app_id='goodfleet'
+          AND app_membership.status='active'
          WHERE membership.organization_id=$1 AND membership.status='active'
          ORDER BY account.display_name,account.email`,
         [org]
@@ -310,9 +350,9 @@ router.get("/bootstrap", async (request, response, next) => {
         email: member.email,
         phone: "",
         branchId: "",
-        role: member.platform_role === "owner" || member.organization_role === "owner"
+        role: member.platform_role === "owner" || member.organization_role === "owner" || member.app_role === "owner"
           ? "owner"
-          : member.platform_role === "manager" || member.organization_role === "admin"
+          : member.platform_role === "manager" || member.organization_role === "admin" || member.app_role === "manager" || member.app_role === "admin"
             ? "manager"
             : "staff",
         status: member.status === "active" ? "active" : "inactive",
@@ -326,16 +366,36 @@ router.post("/staff/invitations", async (request, response, next) => {
   try {
     const email = required(request.body?.email, "email", 320).toLowerCase();
     const requestedRole = text(request.body?.role, 40).toLowerCase();
-    const roleName = requestedRole === "owner"
+    const fleetRole = requestedRole === "owner"
       ? "owner"
       : requestedRole === "manager"
-        ? "admin"
-        : "user";
+        ? "manager"
+        : "staff";
+    const roleName = fleetRole === "owner" ? "owner" : fleetRole === "manager" ? "admin" : "user";
     const result = await teamsService.inviteTeamMemberForUser(
       actor(request),
       { email, roleName },
       { ipAddress: request.ip }
     );
+    if (result.memberAdded && result.member?.id) {
+      await query(
+        `INSERT INTO app_memberships (
+           user_id,app_id,role,status,organization_id,project_id,environment_id
+         ) VALUES ($1,'goodfleet',$2,'active',$3,'proj_goodos_platform','env_goodos_production')
+         ON CONFLICT (user_id,app_id) DO UPDATE SET
+           role=EXCLUDED.role,status='active',organization_id=EXCLUDED.organization_id,
+           project_id=EXCLUDED.project_id,environment_id=EXCLUDED.environment_id,updated_at=NOW()`,
+        [result.member.id, fleetRole, organization(request)]
+      );
+    } else if (result.invitation?.id) {
+      await query(
+        `UPDATE backend_user_invites
+         SET app_id='goodfleet',app_role=$2,organization_id=$3,
+             project_id='proj_goodos_platform',environment_id='env_goodos_production',updated_at=NOW()
+         WHERE id=$1`,
+        [result.invitation.id, fleetRole, organization(request)]
+      );
+    }
     response.status(result.memberAdded ? 200 : 201).json({
       success: true,
       data: {
@@ -350,11 +410,13 @@ router.post("/staff/invitations", async (request, response, next) => {
 router.patch("/staff/:userId", async (request, response, next) => {
   try {
     const requestedRole = text(request.body?.role, 40).toLowerCase();
-    const roleName = requestedRole === "owner"
+    const fleetRole = requestedRole === "owner"
       ? "owner"
       : requestedRole === "manager"
-        ? "admin"
-        : "user";
+        ? "manager"
+        : "staff";
+    const roleName = fleetRole === "owner" ? "owner" : fleetRole === "manager" ? "admin" : "user";
+    const membershipStatus = request.body?.status === "inactive" ? "disabled" : "active";
     await teamsService.updateTeamMemberForUser(
       actor(request),
       request.params.userId,
@@ -363,6 +425,15 @@ router.patch("/staff/:userId", async (request, response, next) => {
         status: request.body?.status === "inactive" ? "suspended" : "active"
       },
       { ipAddress: request.ip }
+    );
+    await query(
+      `INSERT INTO app_memberships (
+         user_id,app_id,role,status,organization_id,project_id,environment_id
+       ) VALUES ($1,'goodfleet',$2,$3,$4,'proj_goodos_platform','env_goodos_production')
+       ON CONFLICT (user_id,app_id) DO UPDATE SET
+         role=EXCLUDED.role,status=EXCLUDED.status,organization_id=EXCLUDED.organization_id,
+         project_id=EXCLUDED.project_id,environment_id=EXCLUDED.environment_id,updated_at=NOW()`,
+      [request.params.userId, fleetRole, membershipStatus, organization(request)]
     );
     response.json({ success: true, data: { updated: true } });
   } catch (error) { next(error); }
@@ -375,6 +446,12 @@ router.delete("/staff/:userId", async (request, response, next) => {
       request.params.userId,
       { roleName: "user", status: "removed" },
       { ipAddress: request.ip }
+    );
+    await query(
+      `UPDATE app_memberships
+       SET status='revoked',updated_at=NOW()
+       WHERE user_id=$1 AND app_id='goodfleet' AND organization_id=$2`,
+      [request.params.userId, organization(request)]
     );
     response.json({ success: true, data: { removed: true } });
   } catch (error) { next(error); }
@@ -469,9 +546,14 @@ router.post("/customers", async (request, response, next) => {
        VALUES ($1,$2,lower($3),$4,$5,$6,$7,$8,$9::jsonb,$10,$10) RETURNING *`,
       [organization(request), required(body.name, "name", 200), required(body.email, "email", 320),
         text(body.phone, 50) || null, enumValue(body.status || "active", CUSTOMER_STATUSES, "status"),
-        required(body.licenseNumber, "licenseNumber", 100), required(body.licenseExpiry, "licenseExpiry", 20),
-        enumValue(body.licenseVerificationStatus || "pending", LICENSE_STATUSES, "licenseVerificationStatus"),
-        JSON.stringify(body), actor(request)]
+        text(body.licenseNumber, 100) || null, text(body.licenseExpiry, 20) || null,
+        "pending", JSON.stringify({
+          ...body,
+          licenseVerificationStatus: "pending",
+          licenseVerifiedAt: null,
+          licenseVerifiedBy: null,
+          licenseVerificationMethod: null
+        }), actor(request)]
     );
     const customer = customerPayload(result.rows[0]);
     await audit(client, request, "customer.created", "customer", customer.id, null, customer);
@@ -502,9 +584,9 @@ router.post("/bookings", async (request, response, next) => {
     );
     if (!customerResult.rowCount) { await client.query("ROLLBACK"); return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found."); }
     const customer = customerResult.rows[0];
-    if (customer.status !== "active" || new Date(customer.license_expiry) < new Date(pickupAt)) {
+    if (customer.status !== "active") {
       await client.query("ROLLBACK");
-      return fail(response, 409, "DRIVER_NOT_ELIGIBLE", "Customer must be active with a license valid through pickup.");
+      return fail(response, 409, "CUSTOMER_NOT_ELIGIBLE", "Customer account must be active to create a reservation.");
     }
 
     if (body.carId) {
@@ -655,19 +737,37 @@ router.patch("/customers/:customerId", async (request, response, next) => {
     }
     const before = customerPayload(existing.rows[0]);
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
+    const licenseNumber = text(merged.licenseNumber, 100) || null;
+    const licenseExpiry = text(merged.licenseExpiry, 20) || null;
+    const licenseChanged = licenseNumber !== (existing.rows[0].license_number || null) ||
+      licenseExpiry !== dateOnly(existing.rows[0].license_expiry);
+    const verificationStatus = licenseChanged
+      ? "pending"
+      : existing.rows[0].license_verification_status;
+    const verifiedAt = licenseChanged ? null : existing.rows[0].license_verified_at;
+    const verifiedBy = licenseChanged ? null : existing.rows[0].license_verified_by;
+    const verificationMethod = licenseChanged ? null : existing.rows[0].license_verification_method;
+    const storedPayload = {
+      ...merged,
+      licenseNumber,
+      licenseExpiry,
+      licenseVerificationStatus: verificationStatus,
+      licenseVerifiedAt: verifiedAt,
+      licenseVerifiedBy: verifiedBy,
+      licenseVerificationMethod: verificationMethod
+    };
     const result = await client.query(
       `UPDATE fleet_customers SET
         full_name=$3,email=lower($4),phone=$5,status=$6,license_number=$7,
-        license_expiry=$8,license_verification_status=$9,payload=$10::jsonb,
-        version=version+1,updated_by=$11,updated_at=NOW()
+        license_expiry=$8,license_verification_status=$9,license_verified_at=$10,
+        license_verified_by=$11,license_verification_method=$12,payload=$13::jsonb,
+        version=version+1,updated_by=$14,updated_at=NOW()
        WHERE organization_id=$1 AND id=$2 RETURNING *`,
       [org, request.params.customerId, required(merged.name, "name", 200),
         required(merged.email, "email", 320), text(merged.phone, 50) || null,
         enumValue(merged.status || "active", CUSTOMER_STATUSES, "status"),
-        required(merged.licenseNumber, "licenseNumber", 100),
-        required(merged.licenseExpiry, "licenseExpiry", 20),
-        enumValue(merged.licenseVerificationStatus || "pending", LICENSE_STATUSES, "licenseVerificationStatus"),
-        JSON.stringify(merged), actor(request)]
+        licenseNumber, licenseExpiry, verificationStatus, verifiedAt, verifiedBy,
+        verificationMethod, JSON.stringify(storedPayload), actor(request)]
     );
     const customer = customerPayload(result.rows[0]);
     await audit(client, request, "customer.updated", "customer", customer.id, before, customer);
@@ -676,6 +776,65 @@ router.patch("/customers/:customerId", async (request, response, next) => {
   } catch (error) {
     await client.query("ROLLBACK");
     if (error.code === "23505") return fail(response, 409, "CUSTOMER_ALREADY_EXISTS", "Email or driver license already exists.");
+    next(error);
+  } finally { client.release(); }
+});
+
+router.post("/customers/:customerId/license-verification", requireLicenseVerifier, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const body = request.body || {};
+    const licenseNumber = required(body.licenseNumber, "licenseNumber", 100);
+    const licenseExpiry = required(body.licenseExpiry, "licenseExpiry", 20);
+    const expiry = new Date(`${licenseExpiry.slice(0, 10)}T23:59:59.999Z`);
+    if (Number.isNaN(expiry.getTime()) || expiry < new Date()) {
+      return fail(response, 400, "LICENSE_EXPIRED", "A current driver license is required for vehicle checkout.");
+    }
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM fleet_customers
+       WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+      [org, request.params.customerId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found.");
+    }
+    if (existing.rows[0].status !== "active") {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CUSTOMER_NOT_ELIGIBLE", "Only an active customer can be cleared for checkout.");
+    }
+    const before = customerPayload(existing.rows[0]);
+    const verifiedAt = new Date().toISOString();
+    const storedPayload = cleanPayload({
+      ...before,
+      licenseNumber,
+      licenseExpiry: licenseExpiry.slice(0, 10),
+      licenseVerificationStatus: "verified",
+      licenseVerifiedAt: verifiedAt,
+      licenseVerifiedBy: actor(request),
+      licenseVerificationMethod: "in_person"
+    });
+    const result = await client.query(
+      `UPDATE fleet_customers SET
+        license_number=$3,license_expiry=$4,license_verification_status='verified',
+        license_verified_at=$5,license_verified_by=$6,license_verification_method='in_person',
+        payload=$7::jsonb,version=version+1,updated_by=$6,updated_at=NOW()
+       WHERE organization_id=$1 AND id=$2 RETURNING *`,
+      [org, request.params.customerId, licenseNumber, licenseExpiry.slice(0, 10),
+        verifiedAt, actor(request), JSON.stringify(storedPayload)]
+    );
+    const customer = customerPayload(result.rows[0]);
+    await audit(client, request, "customer.license_verified", "customer", customer.id, before, {
+      ...customer,
+      details: "Government-issued driver license verified in person for vehicle checkout"
+    });
+    await client.query("COMMIT");
+    response.json({ success: true, data: customer });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23505") return fail(response, 409, "CUSTOMER_ALREADY_EXISTS", "Driver license already belongs to another customer.");
     next(error);
   } finally { client.release(); }
 });
@@ -760,6 +919,28 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         money(merged.paidAmount || 0, "paidAmount"), JSON.stringify(merged), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
+    if (booking.status === "checked_out" && booking.carId && before.status !== "checked_out") {
+      const vehicleBefore = await client.query(
+        `SELECT * FROM fleet_vehicles
+         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+        [org, booking.carId]
+      );
+      if (vehicleBefore.rowCount) {
+        await client.query(
+          `UPDATE fleet_vehicles
+           SET status='checked_out',version=version+1,updated_by=$3,updated_at=NOW()
+           WHERE organization_id=$1 AND id=$2`,
+          [org, booking.carId, actor(request)]
+        );
+        await audit(client, request, "vehicle.checked_out", "vehicle", booking.carId,
+          vehiclePayload(vehicleBefore.rows[0]), {
+            id: booking.carId,
+            status: "checked_out",
+            bookingId: booking.id,
+            details: `Vehicle released for reservation ${booking.reservationNumber}`
+          });
+      }
+    }
     await audit(client, request, "booking.updated", "booking", booking.id, before, booking);
     await client.query("COMMIT");
     response.json({ success: true, data: booking });
