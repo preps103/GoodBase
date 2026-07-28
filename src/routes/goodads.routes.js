@@ -6,6 +6,7 @@ const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { success, error } = require("../utils/response");
 const service = require("../services/goodads.service");
+const chatService = require("../services/goodads-chat.service");
 const social = require("../services/goodads-social.service");
 const payments = require("../services/goodads-payments.service");
 
@@ -25,6 +26,12 @@ const publicFormWriteLimiter = rateLimit({
 const generationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const chatMessageLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 240,
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
@@ -141,6 +148,58 @@ router.post("/public/payment-webhooks/:provider/:connectionId", paymentWebhookLi
 ));
 
 router.use(authRequired, tenantContext, requireGoodAdsAccess);
+
+router.get("/chat/channels", (req, res) => handle(res, "chat.channels", chatService.listChannels({
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/chat/channels", (req, res) => handle(res, "chat.channel.create", chatService.createChannel({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/chat/direct", (req, res) => handle(res, "chat.direct", chatService.openDirectChannel({
+  participantUserId: req.body?.participantUserId,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.get("/chat/members", (req, res) => handle(res, "chat.members", chatService.listMembers({
+  context: req.tenantContext,
+  search: req.query.search,
+  limit: req.query.limit,
+})));
+router.get("/chat/channels/:channelId/messages", (req, res) => handle(res, "chat.messages", chatService.listMessages({
+  channelId: req.params.channelId,
+  context: req.tenantContext,
+  userId: req.user.id,
+  limit: req.query.limit,
+  before: req.query.before,
+})));
+router.post("/chat/channels/:channelId/messages", chatMessageLimiter, (req, res) => handle(res, "chat.message.send", chatService.sendMessage({
+  channelId: req.params.channelId,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+})));
+router.patch("/chat/channels/:channelId/messages/:messageId", (req, res) => handle(res, "chat.message.edit", chatService.editMessage({
+  channelId: req.params.channelId,
+  messageId: req.params.messageId,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/chat/channels/:channelId/messages/:messageId", (req, res) => handle(res, "chat.message.delete", chatService.deleteMessage({
+  channelId: req.params.channelId,
+  messageId: req.params.messageId,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/chat/channels/:channelId/read", (req, res) => handle(res, "chat.read", chatService.markRead({
+  channelId: req.params.channelId,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
 
 router.get("/dashboard", (req, res) => handle(res, "dashboard", service.dashboard(req.tenantContext)));
 router.get("/workspace", (req, res) => handle(res, "workspace", service.workspace(req.tenantContext)));
