@@ -7,7 +7,8 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
-const version = "20260727-2";
+const version = "20260728-1";
+const safariFaviconPath = "/goodbase-favicon-20260728.ico";
 
 const htmlSurfaces = [
   "src/public/console.html",
@@ -26,8 +27,9 @@ test("every GoodBase HTML surface declares the canonical favicon and manifest", 
   for (const surface of htmlSurfaces) {
     const html = read(surface);
     for (const requiredTag of [
-      `<link rel="icon" href="/favicon.ico?v=${version}" sizes="any">`,
-      `<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=${version}">`,
+      `<link rel="icon" type="image/x-icon" sizes="16x16 32x32 48x48 64x64" href="${safariFaviconPath}">`,
+      `<link rel="shortcut icon" type="image/x-icon" href="${safariFaviconPath}">`,
+      `<link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg?v=${version}">`,
       `<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=${version}">`,
       `<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=${version}">`,
       `<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=${version}">`,
@@ -56,6 +58,10 @@ test("favicon endpoints return the branded asset instead of an empty response", 
   assert.match(
     routes,
     /router\.get\("\/favicon\.ico"[\s\S]*?image\/x-icon[\s\S]*?favicon\.ico/,
+  );
+  assert.match(
+    routes,
+    /router\.get\("\/goodbase-favicon-20260728\.ico"[\s\S]*?image\/x-icon[\s\S]*?favicon\.ico/,
   );
   for (const endpoint of [
     "/favicon-16x16.png",

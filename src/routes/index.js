@@ -408,6 +408,10 @@ router.get("/favicon.ico", (req, res) => {
   sendGoodBaseBrandAsset(res, "image/x-icon", "favicon.ico");
 });
 
+router.get("/goodbase-favicon-20260728.ico", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/x-icon", "favicon.ico");
+});
+
 router.get("/favicon-16x16.png", (req, res) => {
   sendGoodBaseBrandAsset(res, "image/png", "favicon-16x16.png");
 });
