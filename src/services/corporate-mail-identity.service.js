@@ -97,7 +97,6 @@ async function synchronizeCorporateIdentity({ email, password, user }) {
   const verified = await verifyGoodMailPassword(normalizedEmail, password);
   if (!verified) return null;
 
-  const passwordHash = await bcrypt.hash(password, 12);
   const client = await database.pool.connect();
 
   try {
@@ -121,30 +120,36 @@ async function synchronizeCorporateIdentity({ email, password, user }) {
       return null;
     }
 
-    const linkedAt = new Date().toISOString();
+    const verifiedAt = new Date().toISOString();
 
     if (account) {
+      const metadata =
+        account.auth_metadata_json &&
+        typeof account.auth_metadata_json === "object"
+          ? account.auth_metadata_json
+          : {};
+
       account = (
         await client.query(
           `
             UPDATE users
-            SET password_hash = $2,
-                password_updated_at = NOW(),
-                failed_login_count = 0,
+            SET failed_login_count = 0,
                 locked_until = NULL,
                 auth_metadata_json =
                   COALESCE(auth_metadata_json, '{}'::jsonb) ||
-                  $3::jsonb,
+                  $2::jsonb,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
           `,
           [
             account.id,
-            passwordHash,
             JSON.stringify({
               corporateMailboxLinked: true,
-              corporateMailboxLinkedAt: linkedAt,
+              corporateMailboxLinkedAt:
+                metadata.corporateMailboxLinkedAt || verifiedAt,
+              corporateMailboxLastVerifiedAt: verifiedAt,
+              corporateMailboxCredentialMode: "additional",
               requiresPasswordReset: false,
             }),
           ]
@@ -152,6 +157,7 @@ async function synchronizeCorporateIdentity({ email, password, user }) {
       ).rows[0];
     } else {
       const displayName = displayNameForEmail(normalizedEmail);
+      const passwordHash = await bcrypt.hash(password, 12);
       account = (
         await client.query(
           `
@@ -186,7 +192,9 @@ async function synchronizeCorporateIdentity({ email, password, user }) {
             JSON.stringify({
               registrationSource: "goodmail_identity_bridge",
               corporateMailboxLinked: true,
-              corporateMailboxLinkedAt: linkedAt,
+              corporateMailboxLinkedAt: verifiedAt,
+              corporateMailboxLastVerifiedAt: verifiedAt,
+              corporateMailboxCredentialMode: "primary",
             }),
           ]
         )

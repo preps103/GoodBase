@@ -31,3 +31,19 @@ test("GoodBase bridges verified GoodMail identities across every active applicat
   assert.match(auth, /synchronizeCorporateIdentity/);
   assert.match(auth, /ensureCorporateAppAccess\(email, user\.id\)/);
 });
+
+test("GoodMail verification never replaces an existing GoodBase password", () => {
+  const existingAccountBranch = service.slice(
+    service.indexOf("if (account) {"),
+    service.indexOf("} else {", service.indexOf("if (account) {"))
+  );
+  const newAccountBranch = service.slice(
+    service.indexOf("} else {", service.indexOf("if (account) {"))
+  );
+
+  assert.doesNotMatch(existingAccountBranch, /password_hash\s*=/i);
+  assert.doesNotMatch(existingAccountBranch, /password_updated_at\s*=/i);
+  assert.match(existingAccountBranch, /corporateMailboxCredentialMode:\s*"additional"/);
+  assert.match(newAccountBranch, /bcrypt\.hash\(password, 12\)/);
+  assert.match(newAccountBranch, /corporateMailboxCredentialMode:\s*"primary"/);
+});
