@@ -73,6 +73,7 @@
     "qrcode": "^1.5.4",
     "source-map": "0.8.0",
     "speakeasy": "^2.0.0",
+    "stripe": "22.3.2",
     "ws": "8.21.1"
   },
   "overrides": {

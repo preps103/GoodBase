@@ -10,6 +10,7 @@ const router = express.Router();
 router.use(authRequired);
 
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
+const MANAGEMENT_ROLES = new Set(["owner", "admin", "manager"]);
 const CUSTOMER_SEND_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const NOTIFICATION_CATEGORIES = new Set(["reservation", "payment", "trip", "support", "general"]);
 const NOTIFICATION_CHANNELS = new Set(["in_app", "email"]);
@@ -231,31 +232,37 @@ async function audit(client, request, action, entityType, entityId, after) {
 
 async function ensureDefaultChannels(client, request) {
   const defaults = [
-    ["operations", "Operations", "Daily reservations, handoffs, and branch coordination."],
-    ["front-desk", "Front desk", "Customer arrivals, departures, and reservation support."],
-    ["fleet-service", "Fleet & service", "Vehicle readiness, maintenance, and turnaround."],
+    ["operations", "Operations", "Daily reservations, handoffs, and branch coordination.", "workspace"],
+    ["front-desk", "Front desk", "Customer arrivals, departures, and reservation support.", "workspace"],
+    ["fleet-service", "Fleet & service", "Vehicle readiness, maintenance, and turnaround.", "workspace"],
+    ["management", "Management", "Private leadership planning, staffing, and operating decisions.", "management"],
   ];
-  for (const [slug, name, description] of defaults) {
+  for (const [slug, name, description, visibility] of defaults) {
     await client.query(
       `INSERT INTO fleet_chat_channels
-        (organization_id, channel_type, name, slug, description, created_by)
-       VALUES ($1,'group',$2,$3,$4,$5)
+        (organization_id, channel_type, name, slug, description, visibility, created_by)
+       VALUES ($1,'group',$2,$3,$4,$5,$6)
        ON CONFLICT (organization_id, slug) DO NOTHING`,
-      [organization(request), name, slug, description, request.user.id],
+      [organization(request), name, slug, description, visibility, request.user.id],
     );
   }
 }
 
 async function requireChannelAccess(client, request, channelId) {
+  const role = membershipRole(request);
   const result = await client.query(
     `SELECT channel.*
        FROM fleet_chat_channels channel
        LEFT JOIN fleet_chat_channel_members member
          ON member.channel_id=channel.id AND member.user_id=$3
       WHERE channel.organization_id=$1 AND channel.id=$2
-        AND (channel.channel_type='group' OR member.user_id IS NOT NULL)
+        AND (
+          (channel.channel_type='group' AND channel.visibility='workspace')
+          OR (channel.channel_type='group' AND channel.visibility='management' AND $4=ANY($5::text[]))
+          OR member.user_id IS NOT NULL
+        )
       LIMIT 1`,
-    [organization(request), channelId, request.user.id],
+    [organization(request), channelId, request.user.id, role, [...MANAGEMENT_ROLES]],
   );
   return result.rows[0] || null;
 }
@@ -301,7 +308,13 @@ router.get("/bootstrap", employeeScope, async (request, response, next) => {
                   ELSE channel.name
                 END AS name,
                 channel.slug, channel.description,
+                channel.visibility,
                 channel.channel_type AS "channelType", channel.updated_at AS "updatedAt",
+                (
+                  SELECT COUNT(*)::int
+                    FROM fleet_chat_channel_members member_count
+                   WHERE member_count.channel_id=channel.id
+                ) AS "memberCount",
                 COUNT(message.id)::int AS "messageCount",
                 COUNT(message.id) FILTER (
                   WHERE message.sender_id<>$2
@@ -316,10 +329,14 @@ router.get("/bootstrap", employeeScope, async (request, response, next) => {
            LEFT JOIN fleet_chat_messages message
              ON message.channel_id=channel.id AND message.deleted_at IS NULL
           WHERE channel.organization_id=$1
-            AND (channel.channel_type='group' OR membership.user_id IS NOT NULL)
+            AND (
+              (channel.channel_type='group' AND channel.visibility='workspace')
+              OR (channel.channel_type='group' AND channel.visibility='management' AND $3=ANY($4::text[]))
+              OR membership.user_id IS NOT NULL
+            )
           GROUP BY channel.id, read_state.last_read_at
           ORDER BY COALESCE(MAX(message.created_at), channel.updated_at) DESC`,
-        [organization(request), request.user.id],
+        [organization(request), request.user.id, membershipRole(request), [...MANAGEMENT_ROLES]],
       ),
       client.query(
         `SELECT users.id, users.display_name AS name, users.email,
@@ -343,6 +360,85 @@ router.get("/bootstrap", employeeScope, async (request, response, next) => {
         staff: staff.rows,
         currentUserId: request.user.id,
         canNotifyCustomers: CUSTOMER_SEND_ROLES.has(membershipRole(request)),
+        canCreateChannels: true,
+        canCreateManagementChannels: MANAGEMENT_ROLES.has(membershipRole(request)),
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/channels/group", employeeScope, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const name = clean(request.body?.name, 80);
+    const description = clean(request.body?.description, 240) || null;
+    const requestedVisibility = clean(request.body?.visibility || "private", 20);
+    const visibility = ["workspace", "management", "private"].includes(requestedVisibility)
+      ? requestedVisibility
+      : "private";
+    const requestedMembers = Array.isArray(request.body?.memberIds)
+      ? [...new Set(request.body.memberIds.map(value => clean(value, 80)).filter(Boolean))]
+      : [];
+    if (name.length < 2) {
+      return fail(response, 400, "CHANNEL_NAME_REQUIRED", "Enter a team conversation name.");
+    }
+    if (visibility === "management" && !MANAGEMENT_ROLES.has(membershipRole(request))) {
+      return fail(response, 403, "MANAGEMENT_CHANNEL_FORBIDDEN", "Only management can create a management conversation.");
+    }
+    const memberIds = [...new Set([request.user.id, ...requestedMembers])];
+    const members = await client.query(
+      `SELECT users.id
+         FROM backend_organization_memberships membership
+         JOIN users ON users.id=membership.user_id
+        WHERE membership.organization_id=$1
+          AND membership.status='active'
+          AND users.status='active'
+          AND users.id=ANY($2::uuid[])`,
+      [organization(request), memberIds],
+    );
+    if (members.rowCount !== memberIds.length) {
+      return fail(response, 400, "INVALID_CHANNEL_MEMBERS", "Every participant must be an active employee in this workspace.");
+    }
+    const baseSlug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48) || "team";
+    const slug = `${baseSlug}-${crypto.randomBytes(3).toString("hex")}`;
+    await client.query("BEGIN");
+    const inserted = await client.query(
+      `INSERT INTO fleet_chat_channels
+        (organization_id,channel_type,name,slug,description,visibility,created_by)
+       VALUES ($1,'group',$2,$3,$4,$5,$6)
+       RETURNING id,name,slug,description,visibility,
+                 channel_type AS "channelType",updated_at AS "updatedAt"`,
+      [organization(request), name, slug, description, visibility, request.user.id],
+    );
+    for (const memberId of memberIds) {
+      await client.query(
+        `INSERT INTO fleet_chat_channel_members (channel_id,user_id,membership_role)
+         VALUES ($1,$2,$3) ON CONFLICT (channel_id,user_id) DO NOTHING`,
+        [inserted.rows[0].id, memberId, memberId === request.user.id ? "owner" : "member"],
+      );
+    }
+    await audit(client, request, "chat.channel.created", "chat_channel", inserted.rows[0].id, {
+      name,
+      visibility,
+      memberCount: memberIds.length,
+    });
+    await client.query("COMMIT");
+    response.status(201).json({
+      success: true,
+      data: {
+        ...inserted.rows[0],
+        unreadCount: 0,
+        messageCount: 0,
+        memberCount: memberIds.length,
       },
     });
   } catch (error) {
@@ -376,10 +472,11 @@ router.post("/channels/direct", employeeScope, async (request, response, next) =
     await client.query("BEGIN");
     const result = await client.query(
       `INSERT INTO fleet_chat_channels
-        (organization_id,channel_type,name,slug,description,created_by)
-       VALUES ($1,'direct',$2,$3,'Private employee conversation',$4)
+        (organization_id,channel_type,name,slug,description,visibility,created_by)
+       VALUES ($1,'direct',$2,$3,'Private employee conversation','private',$4)
        ON CONFLICT (organization_id,slug) DO UPDATE SET updated_at=NOW()
-       RETURNING id,name,slug,description,channel_type AS "channelType",updated_at AS "updatedAt"`,
+       RETURNING id,name,slug,description,visibility,
+                 channel_type AS "channelType",updated_at AS "updatedAt"`,
       [organization(request), membership.rows[0].name, slug, request.user.id],
     );
     for (const userId of members) {
