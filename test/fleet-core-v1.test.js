@@ -118,6 +118,18 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(migration, /fleet_bookings_organization_id_id_v2_key/);
 });
 
+test("GoodFleet owner controls are durable and protected at the API boundary", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260728_goodfleet_vehicle_images_and_owner_settings_v3.sql");
+  assert.match(routes, /WORKSPACE_OBJECT_KEYS = new Set\(\["branding", "billingSettings", "ownerSettings"\]\)/);
+  assert.match(routes, /goodFleetAccessRole\(request\) !== "owner" && "ownerSettings" in state/);
+  assert.match(routes, /state\.ownerSettings = current\.rows\[0\]\?\.state_json\?\.ownerSettings \|\| \{\}/);
+  assert.match(migration, /2014-chevrolet-cruze-blue-metallic\.webp/);
+  assert.match(migration, /2014-hyundai-sonata-pearl-white\.webp/);
+  assert.match(migration, /Blue metallic glitter/);
+  assert.match(migration, /Pearl white/);
+});
+
 test("Fleet payments stay disabled without credentials and expose the complete provider workflow", () => {
   const routes = read("src/routes/fleet-payments.routes.js");
   const index = read("src/routes/index.js");

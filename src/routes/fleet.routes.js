@@ -19,7 +19,7 @@ const WORKSPACE_ARRAY_KEYS = new Set([
   "supportTickets", "rates", "seasonalAdjustments", "dynamicPricingInsights",
   "discounts", "fees", "expenses", "addons", "onboardingSteps"
 ]);
-const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings"]);
+const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings", "ownerSettings"]);
 const MAX_WORKSPACE_BYTES = 2 * 1024 * 1024;
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
 const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
@@ -567,6 +567,9 @@ router.put("/workspace", async (request, response, next) => {
       return fail(response, 409, "WORKSPACE_VERSION_CONFLICT", "Workspace changed in another session.", {
         currentVersion
       });
+    }
+    if (goodFleetAccessRole(request) !== "owner" && "ownerSettings" in state) {
+      state.ownerSettings = current.rows[0]?.state_json?.ownerSettings || {};
     }
     const saved = current.rowCount
       ? await client.query(
