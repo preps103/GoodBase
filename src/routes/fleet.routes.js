@@ -491,6 +491,7 @@ router.post("/bookings", async (request, response, next) => {
     const org = organization(request);
     const pickupAt = timestamp(body.startDate, body.pickupTime, "pickupAt");
     const returnAt = timestamp(body.endDate, body.dropoffTime, "returnAt");
+    const requestedVehicleId = text(body.requestedCarId || body.carId, 80);
     if (new Date(returnAt) <= new Date(pickupAt)) return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
     await client.query("BEGIN");
     if (body.carId) await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${body.carId}`]);
@@ -501,9 +502,9 @@ router.post("/bookings", async (request, response, next) => {
     );
     if (!customerResult.rowCount) { await client.query("ROLLBACK"); return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found."); }
     const customer = customerResult.rows[0];
-    if (customer.status !== "active" || customer.license_verification_status !== "verified" || new Date(customer.license_expiry) < new Date(pickupAt)) {
+    if (customer.status !== "active" || new Date(customer.license_expiry) < new Date(pickupAt)) {
       await client.query("ROLLBACK");
-      return fail(response, 409, "DRIVER_NOT_ELIGIBLE", "Customer must be active with a verified license valid through pickup.");
+      return fail(response, 409, "DRIVER_NOT_ELIGIBLE", "Customer must be active with a license valid through pickup.");
     }
 
     if (body.carId) {
@@ -516,6 +517,16 @@ router.post("/bookings", async (request, response, next) => {
       if (vehicle.status !== "available" || (vehicle.registration_expiry && new Date(vehicle.registration_expiry) < new Date(pickupAt)) || (vehicle.insurance_expiry && new Date(vehicle.insurance_expiry) < new Date(pickupAt))) {
         await client.query("ROLLBACK");
         return fail(response, 409, "VEHICLE_NOT_ELIGIBLE", "Vehicle is unavailable or has expired compliance documents.");
+      }
+    } else if (requestedVehicleId) {
+      const requestedVehicle = await client.query(
+        `SELECT id FROM fleet_vehicles
+         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+        [org, requestedVehicleId]
+      );
+      if (!requestedVehicle.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(response, 404, "VEHICLE_NOT_FOUND", "Requested vehicle not found.");
       }
     }
 
@@ -690,6 +701,27 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
     if (new Date(returnAt) <= new Date(pickupAt)) {
       await client.query("ROLLBACK");
       return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
+    }
+    if (merged.status === "checked_out") {
+      if (!merged.carId) {
+        await client.query("ROLLBACK");
+        return fail(response, 409, "VEHICLE_ASSIGNMENT_REQUIRED", "Assign an eligible vehicle before checkout.");
+      }
+      const customer = await client.query(
+        `SELECT status,license_verification_status,
+                (license_expiry IS NOT NULL AND license_expiry >= CURRENT_DATE) AS license_current
+           FROM fleet_customers
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+          FOR SHARE`,
+        [org, merged.customerId]
+      );
+      const renter = customer.rows[0];
+      if (!renter || renter.status !== "active" ||
+          renter.license_verification_status !== "verified" ||
+          !renter.license_current) {
+        await client.query("ROLLBACK");
+        return fail(response, 409, "ID_VERIFICATION_REQUIRED", "Verify a valid government-issued driver license before vehicle checkout.");
+      }
     }
     if (merged.carId && ACTIVE_BOOKING_STATUSES.includes(merged.status)) {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${merged.carId}`]);
