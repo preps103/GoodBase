@@ -80,6 +80,18 @@ const PROVIDER_ALIASES = {
   google_business: "google",
 };
 
+const PROVIDER_PUBLISH_CAPABILITIES = Object.freeze({
+  google: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  facebook: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
+  instagram: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  threads: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  linkedin: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
+  x: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
+  tiktok: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  pinterest: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  reddit: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
+});
+
 function socialError(message, statusCode = 400, code = "GOODADS_SOCIAL_ERROR") {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -279,8 +291,141 @@ async function disconnect({ context, userId, provider }) {
 function publicProviders() {
   return Object.keys(PROVIDERS).map((id) => {
     const config = providerConfig(id);
-    return { id, name: config.label, configured: config.configured, scopes: config.scopes };
+    return {
+      id,
+      name: config.label,
+      configured: config.configured,
+      scopes: config.scopes,
+      capabilities: PROVIDER_PUBLISH_CAPABILITIES[id],
+    };
   });
+}
+
+async function capabilities({ context, userId }) {
+  const connectionResult = await query(
+    `SELECT provider, COUNT(*)::int AS count
+     FROM goodads_social_connections
+     WHERE organization_id = $1 AND user_id = $2::uuid AND status = 'connected'
+     GROUP BY provider`,
+    [context.organizationId, userId]
+  );
+  const connectionCounts = new Map(
+    connectionResult.rows.map((row) => [String(row.provider), Number(row.count || 0)])
+  );
+  const providers = publicProviders().map((provider) => ({
+    ...provider,
+    connectedAccounts: connectionCounts.get(provider.id) || 0,
+  }));
+  const configuredTextProviders = providers
+    .filter((provider) => provider.configured && provider.capabilities.text)
+    .map((provider) => provider.id);
+  const connectedTextProviders = providers
+    .filter((provider) => provider.connectedAccounts > 0 && provider.capabilities.text)
+    .map((provider) => provider.id);
+
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    providers,
+    modules: {
+      socialConnections: {
+        available: true,
+        configuredProviders: providers.filter((provider) => provider.configured).map((provider) => provider.id),
+      },
+      immediateTextPublishing: {
+        available: configuredTextProviders.length > 0,
+        configuredProviders: configuredTextProviders,
+        connectedProviders: connectedTextProviders,
+        durableHistory: true,
+      },
+      scheduledPublishing: {
+        available: false,
+        reason: "Durable scheduling and background delivery are not installed.",
+      },
+      mediaPublishing: {
+        available: false,
+        reason: "Provider media upload adapters are not installed.",
+      },
+      paidAdvertising: {
+        available: false,
+        reason: "Paid-ad provider campaign adapters are not installed.",
+        supportedProviders: [],
+      },
+      inboundEngagement: {
+        available: false,
+        reason: "Provider comment and direct-message ingestion is not installed.",
+      },
+      providerAnalytics: {
+        available: false,
+        reason: "Provider performance ingestion is not installed.",
+      },
+      aiTextGeneration: {
+        available: Boolean(
+          process.env.GOODADS_GEMINI_API_KEY
+          || process.env.GEMINI_API_KEY
+          || process.env.GOOGLE_AI_API_KEY
+        ),
+      },
+      leadCapture: { available: true },
+      payments: { available: true },
+      teamChat: { available: true, realtime: false },
+    },
+  };
+}
+
+function serializePublishJob(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    content: row.content || {},
+    requestedProviders: row.requested_providers || [],
+    results: row.results || [],
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+  };
+}
+
+async function listPublishJobs({ context, userId, limit = 25, offset = 0, status }) {
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 25, 1), 100);
+  const safeOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
+  const values = [context.organizationId, userId, safeLimit, safeOffset];
+  let statusClause = "";
+  if (status) {
+    values.push(String(status).toLowerCase());
+    statusClause = ` AND status = $${values.length}`;
+  }
+  const result = await query(
+    `SELECT id, status, content, requested_providers, results, created_at, started_at, completed_at
+     FROM goodads_publish_jobs
+     WHERE organization_id = $1 AND user_id = $2::uuid${statusClause}
+     ORDER BY created_at DESC
+     LIMIT $3 OFFSET $4`,
+    values
+  );
+  return result.rows.map(serializePublishJob);
+}
+
+async function getPublishJob({ context, userId, id }) {
+  const result = await query(
+    `SELECT id, status, content, requested_providers, results, created_at, started_at, completed_at
+     FROM goodads_publish_jobs
+     WHERE id = $1::uuid AND organization_id = $2 AND user_id = $3::uuid`,
+    [id, context.organizationId, userId]
+  );
+  if (!result.rows[0]) {
+    throw socialError("Publishing job was not found.", 404, "GOODADS_PUBLISH_JOB_NOT_FOUND");
+  }
+  return serializePublishJob(result.rows[0]);
+}
+
+function rejectPaidCampaignLaunch() {
+  throw socialError(
+    "Paid campaign launch is unavailable until a real ad-provider adapter is configured. The campaign remains saved and ready for launch.",
+    503,
+    "GOODADS_AD_PROVIDER_NOT_READY"
+  );
 }
 
 async function loadConnectionTokens({ context, userId, providers }) {
@@ -350,7 +495,7 @@ async function publish({ context, userId, idempotencyKey, providers, content }) 
     `SELECT * FROM goodads_publish_jobs WHERE organization_id = $1 AND idempotency_key = $2`,
     [context.organizationId, idempotencyKey]
   );
-  if (existing.rows[0]) return existing.rows[0];
+  if (existing.rows[0]) return serializePublishJob(existing.rows[0]);
   const inserted = await query(
     `INSERT INTO goodads_publish_jobs (
        organization_id, user_id, idempotency_key, content, requested_providers, status, started_at
@@ -381,18 +526,23 @@ async function publish({ context, userId, idempotencyKey, providers, content }) 
      WHERE id = $3::uuid RETURNING *`,
     [status, JSON.stringify(results), inserted.rows[0].id]
   );
-  return updated.rows[0];
+  return serializePublishJob(updated.rows[0]);
 }
 
 module.exports = {
   PROVIDERS,
+  PROVIDER_PUBLISH_CAPABILITIES,
   providerConfig,
   encrypt,
   decrypt,
   publicProviders,
+  capabilities,
   beginAuthorization,
   completeAuthorization,
   listConnections,
   disconnect,
+  listPublishJobs,
+  getPublishJob,
+  rejectPaidCampaignLaunch,
   publish,
 };

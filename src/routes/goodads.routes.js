@@ -204,6 +204,10 @@ router.post("/chat/channels/:channelId/read", (req, res) => handle(res, "chat.re
 router.get("/dashboard", (req, res) => handle(res, "dashboard", service.dashboard(req.tenantContext)));
 router.get("/workspace", (req, res) => handle(res, "workspace", service.workspace(req.tenantContext)));
 router.get("/workspace/brand", (req, res) => handle(res, "brand", service.listResources({ type: "brand", context: req.tenantContext, limit: 1 })));
+router.get("/capabilities", (req, res) => handle(res, "capabilities", social.capabilities({
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
 router.get("/connections/providers", (_req, res) => success(res, { data: social.publicProviders() }));
 router.get("/connections", (req, res) => handle(res, "connections.list", social.listConnections({
   context: req.tenantContext,
@@ -242,6 +246,18 @@ router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", s
   idempotencyKey: req.get("Idempotency-Key"),
   providers: req.body?.providers,
   content: req.body?.content,
+})));
+router.get("/publishing/jobs", (req, res) => handle(res, "publishing.list", social.listPublishJobs({
+  context: req.tenantContext,
+  userId: req.user.id,
+  limit: req.query.limit,
+  offset: req.query.offset,
+  status: req.query.status,
+})));
+router.get("/publishing/jobs/:id", (req, res) => handle(res, "publishing.get", social.getPublishJob({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
 })));
 router.get("/payments/providers", (req, res) => handle(res, "payments.providers", payments.listProviders({
   context: req.tenantContext,
@@ -353,14 +369,9 @@ function registerResource(path, type) {
   ["brand", "brand"],
 ].forEach(([path, type]) => registerResource(path, type));
 
-router.post("/campaigns/:id/launch", (req, res) => handle(res, "campaign.launch", service.transitionResource({
-  type: "campaigns",
-  id: req.params.id,
-  nextStatus: "active",
-  context: req.tenantContext,
-  userId: req.user.id,
-  eventType: "campaigns.launched",
-})));
+router.post("/campaigns/:id/launch", (_req, res) => (
+  handle(res, "campaign.launch", Promise.resolve().then(() => social.rejectPaidCampaignLaunch()))
+));
 
 router.post("/funnels/:id/publish", (req, res) => handle(res, "funnel.publish", service.transitionResource({
   type: "funnels",
