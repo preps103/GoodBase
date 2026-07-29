@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const { query } = require("../config/database");
+const { scanPublicWebsite } = require("./goodads-competitor-scanner.service");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MANAGEMENT_ROLES = new Set(["owner", "admin", "manager"]);
@@ -486,7 +487,21 @@ function textFrom(item, keys) {
   return "";
 }
 
-function normalizeProviderMetrics(payloads) {
+function latestMetric(payload, keys) {
+  const rows = extractRows(payload);
+  for (const item of [...rows].reverse()) {
+    const value = numberFrom(item, keys);
+    if (value) return value;
+  }
+  const direct = numberFrom(payload, keys);
+  return direct || 0;
+}
+
+function mapRows(payload, mapper, limit = 50) {
+  return extractRows(payload).map(mapper).filter(Boolean).slice(0, limit);
+}
+
+function normalizeProviderMetrics(payloads, datasets = {}) {
   const ppcRows = extractRows(payloads.ppcSpend);
   const competitorRows = extractRows(payloads.paidCompetitors);
   const publisherRows = extractRows(payloads.publishers);
@@ -496,6 +511,21 @@ function normalizeProviderMetrics(payloads) {
   ]), 0), 0);
   return {
     methodology: "Licensed Similarweb API estimates. These values are not advertiser-verified results.",
+    source: {
+      provider: "similarweb",
+      provenance: "licensed_api",
+      confidence: "estimated",
+    },
+    datasets,
+    engagement: {
+      visits: latestMetric(payloads.visits, ["visits", "value", "total_visits"]),
+      uniqueVisitors: latestMetric(payloads.uniqueVisitors, ["unique_visitors", "uniqueVisitors", "value"]),
+      pagesPerVisit: latestMetric(payloads.pagesPerVisit, ["pages_per_visit", "pagesPerVisit", "value"]),
+      averageVisitDuration: latestMetric(payloads.averageVisitDuration, [
+        "average_visit_duration", "averageVisitDuration", "duration", "value",
+      ]),
+      bounceRate: latestMetric(payloads.bounceRate, ["bounce_rate", "bounceRate", "value"]),
+    },
     ppcSpend: {
       total: ppcTotal,
       currency: textFrom(ppcRows[0] || {}, ["currency", "currency_code"]) || "USD",
@@ -514,6 +544,80 @@ function normalizeProviderMetrics(payloads) {
       name: textFrom(item, ["name", "network", "domain", "ad_network"]),
       share: numberFrom(item, ["share", "traffic_share", "trafficShare", "percentage"]),
     })).filter((item) => item.name).slice(0, 50),
+    marketingChannels: mapRows(payloads.marketingChannels, (item) => {
+      const channel = textFrom(item, ["source_type", "channel", "source", "name"]);
+      return channel ? {
+        channel,
+        share: numberFrom(item, ["share", "traffic_share", "trafficShare", "percentage", "value"]),
+        visits: numberFrom(item, ["visits", "traffic", "volume"]),
+      } : null;
+    }),
+    countries: mapRows(payloads.geography, (item) => {
+      const country = textFrom(item, ["country", "country_code", "countryCode", "name"]);
+      return country ? {
+        country,
+        share: numberFrom(item, ["share", "traffic_share", "trafficShare", "percentage"]),
+        visits: numberFrom(item, ["visits", "traffic", "value"]),
+      } : null;
+    }),
+    referrals: mapRows(payloads.referrals, (item) => {
+      const domain = textFrom(item, ["domain", "website", "site", "referral"]);
+      return domain ? {
+        domain,
+        share: numberFrom(item, ["share", "traffic_share", "trafficShare", "percentage"]),
+        visits: numberFrom(item, ["visits", "traffic", "value"]),
+      } : null;
+    }),
+    mobileReferrals: mapRows(payloads.mobileReferrals, (item) => {
+      const domain = textFrom(item, ["domain", "website", "site", "referral"]);
+      return domain ? {
+        domain,
+        share: numberFrom(item, ["share", "traffic_share", "trafficShare", "percentage"]),
+      } : null;
+    }),
+    socialSources: mapRows(payloads.social, (item) => {
+      const source = textFrom(item, ["source", "social_network", "network", "name", "domain"]);
+      return source ? {
+        source,
+        share: numberFrom(item, ["share", "traffic_share", "trafficShare", "percentage", "value"]),
+        visits: numberFrom(item, ["visits", "traffic"]),
+      } : null;
+    }),
+    keywords: mapRows(payloads.keywords, (item) => {
+      const keyword = textFrom(item, ["keyword", "search_term", "term", "name"]);
+      return keyword ? {
+        keyword,
+        clicks: numberFrom(item, ["clicks", "estimated_clicks", "value"]),
+        share: numberFrom(item, ["share", "traffic_share", "trafficShare"]),
+        volume: numberFrom(item, ["volume", "search_volume"]),
+        cpc: numberFrom(item, ["cpc", "cost_per_click"]),
+        position: numberFrom(item, ["position", "rank"]),
+        intent: textFrom(item, ["intent", "search_intent"]),
+        topUrl: textFrom(item, ["url", "top_url", "landing_page"]),
+      } : null;
+    }, 100),
+    technologies: mapRows(payloads.technologies, (item) => {
+      const name = textFrom(item, ["technology", "name", "tech_name", "product"]);
+      return name ? {
+        name,
+        category: textFrom(item, ["category", "category_name", "parent_category"]),
+      } : null;
+    }, 100),
+    demographics: mapRows(payloads.demographics, (item) => {
+      const group = textFrom(item, ["age_group", "group", "name", "gender"]);
+      return group ? {
+        group,
+        share: numberFrom(item, ["share", "percentage", "value"]),
+        gender: textFrom(item, ["gender"]),
+      } : null;
+    }),
+    audienceInterests: mapRows(payloads.audienceInterests, (item) => {
+      const domain = textFrom(item, ["domain", "website", "site", "name"]);
+      return domain ? {
+        domain,
+        affinity: numberFrom(item, ["affinity", "score", "share", "value"]),
+      } : null;
+    }),
   };
 }
 
@@ -569,6 +673,16 @@ async function similarwebRequest(pathname, parameters = {}) {
 }
 
 async function fetchSimilarweb(domain, country) {
+  if (!boundedText(process.env.GOODADS_SIMILARWEB_API_KEY, 2000)) {
+    return {
+      configured: false,
+      payloads: {},
+      datasets: {
+        status: "not_configured",
+        message: "Add a licensed Similarweb API key in GoodBase to enable estimated market data.",
+      },
+    };
+  }
   const end = new Date();
   const start = new Date(end.getTime() - 89 * 86400000);
   const common = {
@@ -580,13 +694,49 @@ async function fetchSimilarweb(domain, country) {
     format: "json",
   };
   const encodedDomain = encodeURIComponent(domain);
-  const [ppcSpend, paidCompetitors, publishers, adNetworks] = await Promise.all([
-    similarwebRequest(`/v1/website/${encodedDomain}/ppc-spend/total`, common),
-    similarwebRequest(`/v4/website/${encodedDomain}/search-competitors/paidsearchcompetitors`, common),
-    similarwebRequest(`/v4/website/${encodedDomain}/traffic-sources/publishers`, common),
-    similarwebRequest(`/v4/website/${encodedDomain}/traffic-sources/ad-networks`, common),
-  ]);
-  return { ppcSpend, paidCompetitors, publishers, adNetworks };
+  const definitions = {
+    visits: [`/v1/website/${encodedDomain}/total-traffic-and-engagement/visits`, common],
+    uniqueVisitors: [`/v1/website/${encodedDomain}/total-traffic-and-engagement/unique-visitors`, common],
+    pagesPerVisit: [`/v1/website/${encodedDomain}/total-traffic-and-engagement/pages-per-visit`, common],
+    averageVisitDuration: [`/v1/website/${encodedDomain}/total-traffic-and-engagement/average-visit-duration`, common],
+    bounceRate: [`/v1/website/${encodedDomain}/total-traffic-and-engagement/bounce-rate`, common],
+    marketingChannels: [`/v4/website/${encodedDomain}/traffic-sources/overview`, common],
+    geography: [`/v4/website/${encodedDomain}/geo/traffic-by-country`, common],
+    referrals: [`/v4/website/${encodedDomain}/traffic-sources/referrals`, common],
+    mobileReferrals: [`/v4/website/${encodedDomain}/traffic-sources/mobileweb-referrals`, common],
+    social: [`/v4/website/${encodedDomain}/traffic-sources/social`, common],
+    keywords: ["/v4/website-analysis/keywords", { ...common, website: domain }],
+    technologies: [`/v4/website/${encodedDomain}/technographics/all`, { country }],
+    demographics: [`/v4/website/${encodedDomain}/demographics_v2/groups`, common],
+    audienceInterests: [`/v4/website/${encodedDomain}/total-audience-interests/also-visited`, common],
+    ppcSpend: [`/v1/website/${encodedDomain}/ppc-spend/total`, common],
+    paidCompetitors: [`/v4/website/${encodedDomain}/search-competitors/paidsearchcompetitors`, common],
+    publishers: [`/v4/website/${encodedDomain}/traffic-sources/publishers`, common],
+    adNetworks: [`/v4/website/${encodedDomain}/traffic-sources/ad-networks`, common],
+  };
+  const selected = boundedText(process.env.GOODADS_SIMILARWEB_DATASETS, 2000)
+    .split(",").map((item) => item.trim()).filter(Boolean);
+  const entries = Object.entries(definitions).filter(([name]) => !selected.length || selected.includes(name));
+  const results = await Promise.allSettled(entries.map(([, [pathname, parameters]]) => (
+    similarwebRequest(pathname, parameters)
+  )));
+  const payloads = {};
+  const datasets = {};
+  entries.forEach(([name], index) => {
+    const result = results[index];
+    if (result.status === "fulfilled") {
+      payloads[name] = result.value;
+      datasets[name] = { status: "completed" };
+      return;
+    }
+    datasets[name] = {
+      status: result.reason?.statusCode === 409 ? "not_in_subscription" : "failed",
+      code: boundedText(result.reason?.code, 120),
+      message: boundedText(result.reason?.message, 500),
+      retryable: result.reason?.retryable === true,
+    };
+  });
+  return { configured: true, payloads, datasets };
 }
 
 function compactProviderPayload(payloads) {
@@ -600,56 +750,143 @@ function compactProviderPayload(payloads) {
   return compact;
 }
 
+async function previousFingerprint(competitorId, sourceProvider) {
+  const result = await query(
+    `SELECT fingerprint FROM goodads_competitor_snapshots
+     WHERE competitor_id=$1 AND source_provider=$2 AND status IN ('completed','partial')
+     ORDER BY captured_at DESC LIMIT 1`,
+    [competitorId, sourceProvider]
+  );
+  return result.rows[0]?.fingerprint || null;
+}
+
+async function storeSnapshot({ competitor, organizationId, sourceProvider, status, metrics = {}, payload = {}, fingerprint = null, error = null }) {
+  await query(
+    `INSERT INTO goodads_competitor_snapshots (
+       competitor_id, organization_id, source_provider, country, status,
+       metrics, provider_payload, fingerprint, error_message
+     ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)`,
+    [
+      competitor.id, organizationId, sourceProvider, competitor.country, status,
+      JSON.stringify(metrics), JSON.stringify(compactProviderPayload(payload)), fingerprint,
+      error ? boundedText(error.message || error, 2000) : null,
+    ]
+  );
+}
+
+async function recordChangeAlert({ competitor, organizationId, sourceProvider, previous, fingerprint }) {
+  if (!previous || previous === fingerprint) return;
+  const publicChange = sourceProvider === "public_web";
+  await query(
+    `INSERT INTO goodads_competitor_alerts (
+       competitor_id, organization_id, alert_type, severity, title, description, details
+     ) VALUES ($1,$2,$3,'notice',$4,$5,$6::jsonb)`,
+    [
+      competitor.id,
+      organizationId,
+      publicChange ? "site_change" : "strategy_change",
+      `${competitor.display_name} ${publicChange ? "website" : "market intelligence"} changed`,
+      publicChange
+        ? "Public messaging, offers, calls to action, technology, or monitored page content changed."
+        : "Licensed traffic, acquisition, search, audience, technology, or advertising estimates changed.",
+      JSON.stringify({ sourceProvider, previousFingerprint: previous, fingerprint }),
+    ]
+  );
+}
+
 async function performSync({ competitor, organizationId }) {
-  try {
-    const providerPayload = await fetchSimilarweb(competitor.domain, competitor.country);
-    const metrics = normalizeProviderMetrics(providerPayload);
+  const capturedAt = new Date().toISOString();
+  const outcomes = {};
+  const [publicResult, licensedResult] = await Promise.allSettled([
+    scanPublicWebsite(competitor.domain),
+    fetchSimilarweb(competitor.domain, competitor.country),
+  ]);
+
+  if (publicResult.status === "fulfilled") {
+    const metrics = publicResult.value;
+    const fingerprint = metrics.fingerprint;
+    const previous = await previousFingerprint(competitor.id, "public_web");
+    await storeSnapshot({
+      competitor, organizationId, sourceProvider: "public_web", status: "completed",
+      metrics, payload: { pages: metrics.crawl?.pages || [] }, fingerprint,
+    });
+    await recordChangeAlert({
+      competitor, organizationId, sourceProvider: "public_web", previous, fingerprint,
+    });
+    outcomes.publicWeb = { status: "completed", metrics };
+  } else {
+    await storeSnapshot({
+      competitor, organizationId, sourceProvider: "public_web", status: "failed",
+      error: publicResult.reason,
+    }).catch(() => {});
+    outcomes.publicWeb = {
+      status: "failed",
+      code: boundedText(publicResult.reason?.code, 120),
+      message: boundedText(publicResult.reason?.message, 1000),
+      retryable: publicResult.reason?.retryable === true,
+    };
+  }
+
+  if (licensedResult.status === "fulfilled" && licensedResult.value.configured) {
+    const { payloads, datasets } = licensedResult.value;
+    const completedCount = Object.values(datasets).filter((item) => item.status === "completed").length;
+    const failedCount = Object.keys(datasets).length - completedCount;
+    const metrics = normalizeProviderMetrics(payloads, datasets);
     const fingerprint = crypto.createHash("sha256").update(JSON.stringify(metrics)).digest("hex");
-    const previous = await query(
-      `SELECT fingerprint FROM goodads_competitor_snapshots
-       WHERE competitor_id=$1 AND status='completed'
-       ORDER BY captured_at DESC LIMIT 1`,
-      [competitor.id]
-    );
-    await query(
-      `INSERT INTO goodads_competitor_snapshots (
-         competitor_id, organization_id, source_provider, country, status,
-         metrics, provider_payload, fingerprint
-       ) VALUES ($1,$2,'similarweb',$3,'completed',$4::jsonb,$5::jsonb,$6)`,
-      [competitor.id, organizationId, competitor.country, JSON.stringify(metrics),
-        JSON.stringify(compactProviderPayload(providerPayload)), fingerprint]
-    );
-    await query(
-      `UPDATE goodads_competitors SET last_synced_at=NOW(), updated_at=NOW() WHERE id=$1`,
-      [competitor.id]
-    );
-    if (previous.rows[0]?.fingerprint && previous.rows[0].fingerprint !== fingerprint) {
-      await query(
-        `INSERT INTO goodads_competitor_alerts (
-           competitor_id, organization_id, alert_type, severity, title, description, details
-         ) VALUES ($1,$2,'strategy_change','notice',$3,$4,$5::jsonb)`,
-        [competitor.id, organizationId, `${competitor.display_name} intelligence changed`,
-          "Licensed paid-search, publisher, ad-network, or spend signals changed since the prior snapshot.",
-          JSON.stringify({ previousFingerprint: previous.rows[0].fingerprint, fingerprint })]
-      );
+    const previous = await previousFingerprint(competitor.id, "similarweb");
+    const status = completedCount && failedCount ? "partial" : completedCount ? "completed" : "failed";
+    await storeSnapshot({
+      competitor, organizationId, sourceProvider: "similarweb", status,
+      metrics, payload: payloads, fingerprint,
+      error: completedCount ? null : "No licensed Similarweb dataset was available for this account.",
+    });
+    if (completedCount) {
+      await recordChangeAlert({
+        competitor, organizationId, sourceProvider: "similarweb", previous, fingerprint,
+      });
     }
-    return { status: "completed", capturedAt: new Date().toISOString(), metrics };
-  } catch (error) {
-    await query(
-      `INSERT INTO goodads_competitor_snapshots (
-         competitor_id, organization_id, source_provider, country, status, error_message
-       ) VALUES ($1,$2,'similarweb',$3,'failed',$4)`,
-      [competitor.id, organizationId, competitor.country, boundedText(error.message, 2000)]
-    ).catch(() => {});
+    outcomes.similarweb = { status, completedDatasets: completedCount, unavailableDatasets: failedCount, metrics };
+  } else if (licensedResult.status === "fulfilled") {
+    outcomes.similarweb = licensedResult.value.datasets;
+  } else {
+    await storeSnapshot({
+      competitor, organizationId, sourceProvider: "similarweb", status: "failed",
+      error: licensedResult.reason,
+    }).catch(() => {});
+    outcomes.similarweb = {
+      status: "failed",
+      code: boundedText(licensedResult.reason?.code, 120),
+      message: boundedText(licensedResult.reason?.message, 1000),
+      retryable: licensedResult.reason?.retryable === true,
+    };
+  }
+
+  const successful = outcomes.publicWeb?.status === "completed"
+    || ["completed", "partial"].includes(outcomes.similarweb?.status);
+  await query(
+    `UPDATE goodads_competitors SET last_synced_at=NOW(), updated_at=NOW() WHERE id=$1`,
+    [competitor.id]
+  );
+  if (!successful) {
+    const message = outcomes.publicWeb?.message || outcomes.similarweb?.message || "No competitor source completed.";
     await query(
       `INSERT INTO goodads_competitor_alerts (
          competitor_id, organization_id, alert_type, severity, title, description, details
        ) VALUES ($1,$2,'sync_failed','warning',$3,$4,$5::jsonb)`,
-      [competitor.id, organizationId, `${competitor.display_name} sync needs attention`,
-        boundedText(error.message, 2000), JSON.stringify({ retryable: error.retryable === true })]
+      [
+        competitor.id, organizationId, `${competitor.display_name} scan needs attention`,
+        boundedText(message, 2000), JSON.stringify(outcomes),
+      ]
     ).catch(() => {});
-    throw error;
+    throw intelligenceError(message, 502, "GOODADS_COMPETITOR_SCAN_FAILED", true);
   }
+  return {
+    status: outcomes.publicWeb?.status === "completed" && ["completed", "partial", "not_configured"].includes(outcomes.similarweb?.status)
+      ? "completed"
+      : "partial",
+    capturedAt,
+    sources: outcomes,
+  };
 }
 
 async function syncCompetitor({ id, context }) {
@@ -667,9 +904,6 @@ async function syncCompetitor({ id, context }) {
 }
 
 async function syncDueCompetitors(limit = 10) {
-  if (!boundedText(process.env.GOODADS_SIMILARWEB_API_KEY, 2000)) {
-    return { skipped: true, reason: "Licensed Similarweb API is not configured.", attempted: 0, results: [] };
-  }
   const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 25);
   const result = await query(
     `SELECT * FROM goodads_competitors
@@ -693,6 +927,57 @@ async function syncDueCompetitors(limit = 10) {
     }
   }
   return { skipped: false, attempted: outcomes.length, results: outcomes };
+}
+
+async function getIntelligence({ id, context }) {
+  const competitor = await getCompetitor({ id, context });
+  const [latest, history] = await Promise.all([
+    query(
+      `SELECT DISTINCT ON (source_provider)
+         id, source_provider, status, metrics, error_message, captured_at
+       FROM goodads_competitor_snapshots
+       WHERE competitor_id=$1 AND organization_id=$2
+       ORDER BY source_provider, captured_at DESC`,
+      [competitor.id, context.organizationId]
+    ),
+    query(
+      `SELECT id, source_provider, status, fingerprint, error_message, captured_at
+       FROM goodads_competitor_snapshots
+       WHERE competitor_id=$1 AND organization_id=$2
+       ORDER BY captured_at DESC LIMIT 30`,
+      [competitor.id, context.organizationId]
+    ),
+  ]);
+  const sources = {};
+  for (const row of latest.rows) {
+    sources[row.source_provider === "public_web" ? "publicWeb" : row.source_provider] = {
+      id: row.id,
+      status: row.status,
+      metrics: row.metrics || {},
+      error: row.error_message,
+      capturedAt: row.captured_at,
+    };
+  }
+  if (!sources.similarweb && !boundedText(process.env.GOODADS_SIMILARWEB_API_KEY, 2000)) {
+    sources.similarweb = {
+      status: "not_configured",
+      metrics: {},
+      error: "Add a licensed Similarweb API key in GoodBase to enable estimated traffic and market data.",
+      capturedAt: null,
+    };
+  }
+  return {
+    competitor,
+    sources,
+    history: history.rows.map((row) => ({
+      id: row.id,
+      sourceProvider: row.source_provider,
+      status: row.status,
+      fingerprint: row.fingerprint,
+      error: row.error_message,
+      capturedAt: row.captured_at,
+    })),
+  };
 }
 
 async function listAlerts({ context, limit = 50 }) {
@@ -823,8 +1108,19 @@ function capabilities() {
       available: true,
       durableHistory: true,
       monitoringAlerts: true,
+      publicWebsiteScanner: true,
+      publicWebsiteScannerLimits: {
+        pagesPerScan: 8,
+        authenticatedContent: false,
+        robotsExclusionsRespected: true,
+      },
       licensedProvider: "similarweb",
       licensedProviderConfigured: similarwebConfigured,
+      licensedDatasets: [
+        "engagement", "marketing_channels", "geography", "referrals", "mobile_referrals",
+        "social", "keywords", "technologies", "demographics", "audience_interests",
+        "ppc_spend", "paid_competitors", "publishers", "ad_networks",
+      ],
       researchSources: [
         "google_transparency", "meta_library", "tiktok_creative_center", "linkedin_ad_library",
       ],
@@ -840,6 +1136,7 @@ module.exports = {
   getCompetitor,
   saveCompetitor,
   archiveCompetitor,
+  getIntelligence,
   listCreatives,
   saveCreative,
   archiveCreative,
