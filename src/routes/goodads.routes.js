@@ -637,6 +637,14 @@ router.get("/competitor-intelligence/competitors/:id", (req, res) => handle(
     context: req.tenantContext,
   })
 ));
+router.get("/competitor-intelligence/competitors/:id/intelligence", (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.intelligence",
+  competitorIntelligence.getIntelligence({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
 router.put("/competitor-intelligence/competitors/:id", (req, res) => handle(
   res,
   "competitor-intelligence.competitors.update",
@@ -661,6 +669,7 @@ router.post("/competitor-intelligence/competitors/:id/sync", publishingLimiter, 
   competitorIntelligence.syncCompetitor({
     id: req.params.id,
     context: req.tenantContext,
+    userId: req.user.id,
   })
 ));
 router.get("/competitor-intelligence/creatives", (req, res) => handle(
