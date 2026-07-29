@@ -95,6 +95,7 @@ router.get("/availability", async (request, response, next) => {
               listing.delivery_radius_miles,listing.delivery_fee,
               listing.minimum_trip_days,listing.maximum_trip_days,
               listing.advance_notice_hours,listing.mileage_limit_per_day,
+              listing.photos_json,listing.availability_json,
               host.user_id AS host_user_id,
               COALESCE(host.display_name,'GoodFleet') AS host_name,
               COALESCE(review_summary.rating,0) AS host_rating,
@@ -142,6 +143,27 @@ router.get("/availability", async (request, response, next) => {
          ) >= listing.advance_notice_hours
          AND CEIL(EXTRACT(EPOCH FROM ($3::timestamptz-$2::timestamptz)) / 86400)
            BETWEEN listing.minimum_trip_days AND listing.maximum_trip_days
+         AND EXISTS (
+           SELECT 1
+             FROM jsonb_array_elements_text(
+               COALESCE(
+                 listing.availability_json->'pickupDays',
+                 '[0,1,2,3,4,5,6]'::jsonb
+               )
+             ) pickup_day
+            WHERE pickup_day::integer=EXTRACT(DOW FROM $2::timestamptz)::integer
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM jsonb_array_elements(
+               COALESCE(
+                 listing.availability_json->'unavailableRanges',
+                 '[]'::jsonb
+               )
+             ) blocked
+            WHERE (blocked->>'start')::timestamptz<$3::timestamptz
+              AND (blocked->>'end')::timestamptz>$2::timestamptz
+         )
          AND NOT EXISTS (
            SELECT 1 FROM fleet_bookings booking
            WHERE booking.organization_id=vehicle.organization_id
@@ -184,7 +206,8 @@ router.get("/availability", async (request, response, next) => {
         fuelType: vehicle.fuel_type || "gasoline",
         transmission: vehicle.transmission || "automatic",
         dailyRate: Number(vehicle.daily_rate),
-        imageUrl: vehicle.image_url || null,
+        imageUrl: vehicle.photos_json?.[0] || vehicle.image_url || null,
+        photos: vehicle.photos_json || [],
         listingId: vehicle.listing_id,
         title: vehicle.title,
         description: vehicle.description,
@@ -198,6 +221,10 @@ router.get("/availability", async (request, response, next) => {
         maximumTripDays: vehicle.maximum_trip_days,
         advanceNoticeHours: vehicle.advance_notice_hours,
         mileageLimitPerDay: vehicle.mileage_limit_per_day,
+        availability: vehicle.availability_json || {
+          unavailableRanges: [],
+          pickupDays: [0, 1, 2, 3, 4, 5, 6],
+        },
         host: {
           id: vehicle.host_user_id || null,
           name: vehicle.host_name,
@@ -267,7 +294,11 @@ router.get("/listings/:listingId", async (request, response, next) => {
         title: listing.title,
         description: listing.description,
         dailyRate: Number(listing.daily_rate),
-        imageUrl: listing.vehicle_payload?.imageUrl || null,
+        imageUrl:
+          listing.photos_json?.[0] ||
+          listing.vehicle_payload?.imageUrl ||
+          null,
+        photos: listing.photos_json || [],
         make: listing.make,
         model: listing.model,
         year: listing.model_year,
@@ -291,6 +322,10 @@ router.get("/listings/:listingId", async (request, response, next) => {
           : Number(listing.additional_mile_rate),
         rules: listing.rules_json || {},
         features: listing.features_json || [],
+        availability: listing.availability_json || {
+          unavailableRanges: [],
+          pickupDays: [0, 1, 2, 3, 4, 5, 6],
+        },
         host: {
           id: listing.host_user_id || null,
           name: listing.host_name,
@@ -298,6 +333,27 @@ router.get("/listings/:listingId", async (request, response, next) => {
           reviewCount: Number(listing.host_review_count),
           operatorManaged: !listing.host_user_id,
         },
+        reviews: (await query(
+          `SELECT review.id,review.rating,review.body,review.response,
+                  review.created_at,
+                  COALESCE(account.display_name,'Verified guest') AS reviewer_name
+             FROM fleet_trip_reviews review
+             JOIN users account ON account.id=review.reviewer_user_id
+            WHERE review.organization_id=$1
+              AND review.reviewee_user_id=$2
+              AND review.reviewer_role='guest'
+              AND review.status='published'
+            ORDER BY review.created_at DESC
+            LIMIT 20`,
+          [PUBLIC_ORGANIZATION_ID, listing.host_user_id],
+        )).rows.map(review => ({
+          id: review.id,
+          rating: Number(review.rating),
+          body: review.body,
+          response: review.response || null,
+          reviewerName: review.reviewer_name,
+          createdAt: review.created_at,
+        })),
       },
     });
   } catch (error) {
