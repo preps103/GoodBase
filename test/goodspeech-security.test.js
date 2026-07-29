@@ -19,6 +19,7 @@ const {
   checkKokoroHealth,
   readAudioBytes,
 } = require("../src/routes/goodspeech.routes");
+const videoService = require("../src/services/goodspeech-video.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -100,15 +101,129 @@ test("GoodSpeech constrains Kokoro speed derived from style controls", () => {
 });
 
 test("GoodSpeech publishes a capability contract for every application tool", () => {
-  const ready = buildCapabilities({ ready: true, message: "Ready" });
-  const degraded = buildCapabilities({ ready: false, message: "Kokoro unavailable" });
+  const ready = buildCapabilities(
+    { ready: true, message: "Ready" },
+    { ready: true, message: "Video ready" },
+  );
+  const degraded = buildCapabilities(
+    { ready: false, message: "Kokoro unavailable" },
+    { ready: false, message: "GPU worker unavailable" },
+  );
 
   assert.equal(ready.length, 15);
   assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
+  assert.equal(ready.find((item) => item.id === "video").engine, "goodmotion-open");
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
   assert.equal(ready.every((item) => item.status === "ready" && item.issue === null), true);
   assert.equal(degraded.find((item) => item.id === "speech").issue, "Kokoro unavailable");
+  assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
   assert.equal(degraded.find((item) => item.id === "image").issue, null);
+});
+
+test("GoodSpeech validates open video workflows and reference frames", () => {
+  const textJob = videoService.validateJob({
+    mode: "text-to-video",
+    model: "wan-2.1-t2v-1.3b",
+    prompt: "A cinematic sunrise above a quiet city.",
+    aspect: "16:9",
+    resolution: "480p",
+    duration: 5,
+    camera: "dolly-in",
+    seed: 42,
+  });
+  assert.equal(textJob.mode, "text-to-video");
+  assert.equal(textJob.seed, 42);
+
+  assert.throws(() => videoService.validateJob({
+    mode: "image-to-video",
+    model: "wan-2.1-i2v-14b",
+    prompt: "Animate the portrait.",
+    aspect: "9:16",
+    resolution: "480p",
+    duration: 5,
+    camera: "auto",
+  }), /start frame is required/i);
+
+  const imageJob = videoService.validateJob({
+    mode: "image-to-video",
+    model: "wan-2.1-i2v-14b",
+    prompt: "Animate the portrait.",
+    aspect: "9:16",
+    resolution: "480p",
+    duration: 5,
+    camera: "auto",
+  }, {
+    startFrame: [{
+      mimetype: "image/png",
+      buffer: Buffer.from("image"),
+    }],
+  });
+  assert.equal(imageJob.startFrame.mimetype, "image/png");
+});
+
+test("GoodSpeech scopes signed video jobs to the requesting user", () => {
+  const originalToken = process.env.KOKORO_TTS_TOKEN;
+  try {
+    process.env.KOKORO_TTS_TOKEN = "v".repeat(32);
+    const token = videoService.signJobId("provider_job_123", "user-a");
+    assert.equal(videoService.verifyJobId(token, "user-a"), "provider_job_123");
+    assert.throws(() => videoService.verifyJobId(token, "user-b"), /unavailable|invalid/i);
+    assert.throws(() => videoService.verifyJobId(`${token}x`, "user-a"), /invalid/i);
+  } finally {
+    if (originalToken === undefined) delete process.env.KOKORO_TTS_TOKEN;
+    else process.env.KOKORO_TTS_TOKEN = originalToken;
+  }
+});
+
+test("GoodSpeech reports the GoodMotion worker honestly", async () => {
+  const originalUrl = process.env.GOODMOTION_VIDEO_URL;
+  const originalToken = process.env.GOODMOTION_VIDEO_TOKEN;
+  try {
+    delete process.env.GOODMOTION_VIDEO_URL;
+    delete process.env.GOODMOTION_VIDEO_TOKEN;
+    assert.equal((await videoService.checkHealth()).ready, false);
+
+    process.env.GOODMOTION_VIDEO_URL = "http://127.0.0.1:8890";
+    process.env.GOODMOTION_VIDEO_TOKEN = "m".repeat(32);
+    const health = await videoService.checkHealth({
+      fetchFn: async (url, options) => {
+        assert.equal(url, "http://127.0.0.1:8890/health/ready");
+        assert.equal(options.headers.Authorization, `Bearer ${"m".repeat(32)}`);
+        return new Response(JSON.stringify({
+          status: "ready",
+          engine: "goodmotion-open",
+          model: "Wan-AI/Wan2.1-T2V-1.3B",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+    assert.equal(health.ready, true);
+    assert.equal(health.engine, "goodmotion-open");
+  } finally {
+    if (originalUrl === undefined) delete process.env.GOODMOTION_VIDEO_URL;
+    else process.env.GOODMOTION_VIDEO_URL = originalUrl;
+    if (originalToken === undefined) delete process.env.GOODMOTION_VIDEO_TOKEN;
+    else process.env.GOODMOTION_VIDEO_TOKEN = originalToken;
+  }
+});
+
+test("GoodMotion ships a real open-model GPU worker instead of a placeholder", () => {
+  const worker = fs.readFileSync(
+    path.join(__dirname, "..", "services", "goodmotion-video", "app", "main.py"),
+    "utf8",
+  );
+  const compose = fs.readFileSync(
+    path.join(__dirname, "..", "deploy", "goodspeech-video", "compose.yaml"),
+    "utf8",
+  );
+  assert.match(worker, /DiffusionPipeline\.from_pretrained/);
+  assert.match(worker, /Wan-AI\/Wan2\.1-T2V-1\.3B/);
+  assert.match(worker, /export_to_video/);
+  assert.match(worker, /@app\.post\("\/v1\/video\/jobs"/);
+  assert.match(compose, /capabilities: \[gpu\]/);
+  assert.doesNotMatch(worker, /Google|Gemini|Veo/i);
 });
 
 test("GoodSpeech requires an explicit Kokoro URL and strong internal token", () => {

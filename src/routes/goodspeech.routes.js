@@ -1,9 +1,12 @@
 "use strict";
 
+const { Readable } = require("node:stream");
 const express = require("express");
 const { rateLimit } = require("express-rate-limit");
+const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const { logAudit } = require("../services/audit.service");
+const videoService = require("../services/goodspeech-video.service");
 
 const router = express.Router();
 const MAX_TEXT_LENGTH = 2000;
@@ -36,7 +39,6 @@ const KOKORO_SPEED_BIAS = Object.freeze({
 const KOKORO_TOOL_IDS = Object.freeze(["speech", "studio", "dubbing", "audiobooks"]);
 const BROWSER_TOOL_IDS = Object.freeze([
   "image",
-  "video",
   "sound-effects",
   "music",
   "voice-changer",
@@ -61,6 +63,26 @@ const speechLimiter = rateLimit({
     success: false,
     code: "GOODSPEECH_RATE_LIMITED",
     message: "Too many speech requests. Try again shortly.",
+  },
+});
+const videoLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 8,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => `goodspeech-video-user:${req.user.id}`,
+  message: {
+    success: false,
+    code: "GOODSPEECH_VIDEO_RATE_LIMITED",
+    message: "Too many AI video requests. Try again later.",
+  },
+});
+const videoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 2,
+    fields: 20,
   },
 });
 
@@ -119,9 +141,13 @@ function kokoroSpeed(input) {
   return Math.min(1.2, Math.max(0.8, Number(((styleSpeed + toneAdjustment + intensityAdjustment) * voiceBias).toFixed(3))));
 }
 
-function buildCapabilities(health) {
+function buildCapabilities(health, videoHealth = {
+  ready: false,
+  message: "Open AI video generation needs a connected GoodMotion GPU worker. Motion Canvas remains available.",
+}) {
   const kokoroStatus = health.ready ? "ready" : "unavailable";
   const kokoroIssue = health.ready ? null : health.message;
+  const videoStatus = videoHealth.ready ? "ready" : "unavailable";
   return [
     ...KOKORO_TOOL_IDS.map((id) => ({
       id,
@@ -130,6 +156,13 @@ function buildCapabilities(health) {
       status: kokoroStatus,
       issue: kokoroIssue,
     })),
+    {
+      id: "video",
+      execution: "goodbase",
+      engine: "goodmotion-open",
+      status: videoStatus,
+      issue: videoHealth.ready ? null : videoHealth.message,
+    },
     ...BROWSER_TOOL_IDS.map((id) => ({
       id,
       execution: "browser",
@@ -291,16 +324,109 @@ router.get("/health", authRequired, async (_req, res) => {
 
 router.get("/capabilities", authRequired, async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
-  const health = await checkKokoroHealth();
+  const [health, videoHealth] = await Promise.all([
+    checkKokoroHealth(),
+    videoService.checkHealth(),
+  ]);
   return res.json({
     success: true,
     service: "GoodSpeech",
     provider: "kokoro",
-    degraded: !health.ready,
+    degraded: !health.ready || !videoHealth.ready,
     engine: health,
+    engines: {
+      speech: health,
+      video: videoHealth,
+    },
     voices: Object.keys(KOKORO_VOICES),
-    capabilities: buildCapabilities(health),
+    capabilities: buildCapabilities(health, videoHealth),
   });
+});
+
+function sendVideoError(res, error) {
+  const status = error?.statusCode || 500;
+  console.error("[GoodSpeech Video] request failed", {
+    status,
+    code: error?.code || "GOODSPEECH_VIDEO_ERROR",
+  });
+  return res.status(status).json({
+    success: false,
+    code: error?.code || "GOODSPEECH_VIDEO_ERROR",
+    message: status >= 500 && !String(error?.code || "").startsWith("GOODSPEECH_VIDEO_")
+      ? "The AI video request could not be completed."
+      : error?.message || "The AI video request could not be completed.",
+  });
+}
+
+router.get("/video/models", authRequired, async (_req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  const health = await videoService.checkHealth();
+  return res.json({
+    success: true,
+    health,
+    models: videoService.VIDEO_MODELS.map((model) => ({
+      ...model,
+      available: health.ready,
+    })),
+  });
+});
+
+router.post(
+  "/video/jobs",
+  authRequired,
+  videoLimiter,
+  videoUpload.fields([
+    { name: "startFrame", maxCount: 1 },
+    { name: "endFrame", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    res.set("Cache-Control", "no-store, max-age=0");
+    try {
+      const job = await videoService.createJob(req.body, req.files || {}, req.user.id);
+      logAudit({
+        userId: req.user.id,
+        action: "goodspeech.video.generate",
+        entityType: "goodspeech_video_job",
+        entityId: job.jobId.slice(0, 80),
+        ipAddress: req.ip,
+        metadata: {
+          model: job.model,
+          mode: req.body.mode,
+          duration: Number(req.body.duration),
+          aspect: req.body.aspect,
+        },
+      }).catch(() => {});
+      return res.status(202).json({ success: true, ...job });
+    } catch (error) {
+      return sendVideoError(res, error);
+    }
+  },
+);
+
+router.get("/video/jobs/:jobId", authRequired, async (req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  try {
+    return res.json({
+      success: true,
+      ...(await videoService.getJob(req.params.jobId, req.user.id)),
+    });
+  } catch (error) {
+    return sendVideoError(res, error);
+  }
+});
+
+router.get("/video/jobs/:jobId/content", authRequired, async (req, res) => {
+  res.set("Cache-Control", "private, no-store, max-age=0");
+  try {
+    const upstream = await videoService.getContent(req.params.jobId, req.user.id);
+    res.status(200);
+    res.set("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+    const length = upstream.headers.get("content-length");
+    if (length) res.set("Content-Length", length);
+    return Readable.fromWeb(upstream.body).pipe(res);
+  } catch (error) {
+    return sendVideoError(res, error);
+  }
 });
 
 router.post("/speech", authRequired, speechLimiter, async (req, res) => {

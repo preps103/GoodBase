@@ -1,0 +1,10 @@
+accelerate==1.11.0
+diffusers==0.35.2
+fastapi==0.120.2
+imageio-ffmpeg==0.6.0
+pillow==11.3.0
+python-multipart==0.0.20
+safetensors==0.6.2
+sentencepiece==0.2.1
+transformers==4.57.1
+uvicorn[standard]==0.38.0
