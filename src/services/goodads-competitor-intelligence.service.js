@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const { query } = require("../config/database");
 const { scanPublicWebsite } = require("./goodads-competitor-scanner.service");
+const notificationService = require("./notification.service");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MANAGEMENT_ROLES = new Set(["owner", "admin", "manager"]);
@@ -794,7 +795,7 @@ async function recordChangeAlert({ competitor, organizationId, sourceProvider, p
   );
 }
 
-async function performSync({ competitor, organizationId }) {
+async function performSync({ competitor, organizationId, userId = null }) {
   const capturedAt = new Date().toISOString();
   const outcomes = {};
   const [publicResult, licensedResult] = await Promise.allSettled([
@@ -880,6 +881,31 @@ async function performSync({ competitor, organizationId }) {
     ).catch(() => {});
     throw intelligenceError(message, 502, "GOODADS_COMPETITOR_SCAN_FAILED", true);
   }
+  if (userId) {
+    await notificationService.createNotification({
+      appId: "goodads",
+      recipientUserId: userId,
+      title: `${competitor.display_name} intelligence is ready`,
+      message: outcomes.similarweb?.status === "not_configured"
+        ? "Public website evidence is ready. Licensed Similarweb estimates remain unavailable until the provider key is configured."
+        : "Public website evidence and available licensed market datasets have finished refreshing.",
+      category: "competitor_intelligence",
+      channel: "in_app",
+      severity: "success",
+      source: "goodads-competitor-intelligence",
+      sourceId: competitor.id,
+      actionUrl: "https://ads.goodos.app/?page=competitors",
+      payload: {
+        competitorId: competitor.id,
+        publicWebStatus: outcomes.publicWeb?.status,
+        similarwebStatus: outcomes.similarweb?.status,
+      },
+      metadata: {
+        appId: "goodads",
+        competitorId: competitor.id,
+      },
+    }).catch(() => {});
+  }
   return {
     status: outcomes.publicWeb?.status === "completed" && ["completed", "partial", "not_configured"].includes(outcomes.similarweb?.status)
       ? "completed"
@@ -889,7 +915,7 @@ async function performSync({ competitor, organizationId }) {
   };
 }
 
-async function syncCompetitor({ id, context }) {
+async function syncCompetitor({ id, context, userId = null }) {
   requireManagement(context);
   const competitor = await getCompetitor({ id, context });
   return performSync({
@@ -900,6 +926,7 @@ async function syncCompetitor({ id, context }) {
       display_name: competitor.displayName,
     },
     organizationId: context.organizationId,
+    userId,
   });
 }
 

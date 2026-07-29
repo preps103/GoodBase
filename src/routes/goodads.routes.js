@@ -669,6 +669,7 @@ router.post("/competitor-intelligence/competitors/:id/sync", publishingLimiter, 
   competitorIntelligence.syncCompetitor({
     id: req.params.id,
     context: req.tenantContext,
+    userId: req.user.id,
   })
 ));
 router.get("/competitor-intelligence/creatives", (req, res) => handle(

@@ -109,6 +109,7 @@ test("competitor intelligence migration, routes, and scheduled sync are installe
   const migration = fs.readFileSync(path.join(root, "migrations/20260729_goodads_competitor_intelligence.sql"), "utf8");
   const migrationV2 = fs.readFileSync(path.join(root, "migrations/20260729_goodads_competitor_intelligence_v2.sql"), "utf8");
   const routes = fs.readFileSync(path.join(root, "src/routes/goodads.routes.js"), "utf8");
+  const service = fs.readFileSync(path.join(root, "src/services/goodads-competitor-intelligence.service.js"), "utf8");
   const jobs = fs.readFileSync(path.join(root, "src/services/job.service.js"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_competitors/);
@@ -119,6 +120,9 @@ test("competitor intelligence migration, routes, and scheduled sync are installe
   assert.match(routes, /competitor-intelligence\/overview/);
   assert.match(routes, /competitor-intelligence\/competitors/);
   assert.match(routes, /competitor-intelligence\/competitors\/:id\/intelligence/);
+  assert.match(routes, /userId: req\.user\.id/);
+  assert.match(service, /intelligence is ready/);
+  assert.match(service, /goodads-competitor-intelligence/);
   assert.match(routes, /competitor-intelligence\/creatives/);
   assert.match(migrationV2, /public_web/);
   assert.match(migrationV2, /partial/);
