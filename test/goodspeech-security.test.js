@@ -20,6 +20,7 @@ const {
   readAudioBytes,
 } = require("../src/routes/goodspeech.routes");
 const videoService = require("../src/services/goodspeech-video.service");
+const collaborationRoutes = require("../src/routes/goodspeech-collaboration.routes");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -294,4 +295,68 @@ test("GoodSpeech reads provider audio as a bounded stream", async () => {
   const response = new Response(new Uint8Array([82, 73, 70, 70]));
   const audio = await readAudioBytes(response);
   assert.equal(audio.toString("ascii"), "RIFF");
+});
+
+test("GoodSpeech collaboration is tenant-scoped and requires an active app entitlement", () => {
+  const middleware = collaborationRoutes.requireGoodSpeechAccess;
+  let advanced = false;
+  const permittedRequest = {
+    user: { platformRole: "user" },
+    apps: [{
+      id: "goodspeech",
+      membershipStatus: "active",
+      appStatus: "active",
+    }],
+  };
+  middleware(permittedRequest, {}, () => { advanced = true; });
+  assert.equal(advanced, true);
+
+  let deniedStatus = 0;
+  let deniedPayload;
+  middleware(
+    { user: { platformRole: "user" }, apps: [] },
+    {
+      status(value) { deniedStatus = value; return this; },
+      json(value) { deniedPayload = value; return value; },
+    },
+    () => assert.fail("A user without GoodSpeech access must not pass."),
+  );
+  assert.equal(deniedStatus, 403);
+  assert.equal(deniedPayload.code, "GOODSPEECH_ACCESS_REQUIRED");
+});
+
+test("GoodSpeech collaboration ships durable projects, tasks, chat, read state, and idempotency", () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, "..", "migrations", "20260729_goodspeech_collaboration.sql"),
+    "utf8",
+  );
+  const routes = fs.readFileSync(
+    path.join(__dirname, "..", "src", "routes", "goodspeech-collaboration.routes.js"),
+    "utf8",
+  );
+  const service = fs.readFileSync(
+    path.join(__dirname, "..", "src", "services", "goodspeech-collaboration.service.js"),
+    "utf8",
+  );
+
+  for (const table of [
+    "goodspeech_projects",
+    "goodspeech_project_members",
+    "goodspeech_project_tasks",
+    "goodspeech_chat_channels",
+    "goodspeech_chat_channel_members",
+    "goodspeech_chat_messages",
+  ]) {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(migration, /team_id TEXT NOT NULL/);
+  assert.doesNotMatch(migration, /REFERENCES (backend_organizations|backend_teams|users)/);
+  assert.match(migration, /last_read_at TIMESTAMPTZ/);
+  assert.match(migration, /client_message_key/);
+  assert.match(routes, /tenantContext/);
+  assert.match(routes, /Idempotency-Key/);
+  assert.match(routes, /messages\/:messageId/);
+  assert.match(service, /replyToMessageId/);
+  assert.match(service, /notifyChannelMembers/);
+  assert.doesNotMatch(`${migration}\n${routes}\n${service}`, /Google AI|Gemini|AI Studio/i);
 });
