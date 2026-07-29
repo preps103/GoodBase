@@ -17,7 +17,36 @@ const KOKORO_VOICES = Object.freeze({
   Charon: "am_onyx",
   Fenrir: "am_fenrir",
   Zephyr: "af_sky",
+  Amara: "af_heart",
+  Celeste: "af_bella",
+  Bennett: "bm_george",
+  Ellis: "am_michael",
 });
+const KOKORO_SPEED_BIAS = Object.freeze({
+  Kore: 0.98,
+  Puck: 1.01,
+  Charon: 0.95,
+  Fenrir: 0.98,
+  Zephyr: 0.96,
+  Amara: 0.97,
+  Celeste: 1,
+  Bennett: 0.94,
+  Ellis: 0.99,
+});
+const KOKORO_TOOL_IDS = Object.freeze(["speech", "studio", "dubbing", "audiobooks"]);
+const BROWSER_TOOL_IDS = Object.freeze([
+  "image",
+  "video",
+  "sound-effects",
+  "music",
+  "voice-changer",
+  "voice-isolator",
+  "upscale",
+  "speech-to-text",
+  "flows",
+  "templates",
+  "assets",
+]);
 const ALLOWED_VOICES = new Set(Object.keys(KOKORO_VOICES));
 const ALLOWED_STYLES = new Set(["Natural", "Cheerfully", "Sadly", "Angrily", "Professionally", "Whispering", "Excitedly"]);
 const ALLOWED_TONES = new Set(["Standard", "Warm", "Bright", "Airy", "Deep", "Gritty", "Crisp", "Soft"]);
@@ -86,7 +115,29 @@ function kokoroSpeed(input) {
     Soft: -0.03,
   }[input.tone] || 0;
   const intensityAdjustment = ((input.intensity - 50) / 50) * 0.025;
-  return Math.min(1.2, Math.max(0.8, Number((styleSpeed + toneAdjustment + intensityAdjustment).toFixed(3))));
+  const voiceBias = KOKORO_SPEED_BIAS[input.apiVoice] || 1;
+  return Math.min(1.2, Math.max(0.8, Number(((styleSpeed + toneAdjustment + intensityAdjustment) * voiceBias).toFixed(3))));
+}
+
+function buildCapabilities(health) {
+  const kokoroStatus = health.ready ? "ready" : "unavailable";
+  const kokoroIssue = health.ready ? null : health.message;
+  return [
+    ...KOKORO_TOOL_IDS.map((id) => ({
+      id,
+      execution: "goodbase",
+      engine: "kokoro",
+      status: kokoroStatus,
+      issue: kokoroIssue,
+    })),
+    ...BROWSER_TOOL_IDS.map((id) => ({
+      id,
+      execution: "browser",
+      engine: "native-media",
+      status: "ready",
+      issue: null,
+    })),
+  ];
 }
 
 function kokoroEndpoint() {
@@ -238,6 +289,20 @@ router.get("/health", authRequired, async (_req, res) => {
   });
 });
 
+router.get("/capabilities", authRequired, async (_req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  const health = await checkKokoroHealth();
+  return res.json({
+    success: true,
+    service: "GoodSpeech",
+    provider: "kokoro",
+    degraded: !health.ready,
+    engine: health,
+    voices: Object.keys(KOKORO_VOICES),
+    capabilities: buildCapabilities(health),
+  });
+});
+
 router.post("/speech", authRequired, speechLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   res.set("Pragma", "no-cache");
@@ -338,6 +403,7 @@ module.exports = router;
 module.exports.validatePayload = validatePayload;
 module.exports.kokoroRequest = kokoroRequest;
 module.exports.kokoroSpeed = kokoroSpeed;
+module.exports.buildCapabilities = buildCapabilities;
 module.exports.kokoroEndpoint = kokoroEndpoint;
 module.exports.kokoroHealthEndpoint = kokoroHealthEndpoint;
 module.exports.configuredProvider = configuredProvider;

@@ -2,6 +2,8 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 process.env.JWT_SECRET ||= "test-secret-at-least-32-characters-long";
 process.env.MFA_ENCRYPTION_KEY ||= "0".repeat(64);
@@ -10,6 +12,7 @@ const {
   validatePayload,
   kokoroRequest,
   kokoroSpeed,
+  buildCapabilities,
   kokoroEndpoint,
   kokoroHealthEndpoint,
   configuredProvider,
@@ -59,11 +62,24 @@ test("GoodSpeech maps the public voice names to real Kokoro voices", () => {
     Charon: "am_onyx",
     Fenrir: "am_fenrir",
     Zephyr: "af_sky",
+    Amara: "af_heart",
+    Celeste: "af_bella",
+    Bennett: "bm_george",
+    Ellis: "am_michael",
   };
   for (const [apiVoice, expectedVoice] of Object.entries(voices)) {
     const input = validatePayload({ text: "Voice test", voice: { apiVoice } }).value;
     assert.equal(kokoroRequest(input).voice, expectedVoice);
   }
+
+  const workerSource = fs.readFileSync(
+    path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"),
+    "utf8",
+  );
+  for (const expectedVoice of Object.values(voices)) {
+    assert.match(workerSource, new RegExp(`"${expectedVoice}"`));
+  }
+  assert.match(workerSource, /@app\.get\("\/v1\/audio\/voices"\)/);
 });
 
 test("GoodSpeech constrains Kokoro speed derived from style controls", () => {
@@ -79,8 +95,20 @@ test("GoodSpeech constrains Kokoro speed derived from style controls", () => {
     tone: "Deep",
     intensity: 0,
   }).value;
-  assert.equal(kokoroSpeed(fast), 1.155);
-  assert.equal(kokoroSpeed(slow), 0.815);
+  assert.equal(kokoroSpeed(fast), 1.132);
+  assert.equal(kokoroSpeed(slow), 0.8);
+});
+
+test("GoodSpeech publishes a capability contract for every application tool", () => {
+  const ready = buildCapabilities({ ready: true, message: "Ready" });
+  const degraded = buildCapabilities({ ready: false, message: "Kokoro unavailable" });
+
+  assert.equal(ready.length, 15);
+  assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
+  assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
+  assert.equal(ready.every((item) => item.status === "ready" && item.issue === null), true);
+  assert.equal(degraded.find((item) => item.id === "speech").issue, "Kokoro unavailable");
+  assert.equal(degraded.find((item) => item.id === "image").issue, null);
 });
 
 test("GoodSpeech requires an explicit Kokoro URL and strong internal token", () => {

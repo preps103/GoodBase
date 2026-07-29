@@ -122,6 +122,33 @@
         }
       }
     },
+    "/api/goodspeech/v1/capabilities": {
+      "get": {
+        "summary": "List GoodSpeech tool capabilities",
+        "description": "Reports the authenticated GoodSpeech capability contract, including GoodBase-backed Kokoro tools, privacy-preserving browser tools, available personas, and genuine engine issues.",
+        "servers": [
+          {
+            "url": "https://base.goodos.app"
+          }
+        ],
+        "security": [
+          {
+            "GoodBaseSession": []
+          },
+          {
+            "GoodOSBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capability contract returned"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
     "/api/goodspeech/v1/speech": {
       "post": {
         "summary": "Generate speech through GoodBase",

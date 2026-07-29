@@ -22,7 +22,17 @@ SAMPLE_RATE = 24_000
 MAX_TEXT_LENGTH = 2_000
 MODEL_ID = "hexgrad/Kokoro-82M"
 MODEL_SHA256 = "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4"
-ALLOWED_VOICES = frozenset({"af_kore", "af_sky", "am_puck", "am_onyx", "am_fenrir"})
+ALLOWED_VOICES = frozenset({
+    "af_bella",
+    "af_heart",
+    "af_kore",
+    "af_sky",
+    "am_fenrir",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "bm_george",
+})
 
 pipeline: KPipeline | None = None
 generation_slots = asyncio.Semaphore(max(1, int(os.getenv("KOKORO_CONCURRENCY", "1"))))
@@ -123,6 +133,14 @@ async def ready() -> dict[str, str]:
         "model": MODEL_ID,
         "modelSha256": MODEL_SHA256,
     }
+
+
+@app.get("/v1/audio/voices")
+async def voices(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, list[str]]:
+    authorize(authorization)
+    return {"voices": sorted(ALLOWED_VOICES)}
 
 
 @app.post("/v1/audio/speech")

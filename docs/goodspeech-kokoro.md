@@ -1,10 +1,18 @@
 # GoodSpeech Kokoro deployment
 
-GoodSpeech uses the Apache-2.0 licensed `hexgrad/Kokoro-82M` model through a private inference service. Browser clients continue to call only:
+GoodSpeech uses the Apache-2.0 licensed `hexgrad/Kokoro-82M` model through a private inference service. Browser speech synthesis continues to call only:
 
 `POST https://base.goodos.app/api/goodspeech/v1/speech`
 
 GoodBase authenticates the user, validates and rate-limits the request, calls the loopback-only Kokoro service, records audit metadata, and returns transient WAV audio. The browser never receives the internal service token and cannot call Kokoro directly.
+
+Authenticated clients also read `GET /api/goodspeech/v1/capabilities`. That
+contract reports which application tools use GoodBase/Kokoro and which use a
+privacy-preserving browser media engine. Only genuinely unavailable engines
+carry an issue message.
+
+GoodSpeech exposes nine distinct personas backed by nine real Kokoro voices:
+Kore, Puck, Charon, Fenrir, Zephyr, Amara, Celeste, Bennett, and Ellis.
 
 ## Production configuration
 
