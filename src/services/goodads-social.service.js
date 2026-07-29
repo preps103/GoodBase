@@ -484,6 +484,7 @@ function serializePublishJob(row) {
   if (!row) return null;
   return {
     id: row.id,
+    approvalId: row.approval_id || null,
     status: row.status,
     content: row.content || {},
     requestedProviders: row.requested_providers || [],
@@ -758,7 +759,95 @@ async function resolvePublishConnections({ context, userId, connectionIds, provi
   return result.rows;
 }
 
-async function publish({ context, userId, idempotencyKey, providers, connectionIds, content, scheduledFor, timezone }) {
+async function validatePublishingApproval({
+  context,
+  approvalId,
+  connectionIds,
+  content,
+  scheduledFor,
+}) {
+  const membershipRole = String(context?.organization?.membershipRole || "").trim().toLowerCase();
+  const managementCanPublishDirectly = ["owner", "admin", "manager"].includes(membershipRole);
+  if (!approvalId && managementCanPublishDirectly) return null;
+  if (!approvalId) {
+    throw socialError(
+      "An approved publishing review is required for your workspace role.",
+      403,
+      "GOODADS_PUBLISH_APPROVAL_REQUIRED"
+    );
+  }
+  const normalizedApprovalId = String(approvalId).trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalizedApprovalId)) {
+    throw socialError("A valid publishing approval ID is required.");
+  }
+  const result = await query(
+    `SELECT id, data
+     FROM goodads_resources
+     WHERE id = $1::uuid
+       AND organization_id = $2
+       AND resource_type = 'approvals'
+       AND status = 'approved'
+       AND archived_at IS NULL`,
+    [normalizedApprovalId, context.organizationId]
+  );
+  const approval = result.rows[0];
+  if (!approval) {
+    throw socialError(
+      "The publishing review is missing, rejected, or not yet approved.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_INVALID"
+    );
+  }
+  const publication = approval.data?.publication;
+  if (!publication || typeof publication !== "object") {
+    throw socialError(
+      "This approval does not authorize a publishing request.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_INVALID"
+    );
+  }
+  const approvedText = String(publication.content?.text || "").trim();
+  const requestedText = String(content?.text || content?.message || "").trim();
+  const approvedConnections = [...new Set(
+    (Array.isArray(publication.connectionIds) ? publication.connectionIds : [])
+      .map((value) => String(value).toLowerCase())
+  )].sort();
+  const requestedConnections = normalizeConnectionIds(connectionIds).sort();
+  if (
+    approvedText !== requestedText
+    || JSON.stringify(approvedConnections) !== JSON.stringify(requestedConnections)
+  ) {
+    throw socialError(
+      "The publishing request does not match the approved copy and accounts.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_MISMATCH"
+    );
+  }
+  if (publication.scheduledFor) {
+    const approvedSchedule = new Date(publication.scheduledFor).toISOString();
+    const requestedSchedule = new Date(scheduledFor || publication.scheduledFor).toISOString();
+    if (approvedSchedule !== requestedSchedule) {
+      throw socialError(
+        "The publishing time does not match the approved request.",
+        409,
+        "GOODADS_PUBLISH_APPROVAL_MISMATCH"
+      );
+    }
+  }
+  return normalizedApprovalId;
+}
+
+async function publish({
+  context,
+  userId,
+  idempotencyKey,
+  providers,
+  connectionIds,
+  content,
+  scheduledFor,
+  timezone,
+  approvalId = null,
+}) {
   if (!idempotencyKey) throw socialError("Idempotency-Key header is required.", 400, "GOODADS_IDEMPOTENCY_REQUIRED");
   if (String(idempotencyKey).length > 200) throw socialError("Idempotency-Key is too long.");
   const safeContent = normalizePublishContent(content);
@@ -769,6 +858,13 @@ async function publish({ context, userId, idempotencyKey, providers, connectionI
   );
   if (existing.rows[0]) return getPublishJob({ context, userId, id: existing.rows[0].id });
   const connections = await resolvePublishConnections({ context, userId, connectionIds, providers });
+  const approvedBy = await validatePublishingApproval({
+    context,
+    approvalId,
+    connectionIds: connections.map((connection) => connection.id),
+    content: safeContent,
+    scheduledFor: schedule.scheduledFor.toISOString(),
+  });
   const client = await database.pool.connect();
   let jobId;
   try {
@@ -776,9 +872,9 @@ async function publish({ context, userId, idempotencyKey, providers, connectionI
     const inserted = await client.query(
       `INSERT INTO goodads_publish_jobs (
          organization_id, user_id, idempotency_key, content, requested_providers,
-         status, scheduled_for, timezone, available_at, max_attempts
+         status, scheduled_for, timezone, available_at, max_attempts, approval_id
        ) VALUES (
-         $1, $2::uuid, $3, $4::jsonb, $5::text[], $6, $7, $8, $7, 5
+         $1, $2::uuid, $3, $4::jsonb, $5::text[], $6, $7, $8, $7, 5, $9::uuid
        ) RETURNING id`,
       [
         context.organizationId,
@@ -789,6 +885,7 @@ async function publish({ context, userId, idempotencyKey, providers, connectionI
         schedule.scheduled ? "scheduled" : "queued",
         schedule.scheduledFor.toISOString(),
         schedule.timezone,
+        approvedBy,
       ]
     );
     jobId = inserted.rows[0].id;
@@ -846,6 +943,7 @@ async function publishBatch({
     return {
       content: normalizePublishContent(value.content || value),
       schedule: normalizeSchedule(value.scheduledFor, value.timezone || timezone),
+      approvalId: value.approvalId || null,
     };
   });
   await resolvePublishConnections({ context, userId, connectionIds, providers });
@@ -861,6 +959,7 @@ async function publishBatch({
       content: item.content,
       scheduledFor: item.schedule.scheduledFor.toISOString(),
       timezone: item.schedule.timezone,
+      approvalId: item.approvalId,
     }));
   }
   return {
@@ -1161,6 +1260,7 @@ module.exports = {
   normalizePublishContent,
   normalizeSchedule,
   normalizeConnectionIds,
+  validatePublishingApproval,
   rejectPaidCampaignLaunch,
   publish,
   publishBatch,

@@ -5,6 +5,7 @@ const database = require("../config/database");
 const notificationService = require("./notification.service");
 const alertDeliveryService = require("./goodbase-alert-delivery.service");
 const goodAdsSocial = require("./goodads-social.service");
+const goodAdsWorkflows = require("./goodads-workflows.service");
 const {
   dispatchControllerOperations,
   runProductionVerification
@@ -755,6 +756,8 @@ async function runHandler(handlerKey) {
       return reconcileCommercial();
     case "goodads.social.publish":
       return goodAdsSocial.processDuePublishJobs(10, workerIdFromEnv());
+    case "goodads.automations.dispatch":
+      return goodAdsWorkflows.processDueAutomations(10);
     default:
       return {
         skipped: true,

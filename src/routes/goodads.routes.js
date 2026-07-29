@@ -9,6 +9,7 @@ const service = require("../services/goodads.service");
 const chatService = require("../services/goodads-chat.service");
 const social = require("../services/goodads-social.service");
 const payments = require("../services/goodads-payments.service");
+const workflows = require("../services/goodads-workflows.service");
 
 const router = express.Router();
 const publicFormReadLimiter = rateLimit({
@@ -142,6 +143,14 @@ router.post("/public/link-hubs/:slug/clicks", publicLinkClickLimiter, (req, res)
     referrer: req.get("Referer"),
   }))
 ));
+router.post("/public/engagement-webhooks/:provider", paymentWebhookLimiter, (req, res) => (
+  handle(res, "engagement.ingest", workflows.ingestEngagement({
+    provider: req.params.provider,
+    payload: req.body,
+    rawBody: req.rawBody,
+    headers: req.headers,
+  }))
+));
 router.get("/public/payment-offers/:slug", publicFormReadLimiter, (req, res) => (
   handle(res, "payment-offer.public", payments.getPublicOffer(req.params.slug))
 ));
@@ -233,10 +242,20 @@ router.post("/chat/channels/:channelId/read", (req, res) => handle(res, "chat.re
 router.get("/dashboard", (req, res) => handle(res, "dashboard", service.dashboard(req.tenantContext)));
 router.get("/workspace", (req, res) => handle(res, "workspace", service.workspace(req.tenantContext)));
 router.get("/workspace/brand", (req, res) => handle(res, "brand", service.listResources({ type: "brand", context: req.tenantContext, limit: 1 })));
-router.get("/capabilities", (req, res) => handle(res, "capabilities", social.capabilities({
-  context: req.tenantContext,
-  userId: req.user.id,
-})));
+router.get("/capabilities", (req, res) => handle(
+  res,
+  "capabilities",
+  social.capabilities({
+    context: req.tenantContext,
+    userId: req.user.id,
+  }).then((capabilities) => ({
+    ...capabilities,
+    modules: {
+      ...capabilities.modules,
+      ...workflows.workflowCapabilities(),
+    },
+  }))
+));
 router.get("/connections/providers", (_req, res) => success(res, { data: social.publicProviders() }));
 router.get("/connections", (req, res) => handle(res, "connections.list", social.listConnections({
   context: req.tenantContext,
@@ -283,6 +302,7 @@ router.post("/publishing/jobs", publishingLimiter, (req, res) => handle(res, "pu
   content: req.body?.content,
   scheduledFor: req.body?.scheduledFor,
   timezone: req.body?.timezone,
+  approvalId: req.body?.approvalId,
 })));
 router.post("/publishing/batches", bulkPublishingLimiter, (req, res) => handle(res, "publishing.batch.create", social.publishBatch({
   context: req.tenantContext,
@@ -361,6 +381,144 @@ router.get("/payments/sessions", (req, res) => handle(res, "payments.sessions", 
   limit: req.query.limit,
 })));
 
+router.get("/engagement", (req, res) => handle(res, "engagement.list", workflows.listEngagement({
+  context: req.tenantContext,
+  status: req.query.status,
+  itemType: req.query.itemType,
+  provider: req.query.provider,
+  assignedTo: req.query.assignedTo,
+  search: req.query.search,
+  limit: req.query.limit,
+  offset: req.query.offset,
+})));
+router.patch("/engagement/:id", (req, res) => handle(res, "engagement.update", workflows.updateEngagement({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+})));
+
+router.get("/approvals", (req, res) => handle(res, "approvals.list", service.listResources({
+  type: "approvals",
+  context: req.tenantContext,
+  limit: req.query.limit,
+  offset: req.query.offset,
+  status: req.query.status,
+})));
+router.post("/approvals", (req, res) => handle(res, "approvals.create", workflows.saveApproval({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+})));
+router.get("/approvals/:id", (req, res) => handle(res, "approvals.get", service.getResource({
+  type: "approvals",
+  id: req.params.id,
+  context: req.tenantContext,
+})));
+router.put("/approvals/:id", (req, res) => handle(res, "approvals.update", workflows.saveApproval({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.patch("/approvals/:id", (req, res) => handle(res, "approvals.update", workflows.saveApproval({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/approvals/:id", (req, res) => handle(res, "approvals.archive", service.archiveResource({
+  type: "approvals",
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/approvals/:id/decision", (req, res) => handle(
+  res,
+  "approvals.decision",
+  workflows.decideApproval({
+    id: req.params.id,
+    decision: req.body?.decision,
+    note: req.body?.note,
+    context: req.tenantContext,
+    userId: req.user.id,
+  }).then(async (approval) => {
+    let publishingJob = null;
+    let publishingError = null;
+    if (
+      approval.status === "approved"
+      && approval.publication?.autoQueue === true
+    ) {
+      try {
+        publishingJob = await social.publish({
+          context: req.tenantContext,
+          userId: approval.ownerUserId || req.user.id,
+          idempotencyKey: `approval:${approval.id}`,
+          connectionIds: approval.publication.connectionIds,
+          content: approval.publication.content,
+          scheduledFor: approval.publication.scheduledFor,
+          timezone: approval.publication.timezone,
+          approvalId: approval.id,
+        });
+      } catch (requestError) {
+        publishingError = {
+          code: requestError.code || "GOODADS_APPROVED_PUBLISH_FAILED",
+          message: requestError.message,
+        };
+      }
+    }
+    return { approval, publishingJob, publishingError };
+  })
+));
+
+router.get("/automations", (req, res) => handle(res, "automations.list", service.listResources({
+  type: "automations",
+  context: req.tenantContext,
+  limit: req.query.limit,
+  offset: req.query.offset,
+  status: req.query.status,
+})));
+router.post("/automations", (req, res) => handle(res, "automations.create", workflows.saveAutomation({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.get("/automations/:id", (req, res) => handle(res, "automations.get", service.getResource({
+  type: "automations",
+  id: req.params.id,
+  context: req.tenantContext,
+})));
+router.put("/automations/:id", (req, res) => handle(res, "automations.update", workflows.saveAutomation({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.patch("/automations/:id", (req, res) => handle(res, "automations.update", workflows.saveAutomation({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/automations/:id", (req, res) => handle(res, "automations.archive", service.archiveResource({
+  type: "automations",
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/automations/:id/run", (req, res) => handle(res, "automations.run", workflows.runAutomation({
+  id: req.params.id,
+  input: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+})));
+router.get("/automations/:id/runs", (req, res) => handle(res, "automations.runs", workflows.listAutomationRuns({
+  id: req.params.id,
+  context: req.tenantContext,
+  limit: req.query.limit,
+})));
+
 function registerResource(path, type) {
   router.get(`/${path}`, (req, res) => handle(res, `${type}.list`, service.listResources({
     type,
@@ -405,12 +563,10 @@ function registerResource(path, type) {
 [
   ["campaigns", "campaigns"],
   ["content", "content"],
-  ["approvals", "approvals"],
   ["calendar", "calendar"],
   ["analytics", "analytics"],
   ["media", "media"],
   ["link-hubs", "link_hubs"],
-  ["automations", "automations"],
   ["notifications", "notifications"],
   ["email-campaigns", "email_campaigns"],
   ["designs", "designs"],
