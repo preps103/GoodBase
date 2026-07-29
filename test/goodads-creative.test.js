@@ -56,6 +56,17 @@ test("GoodAds creative jobs reject malformed database identifiers before queryin
   );
 });
 
+test("GoodAds creative routes translate shared engine errors into GoodAds language", () => {
+  const sharedError = new Error("GoodDesigner AI is not configured in GoodBase.");
+  sharedError.code = "GOODDESIGNER_PROVIDER_NOT_CONFIGURED";
+  sharedError.statusCode = 503;
+  const translated = creative._internal.goodAdsProviderError(sharedError);
+  assert.equal(translated.statusCode, 503);
+  assert.equal(translated.code, "GOODADS_CREATIVE_PROVIDER_NOT_CONFIGURED");
+  assert.equal(translated.message, "GoodAds creative generation is not configured in GoodBase.");
+  assert.equal(translated.message.includes("GoodDesigner"), false);
+});
+
 test("GoodBase deployment installs and verifies the GoodAds creative studio schema", () => {
   const root = path.join(__dirname, "..");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));

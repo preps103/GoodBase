@@ -21,6 +21,17 @@ function creativeError(message, statusCode = 400, code = "GOODADS_CREATIVE_INVAL
   return error;
 }
 
+function goodAdsProviderError(error) {
+  if (error?.code === "GOODDESIGNER_PROVIDER_NOT_CONFIGURED") {
+    return creativeError(
+      "GoodAds creative generation is not configured in GoodBase.",
+      503,
+      "GOODADS_CREATIVE_PROVIDER_NOT_CONFIGURED"
+    );
+  }
+  return error;
+}
+
 function boundedText(value, maximum) {
   return String(value || "").trim().slice(0, maximum);
 }
@@ -128,13 +139,21 @@ async function storeGeneratedImage(result, purpose, context, userId) {
 }
 
 async function generateImage({ payload, context, userId }) {
-  const generated = await designer.generateAdCreative({ ...payload, appId: "goodads" });
-  return storeGeneratedImage(generated, "generated-image", context, userId);
+  try {
+    const generated = await designer.generateAdCreative({ ...payload, appId: "goodads" });
+    return storeGeneratedImage(generated, "generated-image", context, userId);
+  } catch (error) {
+    throw goodAdsProviderError(error);
+  }
 }
 
 async function generateVariation({ payload, context, userId }) {
-  const generated = await designer.generateAdVariation({ ...payload, appId: "goodads" });
-  return storeGeneratedImage(generated, "creative-variation", context, userId);
+  try {
+    const generated = await designer.generateAdVariation({ ...payload, appId: "goodads" });
+    return storeGeneratedImage(generated, "creative-variation", context, userId);
+  } catch (error) {
+    throw goodAdsProviderError(error);
+  }
 }
 
 async function startVideo({ payload, context, userId, idempotencyKey }) {
@@ -154,7 +173,12 @@ async function startVideo({ payload, context, userId, idempotencyKey }) {
   );
   if (existing.rows[0]) return jobRecord(existing.rows[0]);
 
-  const generated = await designer.generateAdVideo({ ...payload, prompt, appId: "goodads" });
+  let generated;
+  try {
+    generated = await designer.generateAdVideo({ ...payload, prompt, appId: "goodads" });
+  } catch (error) {
+    throw goodAdsProviderError(error);
+  }
   const result = await query(
     `INSERT INTO goodads_creative_jobs (
        organization_id, project_id, environment_id, owner_user_id,
@@ -265,6 +289,7 @@ module.exports = {
   videoStatus,
   _internal: {
     assertFileSignature,
+    goodAdsProviderError,
     jobRecord,
     validUuid,
   },
