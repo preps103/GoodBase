@@ -2,6 +2,9 @@
 
 const crypto = require("crypto");
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const { pool, query } = require("../config/database");
 const notificationService = require("../services/notification.service");
@@ -46,11 +49,161 @@ const MESSAGE_REPORT_REASONS = new Set([
   "privacy",
   "other",
 ]);
+const CLAIM_STATUSES = new Set([
+  "reported",
+  "evidence_review",
+  "estimate_pending",
+  "insurer_review",
+  "customer_response",
+  "approved",
+  "repair_authorized",
+  "disputed",
+  "settled",
+  "closed",
+  "denied",
+]);
+const CLAIM_LIABILITY = new Set([
+  "guest",
+  "host",
+  "operator",
+  "third_party",
+  "shared",
+  "undetermined",
+]);
+const CLAIM_EVIDENCE_TYPES = new Set([
+  "photo",
+  "condition_report",
+  "estimate",
+  "invoice",
+  "police_report",
+  "insurance_document",
+  "other",
+]);
+const CLAIM_EVIDENCE_ROOT = path.resolve(
+  process.env.GOODFLEET_CLAIM_EVIDENCE_DIR ||
+    "/var/lib/goodbase/goodfleet-claim-evidence",
+);
+const MAX_CLAIM_EVIDENCE_BYTES = 10 * 1024 * 1024;
+const claimEvidenceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: MAX_CLAIM_EVIDENCE_BYTES, fields: 10 },
+});
 
 router.use(authRequired);
 
 function clean(value, max = 4000) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+function receiveClaimEvidence(request, response, next) {
+  claimEvidenceUpload.single("file")(request, response, error => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return fail(
+        response,
+        413,
+        "CLAIM_EVIDENCE_TOO_LARGE",
+        "Claim evidence must be 10 MB or smaller.",
+      );
+    }
+    return fail(
+      response,
+      400,
+      "CLAIM_EVIDENCE_UPLOAD_FAILED",
+      error.message || "Claim evidence upload failed.",
+    );
+  });
+}
+
+function claimEvidenceFileType(file) {
+  const buffer = file?.buffer;
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  if (
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return { mimeType: "image/jpeg", extension: "jpg", evidenceType: "photo" };
+  }
+  if (
+    buffer.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    )
+  ) {
+    return { mimeType: "image/png", extension: "png", evidenceType: "photo" };
+  }
+  if (
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return { mimeType: "image/webp", extension: "webp", evidenceType: "photo" };
+  }
+  if (buffer.subarray(0, 4).toString("ascii") === "%PDF") {
+    return {
+      mimeType: "application/pdf",
+      extension: "pdf",
+      evidenceType: "other",
+    };
+  }
+  return null;
+}
+
+function safeClaimEvidencePath(fileName) {
+  const normalized = path.basename(String(fileName || ""));
+  if (!normalized || normalized !== fileName) return null;
+  const resolved = path.resolve(CLAIM_EVIDENCE_ROOT, normalized);
+  return resolved.startsWith(`${CLAIM_EVIDENCE_ROOT}${path.sep}`)
+    ? resolved
+    : null;
+}
+
+function listingPhotos(input, fallback = []) {
+  const values = Array.isArray(input) ? input : fallback;
+  return [...new Set(
+    values
+      .map(value => clean(value, 2000))
+      .filter(value => /^https:\/\//i.test(value)),
+  )].slice(0, 20);
+}
+
+function listingAvailability(input, fallback = {}) {
+  const source =
+    input && typeof input === "object" && !Array.isArray(input)
+      ? input
+      : fallback;
+  const pickupDays = [
+    ...new Set(
+      (Array.isArray(source?.pickupDays)
+        ? source.pickupDays
+        : [0, 1, 2, 3, 4, 5, 6]
+      )
+        .map(Number)
+        .filter(day => Number.isInteger(day) && day >= 0 && day <= 6),
+    ),
+  ].sort();
+  const unavailableRanges = (Array.isArray(source?.unavailableRanges)
+    ? source.unavailableRanges
+    : []
+  )
+    .map(range => {
+      const start = new Date(range?.start);
+      const end = new Date(range?.end);
+      return !Number.isNaN(start.getTime()) &&
+        !Number.isNaN(end.getTime()) &&
+        end > start
+        ? {
+            start: start.toISOString(),
+            end: end.toISOString(),
+            reason: clean(range?.reason, 200) || "Host calendar block",
+          }
+        : null;
+    })
+    .filter(Boolean)
+    .slice(0, 200);
+  return {
+    pickupDays: pickupDays.length ? pickupDays : [0, 1, 2, 3, 4, 5, 6],
+    unavailableRanges,
+  };
 }
 
 function fail(response, status, code, message, details) {
@@ -138,6 +291,17 @@ function rentalTimestamp(date, time, field) {
   return parsed.toISOString();
 }
 
+function normalizedTimestamp(value, field) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    const error = new Error(`${field} is invalid.`);
+    error.statusCode = 400;
+    error.code = "INVALID_DATE";
+    throw error;
+  }
+  return parsed.toISOString();
+}
+
 function rentalDays(pickupAt, returnAt) {
   return Math.max(
     1,
@@ -194,14 +358,21 @@ function bookingPayload(row) {
         }
       : {
           id: null,
-          name: "GoodFleet",
-        },
+        name: "GoodFleet",
+      },
+    guest: row.guest_name
+      ? {
+          name: row.guest_name,
+          email: row.guest_email || null,
+        }
+      : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 function listingPayload(row) {
+  const photos = Array.isArray(row.photos_json) ? row.photos_json : [];
   return {
     id: row.id,
     vehicleId: row.vehicle_id,
@@ -228,6 +399,13 @@ function listingPayload(row) {
         : Number(row.additional_mile_rate),
     rules: row.rules_json || {},
     features: row.features_json || [],
+    photos,
+    availability: row.availability_json || {
+      unavailableRanges: [],
+      pickupDays: [0, 1, 2, 3, 4, 5, 6],
+    },
+    reviewNote: row.review_note || null,
+    reviewedAt: row.reviewed_at || null,
     vehicle: {
       id: row.vehicle_id,
       vin: row.vin,
@@ -237,11 +415,99 @@ function listingPayload(row) {
       year: row.model_year,
       status: row.vehicle_status,
       dailyRate: Number(row.daily_rate),
-      imageUrl: row.vehicle_payload?.imageUrl || null,
+      imageUrl: photos[0] || row.vehicle_payload?.imageUrl || null,
       registrationExpiry: row.registration_expiry,
       insuranceExpiry: row.insurance_expiry,
     },
     publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function changeRequestPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    requestType: row.request_type,
+    status: row.status,
+    requestedChanges: row.requested_changes || {},
+    decisionNote: row.decision_note || null,
+    quotedTotal:
+      row.quoted_total === null || row.quoted_total === undefined
+        ? null
+        : Number(row.quoted_total),
+    decidedBy: row.decided_by || null,
+    decidedAt: row.decided_at || null,
+    appliedAt: row.applied_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function additionalDriverPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    userId: row.user_id || null,
+    fullName: row.full_name,
+    email: row.email,
+    status: row.status,
+    licenseVerificationStatus: row.license_verification_status,
+    reviewNote: row.review_note || null,
+    invitedAt: row.invited_at,
+    acceptedAt: row.accepted_at || null,
+    verifiedAt: row.verified_at || null,
+    approvedAt: row.approved_at || null,
+    updatedAt: row.updated_at,
+  };
+}
+
+function reviewPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    reviewer: {
+      id: row.reviewer_user_id,
+      name: row.reviewer_name || null,
+      role: row.reviewer_role,
+    },
+    revieweeUserId: row.reviewee_user_id || null,
+    rating: Number(row.rating),
+    body: row.body || "",
+    privateFeedback: row.private_feedback || "",
+    response: row.response || null,
+    respondedAt: row.responded_at || null,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function claimPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    reservationNumber: row.reservation_number || null,
+    vehicleId: row.vehicle_id,
+    vehicleName: [row.model_year, row.make, row.model]
+      .filter(Boolean)
+      .join(" "),
+    reportedBy: row.reported_by,
+    assignedTo: row.assigned_to || null,
+    status: row.status,
+    incidentAt: row.incident_at,
+    description: row.description,
+    liability: row.liability,
+    estimatedAmount:
+      row.estimated_amount === null ? null : Number(row.estimated_amount),
+    finalAmount: row.final_amount === null ? null : Number(row.final_amount),
+    insurerName: row.insurer_name || null,
+    insurerClaimReference: row.insurer_claim_reference || null,
+    decisionNote: row.decision_note || null,
+    resolvedAt: row.resolved_at || null,
+    evidence: Array.isArray(row.evidence) ? row.evidence : [],
+    events: Array.isArray(row.events) ? row.events : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -412,6 +678,42 @@ async function priceQuote(client, listing, input, pickupAt, returnAt) {
     );
     error.statusCode = 409;
     error.code = "ADVANCE_NOTICE_REQUIRED";
+    throw error;
+  }
+  const availability =
+    listing.availability_json &&
+    typeof listing.availability_json === "object" &&
+    !Array.isArray(listing.availability_json)
+      ? listing.availability_json
+      : {};
+  const pickupDays = Array.isArray(availability.pickupDays)
+    ? availability.pickupDays
+        .map(Number)
+        .filter(day => Number.isInteger(day) && day >= 0 && day <= 6)
+    : [0, 1, 2, 3, 4, 5, 6];
+  if (!pickupDays.includes(new Date(pickupAt).getDay())) {
+    const error = new Error("This host does not offer pickup on the selected day.");
+    error.statusCode = 409;
+    error.code = "PICKUP_DAY_UNAVAILABLE";
+    throw error;
+  }
+  const blocked = (Array.isArray(availability.unavailableRanges)
+    ? availability.unavailableRanges
+    : []
+  ).some(range => {
+    const start = new Date(range?.start).getTime();
+    const end = new Date(range?.end).getTime();
+    return (
+      Number.isFinite(start) &&
+      Number.isFinite(end) &&
+      start < new Date(returnAt).getTime() &&
+      end > new Date(pickupAt).getTime()
+    );
+  });
+  if (blocked) {
+    const error = new Error("This vehicle is blocked on the selected dates.");
+    error.statusCode = 409;
+    error.code = "HOST_CALENDAR_BLOCK";
     throw error;
   }
 
@@ -595,6 +897,45 @@ async function conversationAccess(request, conversationId) {
     conversation.host_user_id === request.user.id ||
     EMPLOYEE_ROLES.has(role);
   return allowed ? conversation : null;
+}
+
+async function bookingAccess(request, bookingId, { forUpdate = false } = {}) {
+  const result = await query(
+    `SELECT booking.*,listing.host_profile_id,
+            host.user_id AS host_user_id,
+            customer.full_name AS guest_name,
+            customer.email AS guest_email,
+            vehicle.make,vehicle.model,vehicle.model_year,
+            vehicle.payload->>'imageUrl' AS vehicle_image_url,
+            COALESCE(host.display_name,'GoodFleet') AS host_display_name
+       FROM fleet_bookings booking
+       JOIN fleet_customers customer
+         ON customer.organization_id=booking.organization_id
+        AND customer.id=booking.customer_id
+       JOIN fleet_vehicles vehicle
+         ON vehicle.organization_id=booking.organization_id
+        AND vehicle.id=booking.vehicle_id
+       LEFT JOIN fleet_vehicle_listings listing
+         ON listing.organization_id=booking.organization_id
+        AND listing.id=booking.listing_id
+       LEFT JOIN fleet_host_profiles host
+         ON host.organization_id=listing.organization_id
+        AND host.id=listing.host_profile_id
+      WHERE booking.organization_id=$1
+        AND booking.id=$2
+        AND booking.archived_at IS NULL
+      LIMIT 1
+      ${forUpdate ? "FOR UPDATE OF booking" : ""}`,
+    [PUBLIC_ORGANIZATION_ID, bookingId],
+  );
+  const booking = result.rows[0];
+  if (!booking) return null;
+  const role = fleetRole(request);
+  const allowed =
+    booking.guest_user_id === request.user.id ||
+    booking.host_user_id === request.user.id ||
+    EMPLOYEE_ROLES.has(role);
+  return allowed ? booking : null;
 }
 
 router.use(requireMarketplaceMember);
@@ -1209,10 +1550,334 @@ router.post(
   },
 );
 
+router.get(
+  "/reservations/:bookingId/change-requests",
+  async (request, response, next) => {
+    try {
+      const booking = await bookingAccess(request, request.params.bookingId);
+      if (!booking) {
+        return fail(
+          response,
+          404,
+          "BOOKING_NOT_FOUND",
+          "Reservation not found.",
+        );
+      }
+      const result = await query(
+        `SELECT *
+           FROM fleet_booking_change_requests
+          WHERE organization_id=$1 AND booking_id=$2
+          ORDER BY created_at DESC`,
+        [PUBLIC_ORGANIZATION_ID, booking.id],
+      );
+      response.json({
+        success: true,
+        data: result.rows.map(changeRequestPayload),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.get("/host/change-requests", requireHost, async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT change.*,booking.reservation_number,booking.pickup_at,
+              booking.return_at,vehicle.make,vehicle.model,vehicle.model_year,
+              customer.full_name AS guest_name
+         FROM fleet_booking_change_requests change
+         JOIN fleet_bookings booking
+           ON booking.organization_id=change.organization_id
+          AND booking.id=change.booking_id
+         JOIN fleet_vehicle_listings listing
+           ON listing.organization_id=booking.organization_id
+          AND listing.id=booking.listing_id
+         JOIN fleet_host_profiles host
+           ON host.organization_id=listing.organization_id
+          AND host.id=listing.host_profile_id
+         JOIN fleet_vehicles vehicle
+           ON vehicle.organization_id=booking.organization_id
+          AND vehicle.id=booking.vehicle_id
+         JOIN fleet_customers customer
+           ON customer.organization_id=booking.organization_id
+          AND customer.id=booking.customer_id
+        WHERE change.organization_id=$1 AND host.user_id=$2
+        ORDER BY (change.status='pending') DESC,change.created_at DESC`,
+      [PUBLIC_ORGANIZATION_ID, request.user.id],
+    );
+    response.json({
+      success: true,
+      data: result.rows.map(row => ({
+        ...changeRequestPayload(row),
+        reservationNumber: row.reservation_number,
+        currentPickupAt: row.pickup_at,
+        currentReturnAt: row.return_at,
+        vehicleName: [row.model_year, row.make, row.model]
+          .filter(Boolean)
+          .join(" "),
+        guestName: row.guest_name,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  "/host/change-requests/:changeRequestId/decision",
+  requireHost,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    let guestUserId = null;
+    let bookingId = null;
+    try {
+      const decision = clean(request.body?.decision, 20).toLowerCase();
+      const decisionNote = clean(request.body?.note, 2000);
+      if (!["approve", "decline"].includes(decision)) {
+        return fail(
+          response,
+          400,
+          "INVALID_CHANGE_DECISION",
+          "Choose approve or decline.",
+        );
+      }
+      await client.query("BEGIN");
+      const recordResult = await client.query(
+        `SELECT change.*,booking.*,host.user_id AS host_user_id,
+                listing.trip_buffer_hours
+           FROM fleet_booking_change_requests change
+           JOIN fleet_bookings booking
+             ON booking.organization_id=change.organization_id
+            AND booking.id=change.booking_id
+           JOIN fleet_vehicle_listings listing
+             ON listing.organization_id=booking.organization_id
+            AND listing.id=booking.listing_id
+           JOIN fleet_host_profiles host
+             ON host.organization_id=listing.organization_id
+            AND host.id=listing.host_profile_id
+          WHERE change.organization_id=$1
+            AND change.id=$2
+            AND host.user_id=$3
+          FOR UPDATE OF change,booking`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          request.params.changeRequestId,
+          request.user.id,
+        ],
+      );
+      if (!recordResult.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "CHANGE_REQUEST_NOT_FOUND",
+          "Reservation change request not found.",
+        );
+      }
+      const record = recordResult.rows[0];
+      if (record.status !== "pending") {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "CHANGE_REQUEST_ALREADY_DECIDED",
+          "This change request was already decided.",
+        );
+      }
+      bookingId = record.booking_id;
+      guestUserId = record.guest_user_id;
+      let quotedTotal = null;
+      let appliedAt = null;
+      if (decision === "approve") {
+        const changes = record.requested_changes || {};
+        const pickupAt = changes.pickupAt
+          ? normalizedTimestamp(changes.pickupAt, "pickupAt")
+          : changes.startDate
+            ? rentalTimestamp(
+                changes.startDate,
+                changes.pickupTime || new Date(record.pickup_at)
+                  .toISOString()
+                  .slice(11, 16),
+                "pickupAt",
+              )
+            : new Date(record.pickup_at).toISOString();
+        const returnAt = changes.returnAt
+          ? normalizedTimestamp(changes.returnAt, "returnAt")
+          : changes.endDate
+            ? rentalTimestamp(
+                changes.endDate,
+                changes.dropoffTime || new Date(record.return_at)
+                  .toISOString()
+                  .slice(11, 16),
+                "returnAt",
+              )
+            : new Date(record.return_at).toISOString();
+        if (
+          Number.isNaN(new Date(pickupAt).getTime()) ||
+          Number.isNaN(new Date(returnAt).getTime()) ||
+          new Date(returnAt) <= new Date(pickupAt)
+        ) {
+          await client.query("ROLLBACK");
+          return fail(
+            response,
+            400,
+            "INVALID_RENTAL_PERIOD",
+            "The requested trip dates are invalid.",
+          );
+        }
+        const listing = await marketplaceListing(client, record.listing_id);
+        if (!listing) {
+          await client.query("ROLLBACK");
+          return fail(
+            response,
+            409,
+            "LISTING_NOT_AVAILABLE",
+            "The vehicle listing is no longer available.",
+          );
+        }
+        const quote = await priceQuote(
+          client,
+          listing,
+          {
+            pickupLocationId:
+              changes.pickupLocationId || record.pickup_branch_id,
+            delivery: Boolean(changes.delivery),
+          },
+          pickupAt,
+          returnAt,
+        );
+        const conflict = await client.query(
+          `SELECT 1
+             FROM fleet_bookings booking
+            WHERE booking.organization_id=$1
+              AND booking.vehicle_id=$2
+              AND booking.id<>$3
+              AND booking.archived_at IS NULL
+              AND booking.status=ANY($6::text[])
+              AND tsrange(
+                (booking.pickup_at AT TIME ZONE 'UTC') -
+                  make_interval(hours => $7::integer),
+                (booking.return_at AT TIME ZONE 'UTC') +
+                  make_interval(hours => $7::integer),
+                '[)'
+              ) && tsrange(
+                ($4::timestamptz AT TIME ZONE 'UTC'),
+                ($5::timestamptz AT TIME ZONE 'UTC'),
+                '[)'
+              )
+            LIMIT 1`,
+          [
+            PUBLIC_ORGANIZATION_ID,
+            record.vehicle_id,
+            record.booking_id,
+            pickupAt,
+            returnAt,
+            ACTIVE_BOOKING_STATUSES,
+            listing.trip_buffer_hours,
+          ],
+        );
+        if (conflict.rowCount) {
+          await client.query("ROLLBACK");
+          return fail(
+            response,
+            409,
+            "VEHICLE_NOT_AVAILABLE",
+            "The vehicle is unavailable for the requested dates.",
+          );
+        }
+        quotedTotal = quote.total;
+        appliedAt = new Date().toISOString();
+        await client.query(
+          `UPDATE fleet_bookings
+              SET pickup_at=$3,return_at=$4,
+                  pickup_branch_id=COALESCE($5,pickup_branch_id),
+                  return_branch_id=COALESCE($6,return_branch_id),
+                  total_amount=$7,
+                  payment_status=CASE
+                    WHEN paid_amount=0 THEN 'unpaid'
+                    WHEN paid_amount<$7 THEN 'partial'
+                    ELSE 'paid'
+                  END,
+                  status=CASE
+                    WHEN $8='extension' AND status IN ('checked_out','overdue')
+                      THEN 'extended'
+                    ELSE status
+                  END,
+                  version=version+1,updated_by=$9,updated_at=NOW()
+            WHERE organization_id=$1 AND id=$2`,
+          [
+            PUBLIC_ORGANIZATION_ID,
+            record.booking_id,
+            pickupAt,
+            returnAt,
+            clean(changes.pickupLocationId, 200) || null,
+            clean(changes.returnLocationId, 200) || null,
+            quote.total.toFixed(2),
+            record.request_type,
+            request.user.id,
+          ],
+        );
+      }
+      const updated = await client.query(
+        `UPDATE fleet_booking_change_requests
+            SET status=$3,decision_note=$4,decided_by=$5,decided_at=NOW(),
+                quoted_total=$6,applied_at=$7,updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2
+          RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          record.id,
+          decision === "approve" ? "approved" : "declined",
+          decisionNote || null,
+          request.user.id,
+          quotedTotal,
+          appliedAt,
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        `marketplace.booking.change_${decision === "approve" ? "approved" : "declined"}`,
+        "booking_change_request",
+        record.id,
+        {
+          bookingId: record.booking_id,
+          quotedTotal,
+          applied: decision === "approve",
+        },
+      );
+      await client.query("COMMIT");
+      await notifyBookingParty({
+        organizationId: PUBLIC_ORGANIZATION_ID,
+        recipientUserId: guestUserId,
+        title: `Reservation change ${decision === "approve" ? "approved" : "declined"}`,
+        message:
+          decision === "approve"
+            ? "Your host approved the requested trip change. Review the updated dates and balance."
+            : `Your host declined the requested trip change${decisionNote ? `: ${decisionNote}` : "."}`,
+        bookingId,
+        actionUrl: "/account/trips",
+      });
+      response.json({
+        success: true,
+        data: changeRequestPayload(updated.rows[0]),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
 router.post(
   "/reservations/:bookingId/additional-drivers",
   async (request, response, next) => {
     const client = await pool.connect();
+    let invitedUser = null;
     try {
       const fullName = clean(request.body?.fullName, 200);
       const email = clean(request.body?.email, 320).toLowerCase();
@@ -1225,7 +1890,7 @@ router.post(
         );
       }
       const booking = await client.query(
-        `SELECT id
+        `SELECT id,reservation_number
            FROM fleet_bookings
           WHERE organization_id=$1 AND id=$2 AND guest_user_id=$3
             AND archived_at IS NULL
@@ -1240,24 +1905,328 @@ router.post(
           "Active reservation not found.",
         );
       }
+      const account = await client.query(
+        `SELECT account.id,account.email,
+                customer.license_verification_status
+           FROM users account
+           LEFT JOIN fleet_customers customer
+             ON customer.organization_id=$1
+            AND customer.user_id=account.id
+            AND customer.archived_at IS NULL
+          WHERE lower(account.email)=lower($2)
+            AND account.status='active'
+          LIMIT 1`,
+        [PUBLIC_ORGANIZATION_ID, email],
+      );
+      invitedUser = account.rows[0] || null;
+      await client.query("BEGIN");
       const created = await client.query(
         `INSERT INTO fleet_booking_additional_drivers
-          (organization_id,booking_id,invited_by,full_name,email)
-         VALUES ($1,$2,$3,$4,$5)
+          (organization_id,booking_id,invited_by,user_id,full_name,email,
+           license_verification_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (organization_id,booking_id,email)
-         DO UPDATE SET full_name=EXCLUDED.full_name,status='invited',
+         DO UPDATE SET full_name=EXCLUDED.full_name,user_id=EXCLUDED.user_id,
+                       status='invited',
+                       license_verification_status=EXCLUDED.license_verification_status,
                        invited_at=NOW(),updated_at=NOW()
          RETURNING *`,
         [
           PUBLIC_ORGANIZATION_ID,
           booking.rows[0].id,
           request.user.id,
+          invitedUser?.id || null,
           fullName,
+          email,
+          invitedUser?.license_verification_status === "verified"
+            ? "verified"
+            : "pending",
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.additional_driver.invited",
+        "additional_driver",
+        created.rows[0].id,
+        {
+          bookingId: booking.rows[0].id,
+          linkedAccount: Boolean(invitedUser?.id),
+        },
+      );
+      await client.query("COMMIT");
+      if (invitedUser?.id) {
+        await notify({
+          recipientUserId: invitedUser.id,
+          recipientEmail: invitedUser.email,
+          title: "You were added as a GoodFleet driver",
+          message: `Review and accept the additional-driver invitation for ${booking.rows[0].reservation_number}.`,
+          category: "reservation",
+          channel: "in_app",
+          actionUrl: "/account/trips",
+          notificationKey: "fleet.marketplace.driver_invitation",
+          sourceId: created.rows[0].id,
+          payload: {
+            bookingId: booking.rows[0].id,
+            additionalDriverId: created.rows[0].id,
+          },
+        });
+      }
+      response.status(201).json({
+        success: true,
+        data: additionalDriverPayload(created.rows[0]),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.get(
+  "/reservations/:bookingId/additional-drivers",
+  async (request, response, next) => {
+    try {
+      const booking = await bookingAccess(request, request.params.bookingId);
+      if (!booking) {
+        return fail(
+          response,
+          404,
+          "BOOKING_NOT_FOUND",
+          "Reservation not found.",
+        );
+      }
+      const result = await query(
+        `SELECT *
+           FROM fleet_booking_additional_drivers
+          WHERE organization_id=$1 AND booking_id=$2 AND status<>'removed'
+          ORDER BY invited_at`,
+        [PUBLIC_ORGANIZATION_ID, booking.id],
+      );
+      response.json({
+        success: true,
+        data: result.rows.map(additionalDriverPayload),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.get("/additional-driver-invitations", async (request, response, next) => {
+  try {
+    const email = clean(request.user.email, 320).toLowerCase();
+    const result = await query(
+      `SELECT driver.*,booking.reservation_number,booking.pickup_at,
+              booking.return_at,vehicle.make,vehicle.model,vehicle.model_year
+         FROM fleet_booking_additional_drivers driver
+         JOIN fleet_bookings booking
+           ON booking.organization_id=driver.organization_id
+          AND booking.id=driver.booking_id
+         JOIN fleet_vehicles vehicle
+           ON vehicle.organization_id=booking.organization_id
+          AND vehicle.id=booking.vehicle_id
+        WHERE driver.organization_id=$1
+          AND lower(driver.email)=lower($2)
+          AND driver.status<>'removed'
+        ORDER BY driver.invited_at DESC`,
+      [PUBLIC_ORGANIZATION_ID, email],
+    );
+    response.json({
+      success: true,
+      data: result.rows.map(row => ({
+        ...additionalDriverPayload(row),
+        reservationNumber: row.reservation_number,
+        pickupAt: row.pickup_at,
+        returnAt: row.return_at,
+        vehicleName: [row.model_year, row.make, row.model]
+          .filter(Boolean)
+          .join(" "),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  "/additional-driver-invitations/:driverId/accept",
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const email = clean(request.user.email, 320).toLowerCase();
+      const invitation = await client.query(
+        `SELECT driver.*,customer.license_verification_status AS customer_license_status
+           FROM fleet_booking_additional_drivers driver
+           LEFT JOIN fleet_customers customer
+             ON customer.organization_id=driver.organization_id
+            AND customer.user_id=$3
+            AND customer.archived_at IS NULL
+          WHERE driver.organization_id=$1
+            AND driver.id=$2
+            AND lower(driver.email)=lower($4)
+            AND driver.status IN ('invited','verification_required')
+          FOR UPDATE OF driver`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          request.params.driverId,
+          request.user.id,
           email,
         ],
       );
-      response.status(201).json({ success: true, data: created.rows[0] });
+      if (!invitation.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "DRIVER_INVITATION_NOT_FOUND",
+          "Additional-driver invitation not found.",
+        );
+      }
+      const licenseVerified =
+        invitation.rows[0].customer_license_status === "verified";
+      const updated = await client.query(
+        `UPDATE fleet_booking_additional_drivers
+            SET user_id=$3,status=$4,license_verification_status=$5,
+                accepted_at=COALESCE(accepted_at,NOW()),
+                verified_at=CASE WHEN $5='verified' THEN NOW() ELSE NULL END,
+                approved_at=CASE WHEN $4='approved' THEN NOW() ELSE NULL END,
+                updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2
+          RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          invitation.rows[0].id,
+          request.user.id,
+          licenseVerified ? "approved" : "verification_required",
+          licenseVerified ? "verified" : "pending",
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.additional_driver.accepted",
+        "additional_driver",
+        invitation.rows[0].id,
+        {
+          bookingId: invitation.rows[0].booking_id,
+          licenseVerified,
+        },
+      );
+      await client.query("COMMIT");
+      response.json({
+        success: true,
+        data: additionalDriverPayload(updated.rows[0]),
+      });
     } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.post(
+  "/admin/additional-drivers/:driverId/review",
+  requireEmployee,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      const decision = clean(request.body?.decision, 20).toLowerCase();
+      if (!["approve", "reject"].includes(decision)) {
+        return fail(
+          response,
+          400,
+          "INVALID_DRIVER_DECISION",
+          "Choose approve or reject.",
+        );
+      }
+      await client.query("BEGIN");
+      const driver = await client.query(
+        `SELECT driver.*,customer.license_verification_status AS customer_license_status
+           FROM fleet_booking_additional_drivers driver
+           LEFT JOIN fleet_customers customer
+             ON customer.organization_id=driver.organization_id
+            AND customer.user_id=driver.user_id
+            AND customer.archived_at IS NULL
+          WHERE driver.organization_id=$1 AND driver.id=$2
+          FOR UPDATE OF driver`,
+        [PUBLIC_ORGANIZATION_ID, request.params.driverId],
+      );
+      if (!driver.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "ADDITIONAL_DRIVER_NOT_FOUND",
+          "Additional driver not found.",
+        );
+      }
+      if (
+        decision === "approve" &&
+        driver.rows[0].customer_license_status !== "verified"
+      ) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "DRIVER_LICENSE_VERIFICATION_REQUIRED",
+          "Verify this driver's linked GoodFleet identity before approval.",
+        );
+      }
+      const updated = await client.query(
+        `UPDATE fleet_booking_additional_drivers
+            SET status=$3,license_verification_status=$4,reviewed_by=$5,
+                review_note=$6,
+                verified_at=CASE WHEN $4='verified' THEN NOW() ELSE verified_at END,
+                approved_at=CASE WHEN $3='approved' THEN NOW() ELSE NULL END,
+                updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2
+          RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          driver.rows[0].id,
+          decision === "approve" ? "approved" : "rejected",
+          decision === "approve" ? "verified" : "failed",
+          request.user.id,
+          clean(request.body?.note, 2000) || null,
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        `marketplace.additional_driver.${decision === "approve" ? "approved" : "rejected"}`,
+        "additional_driver",
+        driver.rows[0].id,
+        { bookingId: driver.rows[0].booking_id },
+      );
+      await client.query("COMMIT");
+      if (driver.rows[0].user_id) {
+        await notifyBookingParty({
+          organizationId: PUBLIC_ORGANIZATION_ID,
+          recipientUserId: driver.rows[0].user_id,
+          title: `Additional-driver access ${decision === "approve" ? "approved" : "not approved"}`,
+          message:
+            decision === "approve"
+              ? "Your GoodFleet driver verification is complete."
+              : "GoodFleet could not approve this additional-driver request. Review your identity details.",
+          bookingId: driver.rows[0].booking_id,
+          actionUrl: "/account/trips",
+        });
+      }
+      response.json({
+        success: true,
+        data: additionalDriverPayload(updated.rows[0]),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
       next(error);
     } finally {
       client.release();
@@ -1804,6 +2773,959 @@ router.post(
   },
 );
 
+router.get(
+  "/reservations/:bookingId/reviews",
+  async (request, response, next) => {
+    try {
+      const booking = await bookingAccess(request, request.params.bookingId);
+      if (!booking) {
+        return fail(
+          response,
+          404,
+          "BOOKING_NOT_FOUND",
+          "Reservation not found.",
+        );
+      }
+      const result = await query(
+        `SELECT review.*,COALESCE(account.display_name,account.email) AS reviewer_name
+           FROM fleet_trip_reviews review
+           JOIN users account ON account.id=review.reviewer_user_id
+          WHERE review.organization_id=$1 AND review.booking_id=$2
+            AND (
+              review.status='published' OR
+              review.reviewer_user_id=$3 OR
+              $4::boolean
+            )
+          ORDER BY review.created_at`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          booking.id,
+          request.user.id,
+          EMPLOYEE_ROLES.has(fleetRole(request)),
+        ],
+      );
+      response.json({
+        success: true,
+        data: result.rows.map(reviewPayload),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.post(
+  "/reservations/:bookingId/reviews",
+  async (request, response, next) => {
+    const client = await pool.connect();
+    let revieweeUserId = null;
+    try {
+      const rating = Number(request.body?.rating);
+      const body = clean(request.body?.body, 2000);
+      const privateFeedback = clean(request.body?.privateFeedback, 2000);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return fail(
+          response,
+          400,
+          "INVALID_REVIEW_RATING",
+          "Choose a rating from one to five.",
+        );
+      }
+      await client.query("BEGIN");
+      const access = await client.query(
+        `SELECT booking.*,customer.user_id AS guest_user_id,
+                host.user_id AS host_user_id
+           FROM fleet_bookings booking
+           JOIN fleet_customers customer
+             ON customer.organization_id=booking.organization_id
+            AND customer.id=booking.customer_id
+           LEFT JOIN fleet_vehicle_listings listing
+             ON listing.organization_id=booking.organization_id
+            AND listing.id=booking.listing_id
+           LEFT JOIN fleet_host_profiles host
+             ON host.organization_id=listing.organization_id
+            AND host.id=listing.host_profile_id
+          WHERE booking.organization_id=$1 AND booking.id=$2
+            AND booking.archived_at IS NULL
+          FOR SHARE OF booking`,
+        [PUBLIC_ORGANIZATION_ID, request.params.bookingId],
+      );
+      if (!access.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "BOOKING_NOT_FOUND",
+          "Reservation not found.",
+        );
+      }
+      const booking = access.rows[0];
+      if (booking.status !== "completed") {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "TRIP_NOT_COMPLETED",
+          "Reviews open after the trip is completed.",
+        );
+      }
+      const reviewerRole =
+        booking.guest_user_id === request.user.id
+          ? "guest"
+          : booking.host_user_id === request.user.id
+            ? "host"
+            : null;
+      if (!reviewerRole) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          403,
+          "REVIEW_NOT_ALLOWED",
+          "Only the guest or host for this trip can leave a review.",
+        );
+      }
+      revieweeUserId =
+        reviewerRole === "guest"
+          ? booking.host_user_id
+          : booking.guest_user_id;
+      const saved = await client.query(
+        `INSERT INTO fleet_trip_reviews
+          (organization_id,booking_id,reviewer_user_id,reviewee_user_id,
+           reviewer_role,rating,body,private_feedback)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (organization_id,booking_id,reviewer_user_id)
+         DO UPDATE SET rating=EXCLUDED.rating,body=EXCLUDED.body,
+                       private_feedback=EXCLUDED.private_feedback,
+                       status='published',updated_at=NOW()
+         RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          booking.id,
+          request.user.id,
+          revieweeUserId,
+          reviewerRole,
+          rating,
+          body,
+          privateFeedback || null,
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.trip.reviewed",
+        "trip_review",
+        saved.rows[0].id,
+        { bookingId: booking.id, reviewerRole, rating },
+      );
+      await client.query("COMMIT");
+      if (revieweeUserId) {
+        await notifyBookingParty({
+          organizationId: PUBLIC_ORGANIZATION_ID,
+          recipientUserId: revieweeUserId,
+          title: "New GoodFleet trip review",
+          message: `A ${reviewerRole} left a ${rating}-star review.`,
+          bookingId: booking.id,
+          actionUrl:
+            reviewerRole === "guest" ? "/host/trips" : "/account/trips",
+        });
+      }
+      response.status(201).json({
+        success: true,
+        data: reviewPayload(saved.rows[0]),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.post(
+  "/reviews/:reviewId/respond",
+  requireHost,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      const responseBody = clean(request.body?.response, 2000);
+      if (!responseBody) {
+        return fail(
+          response,
+          400,
+          "REVIEW_RESPONSE_REQUIRED",
+          "Enter a public response.",
+        );
+      }
+      await client.query("BEGIN");
+      const updated = await client.query(
+        `UPDATE fleet_trip_reviews review
+            SET response=$4,responded_at=NOW(),updated_at=NOW()
+           FROM fleet_bookings booking
+           JOIN fleet_vehicle_listings listing
+             ON listing.organization_id=booking.organization_id
+            AND listing.id=booking.listing_id
+           JOIN fleet_host_profiles host
+             ON host.organization_id=listing.organization_id
+            AND host.id=listing.host_profile_id
+          WHERE review.organization_id=$1
+            AND review.id=$2
+            AND review.booking_id=booking.id
+            AND host.user_id=$3
+            AND review.reviewer_role='guest'
+          RETURNING review.*`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          request.params.reviewId,
+          request.user.id,
+          responseBody,
+        ],
+      );
+      if (!updated.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "REVIEW_NOT_FOUND",
+          "Guest review not found.",
+        );
+      }
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.review.responded",
+        "trip_review",
+        updated.rows[0].id,
+        { bookingId: updated.rows[0].booking_id },
+      );
+      await client.query("COMMIT");
+      response.json({
+        success: true,
+        data: reviewPayload(updated.rows[0]),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.get("/host/performance", requireHost, async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT
+         COUNT(DISTINCT booking.id) FILTER (
+           WHERE booking.status='completed'
+         )::integer AS completed_trips,
+         COUNT(DISTINCT booking.id) FILTER (
+           WHERE booking.status IN ('cancelled','no_show')
+         )::integer AS cancelled_trips,
+         COUNT(DISTINCT listing.id) FILTER (
+           WHERE listing.status='active'
+         )::integer AS active_listings,
+         COALESCE(ROUND(AVG(review.rating)::numeric,2),0) AS average_rating,
+         COUNT(DISTINCT review.id)::integer AS review_count,
+         COALESCE(SUM(booking.total_amount) FILTER (
+           WHERE booking.status NOT IN ('cancelled','refunded','no_show')
+         ),0) AS gross_booking_value
+       FROM fleet_host_profiles host
+       LEFT JOIN fleet_vehicle_listings listing
+         ON listing.organization_id=host.organization_id
+        AND listing.host_profile_id=host.id
+        AND listing.archived_at IS NULL
+       LEFT JOIN fleet_bookings booking
+         ON booking.organization_id=listing.organization_id
+        AND booking.listing_id=listing.id
+        AND booking.archived_at IS NULL
+       LEFT JOIN fleet_trip_reviews review
+         ON review.organization_id=booking.organization_id
+        AND review.booking_id=booking.id
+        AND review.reviewer_role='guest'
+        AND review.status='published'
+      WHERE host.organization_id=$1 AND host.user_id=$2
+      GROUP BY host.id`,
+      [PUBLIC_ORGANIZATION_ID, request.user.id],
+    );
+    response.json({
+      success: true,
+      data: result.rows[0] || {
+        completed_trips: 0,
+        cancelled_trips: 0,
+        active_listings: 0,
+        average_rating: 0,
+        review_count: 0,
+        gross_booking_value: 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function claimRecord(claimId) {
+  const result = await query(
+    `SELECT claim.*,booking.reservation_number,booking.guest_user_id,
+            host.user_id AS host_user_id,
+            vehicle.make,vehicle.model,vehicle.model_year,
+            COALESCE(evidence.items,'[]'::jsonb) AS evidence,
+            COALESCE(events.items,'[]'::jsonb) AS events
+       FROM fleet_claim_cases claim
+       JOIN fleet_bookings booking
+         ON booking.organization_id=claim.organization_id
+        AND booking.id=claim.booking_id
+       JOIN fleet_vehicles vehicle
+         ON vehicle.organization_id=claim.organization_id
+        AND vehicle.id=claim.vehicle_id
+       LEFT JOIN fleet_vehicle_listings listing
+         ON listing.organization_id=booking.organization_id
+        AND listing.id=booking.listing_id
+       LEFT JOIN fleet_host_profiles host
+         ON host.organization_id=listing.organization_id
+        AND host.id=listing.host_profile_id
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(
+           jsonb_build_object(
+             'id',item.id,'type',item.evidence_type,'fileName',item.file_name,
+             'fileUrl',item.file_url,'mimeType',item.mime_type,'note',item.note,
+             'createdAt',item.created_at
+           ) ORDER BY item.created_at
+         ) AS items
+           FROM fleet_claim_evidence item
+          WHERE item.organization_id=claim.organization_id
+            AND item.claim_id=claim.id
+       ) evidence ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(
+           jsonb_build_object(
+             'id',event.id,'action',event.action,'details',event.details_json,
+             'actorId',event.actor_id,'createdAt',event.created_at
+           ) ORDER BY event.created_at
+         ) AS items
+           FROM fleet_claim_events event
+          WHERE event.organization_id=claim.organization_id
+            AND event.claim_id=claim.id
+       ) events ON TRUE
+      WHERE claim.organization_id=$1 AND claim.id=$2
+      LIMIT 1`,
+    [PUBLIC_ORGANIZATION_ID, claimId],
+  );
+  return result.rows[0] || null;
+}
+
+function canAccessClaim(request, record) {
+  const role = fleetRole(request);
+  return Boolean(
+    record &&
+      (record.guest_user_id === request.user.id ||
+        record.host_user_id === request.user.id ||
+        EMPLOYEE_ROLES.has(role)),
+  );
+}
+
+router.get("/claims", async (request, response, next) => {
+  try {
+    const role = fleetRole(request);
+    const result = await query(
+      `SELECT claim.id
+         FROM fleet_claim_cases claim
+         JOIN fleet_bookings booking
+           ON booking.organization_id=claim.organization_id
+          AND booking.id=claim.booking_id
+         LEFT JOIN fleet_vehicle_listings listing
+           ON listing.organization_id=booking.organization_id
+          AND listing.id=booking.listing_id
+         LEFT JOIN fleet_host_profiles host
+           ON host.organization_id=listing.organization_id
+          AND host.id=listing.host_profile_id
+        WHERE claim.organization_id=$1
+          AND (
+            $3::boolean OR booking.guest_user_id=$2 OR host.user_id=$2
+          )
+        ORDER BY claim.updated_at DESC
+        LIMIT 200`,
+      [
+        PUBLIC_ORGANIZATION_ID,
+        request.user.id,
+        EMPLOYEE_ROLES.has(role),
+      ],
+    );
+    const records = await Promise.all(
+      result.rows.map(row => claimRecord(row.id)),
+    );
+    response.json({
+      success: true,
+      data: records.filter(Boolean).map(claimPayload),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  "/reservations/:bookingId/claims",
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      const description = clean(request.body?.description, 4000);
+      const incidentAt = request.body?.incidentAt
+        ? new Date(request.body.incidentAt)
+        : new Date();
+      if (description.length < 10 || Number.isNaN(incidentAt.getTime())) {
+        return fail(
+          response,
+          400,
+          "CLAIM_DETAILS_REQUIRED",
+          "Describe the incident and provide a valid incident date.",
+        );
+      }
+      const booking = await bookingAccess(request, request.params.bookingId);
+      if (!booking) {
+        return fail(
+          response,
+          404,
+          "BOOKING_NOT_FOUND",
+          "Reservation not found.",
+        );
+      }
+      await client.query("BEGIN");
+      const created = await client.query(
+        `INSERT INTO fleet_claim_cases
+          (organization_id,booking_id,vehicle_id,reported_by,incident_at,
+           description,liability)
+         VALUES ($1,$2,$3,$4,$5,$6,'undetermined')
+         RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          booking.id,
+          booking.vehicle_id,
+          request.user.id,
+          incidentAt.toISOString(),
+          description,
+        ],
+      );
+      await client.query(
+        `INSERT INTO fleet_claim_events
+          (organization_id,claim_id,actor_id,action,details_json)
+         VALUES ($1,$2,$3,'claim.reported',$4::jsonb)`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          created.rows[0].id,
+          request.user.id,
+          JSON.stringify({ description }),
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.claim.reported",
+        "claim",
+        created.rows[0].id,
+        { bookingId: booking.id },
+      );
+      await client.query("COMMIT");
+      const recipients = await operatorRecipients(
+        PUBLIC_ORGANIZATION_ID,
+        request.user.id,
+      );
+      await Promise.all(
+        recipients.map(recipient =>
+          notify({
+            recipientUserId: recipient.id,
+            recipientEmail: recipient.email,
+            title: "New trip claim requires review",
+            message: `A claim was reported for ${booking.reservation_number}.`,
+            category: "trip",
+            channel: "in_app",
+            actionUrl: "/operations?tab=damage-claims",
+            notificationKey: "fleet.marketplace.claim_reported",
+            sourceId: created.rows[0].id,
+            payload: { bookingId: booking.id, claimId: created.rows[0].id },
+          }),
+        ),
+      );
+      response.status(201).json({
+        success: true,
+        data: claimPayload({
+          ...created.rows[0],
+          reservation_number: booking.reservation_number,
+          make: booking.make,
+          model: booking.model,
+          model_year: booking.model_year,
+          evidence: [],
+          events: [],
+        }),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.post(
+  "/claims/:claimId/evidence",
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      const record = await claimRecord(request.params.claimId);
+      if (!canAccessClaim(request, record)) {
+        return fail(
+          response,
+          404,
+          "CLAIM_NOT_FOUND",
+          "Claim not found.",
+        );
+      }
+      const evidenceType = clean(request.body?.evidenceType, 40);
+      const fileName = clean(request.body?.fileName, 300);
+      const fileUrl = clean(request.body?.fileUrl, 2000);
+      if (
+        !CLAIM_EVIDENCE_TYPES.has(evidenceType) ||
+        !fileName ||
+        !/^(https:\/\/|\/api\/)/.test(fileUrl)
+      ) {
+        return fail(
+          response,
+          400,
+          "INVALID_CLAIM_EVIDENCE",
+          "Choose an evidence type and a secure uploaded file.",
+        );
+      }
+      await client.query("BEGIN");
+      const created = await client.query(
+        `INSERT INTO fleet_claim_evidence
+          (organization_id,claim_id,uploaded_by,evidence_type,file_name,
+           file_url,mime_type,checksum_sha256,note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          record.id,
+          request.user.id,
+          evidenceType,
+          fileName,
+          fileUrl,
+          clean(request.body?.mimeType, 160) || null,
+          clean(request.body?.checksumSha256, 64) || null,
+          clean(request.body?.note, 2000) || null,
+        ],
+      );
+      await client.query(
+        `INSERT INTO fleet_claim_events
+          (organization_id,claim_id,actor_id,action,details_json)
+         VALUES ($1,$2,$3,'claim.evidence_added',$4::jsonb)`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          record.id,
+          request.user.id,
+          JSON.stringify({
+            evidenceId: created.rows[0].id,
+            evidenceType,
+            fileName,
+          }),
+        ],
+      );
+      await client.query(
+        `UPDATE fleet_claim_cases
+            SET status=CASE WHEN status='reported' THEN 'evidence_review' ELSE status END,
+                updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2`,
+        [PUBLIC_ORGANIZATION_ID, record.id],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.claim.evidence_added",
+        "claim",
+        record.id,
+        { evidenceId: created.rows[0].id, evidenceType },
+      );
+      await client.query("COMMIT");
+      response.status(201).json({
+        success: true,
+        data: {
+          id: created.rows[0].id,
+          type: created.rows[0].evidence_type,
+          fileName: created.rows[0].file_name,
+          fileUrl: created.rows[0].file_url,
+          mimeType: created.rows[0].mime_type,
+          note: created.rows[0].note,
+          createdAt: created.rows[0].created_at,
+        },
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.post(
+  "/claims/:claimId/evidence-file",
+  receiveClaimEvidence,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    let storedPath = null;
+    try {
+      const record = await claimRecord(request.params.claimId);
+      if (!canAccessClaim(request, record)) {
+        return fail(
+          response,
+          404,
+          "CLAIM_NOT_FOUND",
+          "Claim not found.",
+        );
+      }
+      const detected = claimEvidenceFileType(request.file);
+      if (!detected) {
+        return fail(
+          response,
+          400,
+          "INVALID_CLAIM_EVIDENCE_FILE",
+          "Upload a JPEG, PNG, WebP, or PDF file.",
+        );
+      }
+      const requestedType = clean(request.body?.evidenceType, 40);
+      const evidenceType = CLAIM_EVIDENCE_TYPES.has(requestedType)
+        ? requestedType
+        : detected.evidenceType;
+      const evidenceId = crypto.randomUUID();
+      const storedName = `${evidenceId}.${detected.extension}`;
+      storedPath = safeClaimEvidencePath(storedName);
+      await fs.promises.mkdir(CLAIM_EVIDENCE_ROOT, {
+        recursive: true,
+        mode: 0o750,
+      });
+      await fs.promises.writeFile(storedPath, request.file.buffer, {
+        mode: 0o640,
+        flag: "wx",
+      });
+      const checksum = crypto
+        .createHash("sha256")
+        .update(request.file.buffer)
+        .digest("hex");
+      const fileUrl =
+        `/api/fleet/v1/marketplace/claims/evidence/${evidenceId}/file`;
+      await client.query("BEGIN");
+      const created = await client.query(
+        `INSERT INTO fleet_claim_evidence
+          (id,organization_id,claim_id,uploaded_by,evidence_type,file_name,
+           file_url,mime_type,checksum_sha256,note,storage_reference)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING *`,
+        [
+          evidenceId,
+          PUBLIC_ORGANIZATION_ID,
+          record.id,
+          request.user.id,
+          evidenceType,
+          clean(request.file.originalname, 300) || `claim-evidence.${detected.extension}`,
+          fileUrl,
+          detected.mimeType,
+          checksum,
+          clean(request.body?.note, 2000) || null,
+          storedName,
+        ],
+      );
+      await client.query(
+        `INSERT INTO fleet_claim_events
+          (organization_id,claim_id,actor_id,action,details_json)
+         VALUES ($1,$2,$3,'claim.evidence_added',$4::jsonb)`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          record.id,
+          request.user.id,
+          JSON.stringify({
+            evidenceId,
+            evidenceType,
+            fileName: created.rows[0].file_name,
+            checksumSha256: checksum,
+          }),
+        ],
+      );
+      await client.query(
+        `UPDATE fleet_claim_cases
+            SET status=CASE WHEN status='reported' THEN 'evidence_review' ELSE status END,
+                updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2`,
+        [PUBLIC_ORGANIZATION_ID, record.id],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.claim.evidence_added",
+        "claim",
+        record.id,
+        { evidenceId, evidenceType, checksumSha256: checksum },
+      );
+      await client.query("COMMIT");
+      response.status(201).json({
+        success: true,
+        data: {
+          id: evidenceId,
+          type: evidenceType,
+          fileName: created.rows[0].file_name,
+          fileUrl,
+          mimeType: detected.mimeType,
+          note: created.rows[0].note,
+          createdAt: created.rows[0].created_at,
+        },
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (storedPath) await fs.promises.unlink(storedPath).catch(() => null);
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.get(
+  "/claims/evidence/:evidenceId/file",
+  async (request, response, next) => {
+    try {
+      const result = await query(
+        `SELECT evidence.*,claim.booking_id
+           FROM fleet_claim_evidence evidence
+           JOIN fleet_claim_cases claim
+             ON claim.organization_id=evidence.organization_id
+            AND claim.id=evidence.claim_id
+          WHERE evidence.organization_id=$1 AND evidence.id=$2
+          LIMIT 1`,
+        [PUBLIC_ORGANIZATION_ID, request.params.evidenceId],
+      );
+      const evidence = result.rows[0];
+      const record = evidence ? await claimRecord(evidence.claim_id) : null;
+      if (!canAccessClaim(request, record)) {
+        return fail(
+          response,
+          404,
+          "CLAIM_EVIDENCE_NOT_FOUND",
+          "Claim evidence not found.",
+        );
+      }
+      const filePath = safeClaimEvidencePath(evidence.storage_reference);
+      if (!filePath) {
+        return fail(
+          response,
+          404,
+          "CLAIM_EVIDENCE_NOT_FOUND",
+          "Claim evidence not found.",
+        );
+      }
+      await fs.promises.access(filePath, fs.constants.R_OK);
+      response.set({
+        "Content-Type": evidence.mime_type || "application/octet-stream",
+        "Content-Disposition":
+          `inline; filename="${clean(evidence.file_name, 200).replaceAll('"', "")}"`,
+        "Cache-Control": "private, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.sendFile(filePath);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        return fail(
+          response,
+          404,
+          "CLAIM_EVIDENCE_NOT_FOUND",
+          "Claim evidence not found.",
+        );
+      }
+      next(error);
+    }
+  },
+);
+
+router.patch(
+  "/claims/:claimId",
+  requireEmployee,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      const status = clean(request.body?.status, 40);
+      const liability = clean(request.body?.liability, 40);
+      if (!CLAIM_STATUSES.has(status)) {
+        return fail(
+          response,
+          400,
+          "INVALID_CLAIM_STATUS",
+          "Choose a valid claim workflow status.",
+        );
+      }
+      if (liability && !CLAIM_LIABILITY.has(liability)) {
+        return fail(
+          response,
+          400,
+          "INVALID_CLAIM_LIABILITY",
+          "Choose a valid liability classification.",
+        );
+      }
+      await client.query("BEGIN");
+      const updated = await client.query(
+        `UPDATE fleet_claim_cases
+            SET status=$3,liability=COALESCE(NULLIF($4,''),liability),
+                assigned_to=COALESCE($5,assigned_to),
+                estimated_amount=COALESCE($6,estimated_amount),
+                final_amount=COALESCE($7,final_amount),
+                insurer_name=COALESCE(NULLIF($8,''),insurer_name),
+                insurer_claim_reference=COALESCE(NULLIF($9,''),insurer_claim_reference),
+                decision_note=COALESCE(NULLIF($10,''),decision_note),
+                resolved_at=CASE WHEN $3 IN ('settled','closed','denied') THEN NOW() ELSE NULL END,
+                updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2
+          RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          request.params.claimId,
+          status,
+          liability,
+          clean(request.body?.assignedTo, 80) || null,
+          Number.isFinite(Number(request.body?.estimatedAmount))
+            ? Math.max(0, Number(request.body.estimatedAmount))
+            : null,
+          Number.isFinite(Number(request.body?.finalAmount))
+            ? Math.max(0, Number(request.body.finalAmount))
+            : null,
+          clean(request.body?.insurerName, 300),
+          clean(request.body?.insurerClaimReference, 300),
+          clean(request.body?.decisionNote, 4000),
+        ],
+      );
+      if (!updated.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "CLAIM_NOT_FOUND",
+          "Claim not found.",
+        );
+      }
+      await client.query(
+        `INSERT INTO fleet_claim_events
+          (organization_id,claim_id,actor_id,action,details_json)
+         VALUES ($1,$2,$3,$4,$5::jsonb)`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          updated.rows[0].id,
+          request.user.id,
+          `claim.${status}`,
+          JSON.stringify({
+            liability: liability || updated.rows[0].liability,
+            decisionNote: clean(request.body?.decisionNote, 4000) || null,
+          }),
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        `marketplace.claim.${status}`,
+        "claim",
+        updated.rows[0].id,
+        { status, liability: updated.rows[0].liability },
+      );
+      await client.query("COMMIT");
+      const hydrated = await claimRecord(updated.rows[0].id);
+      const recipients = [
+        hydrated?.guest_user_id,
+        hydrated?.host_user_id,
+      ].filter(Boolean);
+      await Promise.all(
+        [...new Set(recipients)].map(recipientUserId =>
+          notifyBookingParty({
+            organizationId: PUBLIC_ORGANIZATION_ID,
+            recipientUserId,
+            title: "Trip claim updated",
+            message: `Claim status changed to ${status.replaceAll("_", " ")}.`,
+            bookingId: updated.rows[0].booking_id,
+            actionUrl: "/account/trips",
+          }),
+        ),
+      );
+      response.json({ success: true, data: claimPayload(hydrated) });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.post("/claims/:claimId/dispute", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const note = clean(request.body?.note, 4000);
+    if (note.length < 10) {
+      return fail(
+        response,
+        400,
+        "DISPUTE_DETAILS_REQUIRED",
+        "Explain why this claim needs another review.",
+      );
+    }
+    const record = await claimRecord(request.params.claimId);
+    const role = fleetRole(request);
+    const allowed =
+      record &&
+      (record.guest_user_id === request.user.id ||
+        record.host_user_id === request.user.id ||
+        EMPLOYEE_ROLES.has(role));
+    if (!allowed) {
+      return fail(response, 404, "CLAIM_NOT_FOUND", "Claim not found.");
+    }
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE fleet_claim_cases
+          SET status='disputed',decision_note=$3,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2`,
+      [PUBLIC_ORGANIZATION_ID, record.id, note],
+    );
+    await client.query(
+      `INSERT INTO fleet_claim_events
+        (organization_id,claim_id,actor_id,action,details_json)
+       VALUES ($1,$2,$3,'claim.disputed',$4::jsonb)`,
+      [
+        PUBLIC_ORGANIZATION_ID,
+        record.id,
+        request.user.id,
+        JSON.stringify({ note }),
+      ],
+    );
+    await audit(
+      client,
+      request,
+      PUBLIC_ORGANIZATION_ID,
+      "marketplace.claim.disputed",
+      "claim",
+      record.id,
+      { note },
+    );
+    await client.query("COMMIT");
+    response.json({
+      success: true,
+      data: claimPayload(await claimRecord(record.id)),
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.get("/host/profile", requireHost, async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -1886,6 +3808,11 @@ router.post("/host/listings", requireHost, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const input = request.body || {};
+    const photos = listingPhotos(
+      input.photos,
+      clean(input.imageUrl, 2000) ? [input.imageUrl] : [],
+    );
+    const availability = listingAvailability(input.availability);
     const year = Number(input.year);
     const dailyRate = Number(input.dailyRate);
     if (
@@ -1928,7 +3855,7 @@ router.post("/host/listings", requireHost, async (request, response, next) => {
         clean(input.insuranceExpiry, 10) || null,
         JSON.stringify({
           category: clean(input.category, 80) || "Vehicle",
-          imageUrl: clean(input.imageUrl, 1000) || null,
+          imageUrl: photos[0] || null,
           seats: Number(input.seats) || null,
           fuelType: clean(input.fuelType, 80) || null,
           transmission: clean(input.transmission, 80) || null,
@@ -1943,10 +3870,10 @@ router.post("/host/listings", requireHost, async (request, response, next) => {
          description,status,instant_book,delivery_enabled,delivery_radius_miles,
          delivery_fee,minimum_trip_days,maximum_trip_days,advance_notice_hours,
          trip_buffer_hours,mileage_limit_per_day,additional_mile_rate,
-         rules_json,features_json)
+         rules_json,features_json,photos_json,availability_json)
        VALUES (
          $1,$2,$3,false,$4,$5,'draft',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-         $16::jsonb,$17::jsonb
+         $16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb
        )
        RETURNING *`,
       [
@@ -1970,6 +3897,8 @@ router.post("/host/listings", requireHost, async (request, response, next) => {
         JSON.stringify(
           Array.isArray(input.features) ? input.features.slice(0, 50) : [],
         ),
+        JSON.stringify(photos),
+        JSON.stringify(availability),
       ],
     );
     await client.query(
@@ -2034,7 +3963,8 @@ router.patch(
       const existing = await client.query(
         `SELECT listing.*,host.user_id,
                 host.identity_verification_status,
-                vehicle.registration_expiry,vehicle.insurance_expiry
+                vehicle.registration_expiry,vehicle.insurance_expiry,
+                vehicle.payload AS vehicle_payload
            FROM fleet_vehicle_listings listing
            JOIN fleet_host_profiles host
              ON host.organization_id=listing.organization_id
@@ -2063,6 +3993,14 @@ router.patch(
         );
       }
       const current = existing.rows[0];
+      const photos = listingPhotos(
+        request.body?.photos,
+        current.photos_json || [],
+      );
+      const availability = listingAvailability(
+        request.body?.availability,
+        current.availability_json || {},
+      );
       const requestedStatus = clean(request.body?.status, 40);
       if (requestedStatus === "pending_review") {
         const complianceReady =
@@ -2088,6 +4026,15 @@ router.patch(
             "Current registration and insurance are required before review.",
           );
         }
+        if (photos.length < 6) {
+          await client.query("ROLLBACK");
+          return fail(
+            response,
+            409,
+            "LISTING_PHOTOS_REQUIRED",
+            "Add at least six current vehicle photos before submitting for review.",
+          );
+        }
       }
       const nextStatus =
         requestedStatus === "pending_review"
@@ -2104,7 +4051,13 @@ router.patch(
                 minimum_trip_days=$10,maximum_trip_days=$11,
                 advance_notice_hours=$12,trip_buffer_hours=$13,
                 mileage_limit_per_day=$14,additional_mile_rate=$15,
-                rules_json=$16::jsonb,features_json=$17::jsonb,updated_at=NOW()
+                rules_json=$16::jsonb,features_json=$17::jsonb,
+                photos_json=$18::jsonb,availability_json=$19::jsonb,
+                review_note=CASE
+                  WHEN $5='pending_review' THEN NULL
+                  ELSE review_note
+                END,
+                updated_at=NOW()
           WHERE organization_id=$1 AND id=$2
           RETURNING *`,
         [
@@ -2149,6 +4102,19 @@ router.patch(
               ? request.body.features.slice(0, 50)
               : current.features_json || [],
           ),
+          JSON.stringify(photos),
+          JSON.stringify(availability),
+        ],
+      );
+      await client.query(
+        `UPDATE fleet_vehicles
+            SET payload=payload||$3::jsonb,updated_by=$4,updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          current.vehicle_id,
+          JSON.stringify({ imageUrl: photos[0] || null }),
+          request.user.id,
         ],
       );
       const hydrated = await marketplaceListing(client, updated.rows[0].id);
@@ -2160,6 +4126,19 @@ router.patch(
           [PUBLIC_ORGANIZATION_ID, request.user.id],
         );
       }
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.host.listing_updated",
+        "vehicle_listing",
+        current.id,
+        {
+          status: nextStatus,
+          photoCount: photos.length,
+          unavailableRangeCount: availability.unavailableRanges.length,
+        },
+      );
       await client.query("COMMIT");
       if (nextStatus === "pending_review" && current.status !== nextStatus) {
         const recipients = await operatorRecipients(
@@ -2197,7 +4176,8 @@ router.get("/host/trips", requireHost, async (request, response, next) => {
     const result = await query(
       `SELECT booking.*,vehicle.make,vehicle.model,vehicle.model_year,
               vehicle.payload->>'imageUrl' AS vehicle_image_url,
-              host.user_id AS host_user_id,host.display_name AS host_display_name
+              host.user_id AS host_user_id,host.display_name AS host_display_name,
+              customer.full_name AS guest_name,customer.email AS guest_email
          FROM fleet_host_profiles host
          JOIN fleet_vehicle_listings listing
            ON listing.organization_id=host.organization_id
@@ -2208,6 +4188,9 @@ router.get("/host/trips", requireHost, async (request, response, next) => {
          JOIN fleet_vehicles vehicle
            ON vehicle.organization_id=booking.organization_id
           AND vehicle.id=booking.vehicle_id
+         JOIN fleet_customers customer
+           ON customer.organization_id=booking.organization_id
+          AND customer.id=booking.customer_id
         WHERE host.organization_id=$1
           AND host.user_id=$2
           AND booking.archived_at IS NULL
@@ -2435,13 +4418,33 @@ router.post(
           "Verified registration and insurance are required before publishing.",
         );
       }
+      if (
+        decision === "approve" &&
+        existing.host_profile_id &&
+        listingPhotos(existing.photos_json).length < 6
+      ) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "LISTING_PHOTOS_REQUIRED",
+          "Host vehicles need at least six current photos before publishing.",
+        );
+      }
       const status = decision === "approve" ? "active" : "rejected";
       await client.query(
         `UPDATE fleet_vehicle_listings
             SET status=$3,published_at=CASE WHEN $3='active' THEN NOW() ELSE published_at END,
+                review_note=$4,reviewed_by=$5,reviewed_at=NOW(),
                 updated_at=NOW()
           WHERE organization_id=$1 AND id=$2`,
-        [PUBLIC_ORGANIZATION_ID, existing.id, status],
+        [
+          PUBLIC_ORGANIZATION_ID,
+          existing.id,
+          status,
+          clean(request.body?.note, 1000) || null,
+          request.user.id,
+        ],
       );
       await client.query(
         `UPDATE fleet_vehicles

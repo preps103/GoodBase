@@ -5,15 +5,19 @@ const express = require("express");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
+const { encryptValue } = require("../services/secret.service");
 
 const router = express.Router();
 router.use(authRequired);
+const PUBLIC_APP_URL = String(
+  process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app",
+).replace(/\/$/, "");
 
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
 const MANAGEMENT_ROLES = new Set(["owner", "admin", "manager"]);
 const CUSTOMER_SEND_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const NOTIFICATION_CATEGORIES = new Set(["reservation", "payment", "trip", "support", "general"]);
-const NOTIFICATION_CHANNELS = new Set(["in_app", "email"]);
+const NOTIFICATION_CHANNELS = new Set(["in_app", "email", "sms"]);
 const CUSTOMER_SUPPORT_CATEGORIES = new Set(["reservation", "roadside", "billing", "documents", "other"]);
 const CUSTOMER_CHECKIN_BOOKING_STATUSES = new Set(["confirmed", "assigned"]);
 const REQUIRED_CHECKIN_ACKNOWLEDGEMENTS = [
@@ -25,6 +29,17 @@ const REQUIRED_CHECKIN_ACKNOWLEDGEMENTS = [
 
 function clean(value, max = 4000) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+function normalizePhone(value) {
+  const digits = clean(value, 50).replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length >= 11 && digits.length <= 15) return `+${digits}`;
+  return null;
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(String(value)).digest("hex");
 }
 
 function customerActionUrl(value) {
@@ -650,11 +665,39 @@ router.post("/customer-notifications", employeeScope, requireCustomerSender, asy
     );
     if (!customer.rowCount) return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found.");
     const recipient = customer.rows[0];
+    const phone = channels.includes("sms")
+      ? normalizePhone(recipient.phone)
+      : null;
+    if (channels.includes("sms") && !phone) {
+      return fail(
+        response,
+        409,
+        "CUSTOMER_PHONE_REQUIRED",
+        "Add a valid customer mobile number before sending a text message.",
+      );
+    }
+    const providerResult = channels.includes("sms")
+      ? await client.query(
+          `SELECT id,organization_id,project_id,environment_id
+             FROM goodbase_consumer_auth_providers
+            WHERE organization_id=$1
+              AND provider_type IN ('phone_otp','sms_mfa')
+              AND status='enabled'
+              AND controller_url IS NOT NULL
+              AND secret_ref IS NOT NULL
+            ORDER BY updated_at DESC
+            LIMIT 1`,
+          [organization(request)],
+        )
+      : { rows: [] };
+    const smsProvider = providerResult.rows[0] || null;
     await client.query("BEGIN");
     const inserted = await client.query(
       `INSERT INTO fleet_customer_notifications
-        (organization_id,customer_id,recipient_user_id,recipient_email,title,body,category,channels,status,action_url,client_request_id,created_by)
-       VALUES ($1,$2,$3,lower($4),$5,$6,$7,$8,'queued',$9,$10,$11)
+        (organization_id,customer_id,recipient_user_id,recipient_email,
+         recipient_phone,title,body,category,channels,status,action_url,
+         client_request_id,created_by)
+       VALUES ($1,$2,$3,lower($4),$5,$6,$7,$8,$9,'queued',$10,$11,$12)
        ON CONFLICT (organization_id,created_by,client_request_id)
        DO UPDATE SET client_request_id=fleet_customer_notifications.client_request_id
        RETURNING *`,
@@ -663,6 +706,7 @@ router.post("/customer-notifications", employeeScope, requireCustomerSender, asy
         customerId,
         recipient.recipient_user_id || null,
         recipient.email,
+        phone,
         title,
         body,
         category,
@@ -674,13 +718,26 @@ router.post("/customer-notifications", employeeScope, requireCustomerSender, asy
     );
     const notification = inserted.rows[0];
     for (const channel of channels) {
-      const deliveryStatus = channel === "in_app" ? "delivered" : "pending";
+      const deliveryStatus =
+        channel === "in_app"
+          ? "delivered"
+          : channel === "sms" && !smsProvider
+            ? "failed"
+            : "pending";
       await client.query(
         `INSERT INTO fleet_customer_notification_deliveries
-          (notification_id,channel,status,delivered_at)
-         VALUES ($1,$2,$3,$4)
+          (notification_id,channel,status,delivered_at,error_code)
+         VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT (notification_id,channel) DO NOTHING`,
-        [notification.id, channel, deliveryStatus, deliveryStatus === "delivered" ? new Date().toISOString() : null],
+        [
+          notification.id,
+          channel,
+          deliveryStatus,
+          deliveryStatus === "delivered" ? new Date().toISOString() : null,
+          channel === "sms" && !smsProvider
+            ? "SMS_PROVIDER_UNAVAILABLE"
+            : null,
+        ],
       );
       if (channel === "email") {
         const queueId = `gfemail_${notification.id}`;
@@ -692,8 +749,50 @@ router.post("/customer-notifications", employeeScope, requireCustomerSender, asy
           [queueId, String(notification.id), recipient.email, recipient.full_name, title, body, organization(request)],
         );
       }
+      if (channel === "sms" && smsProvider) {
+        const actionPath = customerActionUrl(request.body?.actionUrl);
+        const secureUrl = actionPath ? `${PUBLIC_APP_URL}${actionPath}` : null;
+        const smsBody = [
+          `GoodFleet: ${title}`,
+          body,
+          secureUrl ? `Open securely: ${secureUrl}` : "",
+          "Do not forward secure account links.",
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .slice(0, 1500);
+        await client.query(
+          `INSERT INTO goodbase_sms_deliveries (
+             organization_id,project_id,environment_id,user_id,
+             destination_hash,encrypted_payload,provider_id,purpose,
+             expires_at,fleet_notification_id
+           )
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'fleet_notification',
+                   NOW()+INTERVAL '7 days',$8)
+           ON CONFLICT DO NOTHING`,
+          [
+            smsProvider.organization_id,
+            smsProvider.project_id,
+            smsProvider.environment_id,
+            recipient.recipient_user_id || null,
+            sha256(phone),
+            encryptValue(
+              JSON.stringify({
+                phone,
+                message: smsBody,
+                actionUrl: secureUrl,
+                notificationId: notification.id,
+              }),
+            ),
+            smsProvider.id,
+            notification.id,
+          ],
+        );
+      }
     }
-    const status = channels.includes("email") ? "partially_delivered" : "delivered";
+    const status = channels.some(channel => channel !== "in_app")
+      ? "partially_delivered"
+      : "delivered";
     const updated = await client.query(
       `UPDATE fleet_customer_notifications SET status=$2 WHERE id=$1 RETURNING *`,
       [notification.id, status],
@@ -717,6 +816,61 @@ router.post("/customer-notifications", employeeScope, requireCustomerSender, asy
     next(error);
   } finally {
     client.release();
+  }
+});
+
+router.get("/sms-readiness", employeeScope, requireCustomerSender, async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT
+         EXISTS (
+           SELECT 1
+             FROM goodbase_consumer_auth_providers provider
+            WHERE provider.organization_id=$1
+              AND provider.provider_type IN ('phone_otp','sms_mfa')
+              AND provider.status='enabled'
+              AND provider.controller_url IS NOT NULL
+              AND provider.secret_ref IS NOT NULL
+         ) AS provider_configured,
+         COUNT(*) FILTER (WHERE delivery.status='queued')::integer AS queued,
+         COUNT(*) FILTER (WHERE delivery.status='sending')::integer AS sending,
+         COUNT(*) FILTER (WHERE delivery.status='delivered')::integer AS delivered,
+         COUNT(*) FILTER (WHERE delivery.status='failed')::integer AS failed,
+         MAX(delivery.completed_at) FILTER (
+           WHERE delivery.status='delivered'
+         ) AS last_delivered_at,
+         (
+           SELECT failed_delivery.error_code
+             FROM goodbase_sms_deliveries failed_delivery
+            WHERE failed_delivery.organization_id=$1
+              AND failed_delivery.status='failed'
+            ORDER BY failed_delivery.created_at DESC
+            LIMIT 1
+         ) AS last_error_code
+       FROM goodbase_sms_deliveries delivery
+      WHERE delivery.organization_id=$1
+        AND delivery.created_at>=NOW()-INTERVAL '30 days'`,
+      [organization(request)],
+    );
+    const data = result.rows[0] || {};
+    response.json({
+      success: true,
+      data: {
+        softwareReady: true,
+        providerConfigured: Boolean(data.provider_configured),
+        workerReady: true,
+        queue: {
+          queued: Number(data.queued || 0),
+          sending: Number(data.sending || 0),
+          delivered: Number(data.delivered || 0),
+          failed: Number(data.failed || 0),
+        },
+        lastDeliveredAt: data.last_delivered_at || null,
+        lastErrorCode: data.last_error_code || null,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 });
 
