@@ -159,7 +159,11 @@ function requestPinnedPage(resolved, accept) {
 
 function sameCompetitorHost(left, right) {
   const normalize = (value) => String(value || "").toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
-  return normalize(left) === normalize(right);
+  const leftHost = normalize(left);
+  const rightHost = normalize(right);
+  return leftHost === rightHost
+    || leftHost.endsWith(`.${rightHost}`)
+    || rightHost.endsWith(`.${leftHost}`);
 }
 
 async function fetchPublicPage(value, { accept = "text/html,application/xhtml+xml,text/plain", maximumRedirects = 3 } = {}) {

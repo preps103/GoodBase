@@ -100,6 +100,8 @@ test("public scanner honors robots rules and blocks private network destinations
   assert.equal(scanner._test.blockedIp("127.0.0.1"), true);
   assert.equal(scanner._test.blockedIp("10.2.3.4"), true);
   assert.equal(scanner._test.blockedIp("8.8.8.8"), false);
+  assert.equal(scanner._test.sameCompetitorHost("content360.io", "get.content360.io"), true);
+  assert.equal(scanner._test.sameCompetitorHost("content360.io", "unrelated.example"), false);
 });
 
 test("competitor intelligence migration, routes, and scheduled sync are installed", () => {
