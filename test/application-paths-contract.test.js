@@ -18,6 +18,16 @@ test("the deployment manifest defines exactly 15 uniquely routed applications", 
   assert.equal(new Set(manifest.applications.map(({ id }) => id)).size, 15);
   assert.equal(new Set(manifest.applications.map(({ domain }) => domain)).size, 15);
   assert.equal(new Set(manifest.applications.map(({ service }) => service)).size, 15);
+  assert.equal(
+    new Set(manifest.applications.map(({ repositoryUrl }) => repositoryUrl)).size,
+    15
+  );
+  for (const application of manifest.applications) {
+    assert.match(
+      application.repositoryUrl,
+      /^git@github\.com:preps103\/[A-Za-z0-9_.-]+\.git$/
+    );
+  }
 });
 
 test("every product deployment uses the canonical production root and unversioned path", () => {
@@ -34,6 +44,14 @@ test("GoodBase and GoodID remain explicit platform services", () => {
   assert.deepEqual(platformIds, ["goodbase", "goodid"]);
   assert.equal(manifest.platformServices[0].domain, "base.goodos.app");
   assert.equal(manifest.platformServices[0].productionPath, "/var/www/GoodBase");
+  assert.equal(
+    manifest.platformServices[0].repositoryUrl,
+    "git@github.com:preps103/GoodBase.git"
+  );
+  assert.equal(
+    manifest.platformServices[1].repositoryUrl,
+    "git@github.com:preps103/GoodID.git"
+  );
 });
 
 test("GoodCustoms and GoodTrusts use their canonical singular domains", () => {

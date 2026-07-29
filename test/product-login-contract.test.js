@@ -16,6 +16,7 @@ test("shared product login stylesheet exposes the required structure", () => {
 test("product login stylesheet is cross-origin reusable", () => {
   assert.match(routes, /router\.get\("\/backend-login\.css"/);
   assert.match(routes, /Cross-Origin-Resource-Policy/);
+  assert.match(routes, /no-store, no-cache, must-revalidate, proxy-revalidate/);
 });
 test("contract requires every provider and excludes direct GoodOS", () => {
   for (const name of ["Google", "Apple", "Microsoft", "GoodOS SSO", "forgot-password", "create-account"]) assert.match(docs, new RegExp(name, "i"));
@@ -32,6 +33,8 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
     "data-goodbase-login-divider",
     "data-goodbase-login-fields",
     "data-goodbase-login-field",
+    "data-goodbase-login-password",
+    "data-goodbase-login-password-toggle",
     "data-goodbase-login-recovery",
     "data-goodbase-login-submit",
     "data-goodbase-login-error"
@@ -46,4 +49,6 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
   ]) assert.match(authClient, new RegExp(endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   for (const provider of ["google", "apple", "microsoft"]) assert.match(authClient, new RegExp(`"${provider}"`));
   assert.match(routes, /router\.get\("\/register"/);
+  assert.match(authClient, /setPasswordVisibility/);
+  assert.match(authClient, /aria-pressed/);
 });

@@ -99,6 +99,7 @@ router.use(requireOwnerOrAdmin);
 
 router.get("/sites", async (_request, response) => {
   try {
+    await deployment.reconcileCanonicalDeploymentSites();
     const result = await query(`
       SELECT
         site.id,
@@ -134,7 +135,13 @@ router.get("/sites", async (_request, response) => {
       ORDER BY site.name ASC
     `);
 
-    return response.json({ success: true, sites: result.rows, total: result.rows.length });
+    const targets = await deployment.discoverServerApps().catch(() => []);
+    const sites = result.rows.map((site) => ({
+      ...site,
+      configuration: deployment.assessSiteConfiguration(site, targets),
+    }));
+
+    return response.json({ success: true, sites, total: sites.length });
   } catch (error) {
     return errorResponse(response, error);
   }
@@ -204,6 +211,11 @@ router.patch("/sites/:siteId", async (request, response) => {
         runBuild: request.body?.runBuild ?? request.body?.run_build ?? before.runBuild,
       }
     );
+    deployment.assertCanonicalSiteMapping({
+      ...before,
+      ...input,
+      appId: before.appId,
+    });
 
     const result = await query(
       `
@@ -288,40 +300,54 @@ router.get("/repositories", async (_request, response) => {
 router.post("/sites/:siteId/test", async (request, response) => {
   try {
     const site = await deployment.loadSite(request.params.siteId);
-    const appPath = deployment.validateAppPath(site.appPath, { mustExist: true });
+    deployment.assertCanonicalSiteMapping(site);
+    const appPath = deployment.validateAppPath(site.appPath);
     const repositoryUrl = deployment.normalizeGithubRepository(site.repositoryUrl);
     const branch = deployment.validateBranch(site.branch);
     const checks = [];
 
+    const pathInspection = deployment.inspectApplicationPath(appPath);
+    if (!pathInspection.accessible) {
+      const error = new Error(pathInspection.issue);
+      error.statusCode = 409;
+      error.code = "APP_PATH_NOT_ACCESSIBLE";
+      throw error;
+    }
     checks.push({ name: "Application directory", passed: true, detail: appPath });
 
-    if (!require("fs").existsSync(path.join(appPath, ".git"))) {
-      throw new Error("Application directory is not a Git repository.");
+    const canonical = deployment.canonicalSiteByAppId(site.appId);
+    if (
+      canonical &&
+      deployment.normalizeGithubRepository(canonical.repositoryUrl) !== repositoryUrl
+    ) {
+      const error = new Error(`Configured repository must be ${canonical.repositoryUrl}.`);
+      error.statusCode = 409;
+      error.code = "CANONICAL_REPOSITORY_MISMATCH";
+      throw error;
     }
-    checks.push({ name: "Git repository", passed: true, detail: path.join(appPath, ".git") });
 
-    const remote = (await deployment.runCommand("git", ["remote", "get-url", "origin"], { cwd: appPath, timeoutMs: 15000 })).stdout.trim();
-    const comparable = (value) => String(value).replace(/^https:\/\/github\.com\//i, "").replace(/^git@github\.com:/i, "").replace(/\.git$/i, "").replace(/\/+$/g, "").toLowerCase();
-
-    if (comparable(remote) !== comparable(repositoryUrl)) {
-      throw new Error(`Configured repository does not match origin. Origin is ${remote}.`);
-    }
-    checks.push({ name: "GitHub repository", passed: true, detail: remote });
-
-    await deployment.runCommand("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], { cwd: appPath, timeoutMs: 30000 });
+    await deployment.runCommand(
+      "git",
+      ["ls-remote", "--exit-code", repositoryUrl, `refs/heads/${branch}`],
+      { timeoutMs: 30000 }
+    );
     checks.push({ name: "Deployment branch", passed: true, detail: branch });
-
-    const dirty = (await deployment.runCommand("git", ["status", "--porcelain=v1"], { cwd: appPath, timeoutMs: 15000 })).stdout.trim();
     checks.push({
-      name: "Working tree",
-      passed: !dirty,
-      detail: dirty ? "Uncommitted changes must be resolved before updating." : "Clean",
+      name: "Deployment mode",
+      passed: true,
+      detail: pathInspection.gitRepository
+        ? "Managed checkout"
+        : "Staged release (the live folder is replaced only after a successful build)",
     });
 
     if (site.processManager === "pm2") {
       const processes = await deployment.discoverServerApps();
-      const found = processes.some((item) => item.processName === site.processName);
-      checks.push({ name: "PM2 process", passed: found, detail: site.processName || "Not configured" });
+      const found = processes.find((item) => item.processName === site.processName);
+      checks.push({
+        name: "PM2 process",
+        passed: found?.status === "online",
+        detail: found ? `${site.processName} (${found.status})` : site.processName || "Not configured",
+      });
     } else if (site.processManager === "systemd") {
       const result = await deployment.runCommand("systemctl", ["show", site.processName, "--property=LoadState", "--value"], { timeoutMs: 15000 });
       checks.push({ name: "systemd service", passed: result.stdout.trim() === "loaded", detail: site.processName });
@@ -347,7 +373,14 @@ router.post("/sites/:siteId/test", async (request, response) => {
 router.post("/sites/:siteId/update", async (request, response) => {
   try {
     const site = await deployment.loadSite(request.params.siteId);
-    deployment.validateAppPath(site.appPath, { mustExist: true });
+    deployment.assertCanonicalSiteMapping(site);
+    const pathInspection = deployment.inspectApplicationPath(site.appPath);
+    if (!pathInspection.accessible) {
+      const error = new Error(pathInspection.issue);
+      error.statusCode = 409;
+      error.code = "APP_PATH_NOT_ACCESSIBLE";
+      throw error;
+    }
     deployment.normalizeGithubRepository(site.repositoryUrl);
     deployment.validateBranch(site.branch);
     const manager = deployment.validateProcessManager(site.processManager);

@@ -62,6 +62,7 @@ router.post("/vectors/generate", generationLimiter, (req, res) => handle(res, "v
 router.post("/vectors/trace", generationLimiter, (req, res) => handle(res, "vector.trace", service.traceVector(req.body)));
 router.post("/mockups/generate", generationLimiter, (req, res) => handle(res, "mockup.generate", service.generateMockup(req.body)));
 router.post("/photoshoots/generate", generationLimiter, (req, res) => handle(res, "photoshoot.generate", service.generatePhotoshoot(req.body)));
+router.post("/campaigns/generate", generationLimiter, (req, res) => handle(res, "campaign.generate", service.generateCampaign(req.body)));
 router.post("/animations/generate", generationLimiter, (req, res) => handle(res, "animation.generate", service.generateAnimation(req.body)));
 router.get("/animations/:jobId", (req, res) => handle(res, "animation.status", service.animationStatus(req.params.jobId)));
 router.get("/animations/:jobId/content", async (req, res) => {

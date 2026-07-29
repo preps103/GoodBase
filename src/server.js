@@ -1,5 +1,9 @@
 require("./telemetry/bootstrap");
 
+const { runGoodCustomMigrations } = require("./runtime/goodcustom-migrations");
+
+runGoodCustomMigrations();
+
 const app = require("./app");
 const env = require("./config/env");
 const database = require("./config/database");

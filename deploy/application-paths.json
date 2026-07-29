@@ -8,6 +8,7 @@
       "name": "GoodOS",
       "domain": "goodos.app",
       "service": "goodos",
+      "repositoryUrl": "git@github.com:preps103/GoodOS.git",
       "productionPath": "/home/mgoodlo3/GoodOS"
     },
     {
@@ -15,6 +16,7 @@
       "name": "GoodAds",
       "domain": "ads.goodos.app",
       "service": "goodads",
+      "repositoryUrl": "git@github.com:preps103/GoodAds-v1.2.git",
       "productionPath": "/home/mgoodlo3/GoodAds"
     },
     {
@@ -22,6 +24,7 @@
       "name": "GoodBoost",
       "domain": "boost.goodos.app",
       "service": "goodboost",
+      "repositoryUrl": "git@github.com:preps103/GoodBoost.git",
       "productionPath": "/home/mgoodlo3/GoodBoost"
     },
     {
@@ -29,6 +32,7 @@
       "name": "GoodBuilder",
       "domain": "builder.goodos.app",
       "service": "goodbuilder",
+      "repositoryUrl": "git@github.com:preps103/goodbuilder.git",
       "productionPath": "/home/mgoodlo3/GoodBuilder"
     },
     {
@@ -36,6 +40,7 @@
       "name": "GoodCustoms",
       "domain": "custom.goodos.app",
       "service": "goodcustoms",
+      "repositoryUrl": "git@github.com:preps103/Goodloe-Customs.git",
       "productionPath": "/home/mgoodlo3/GoodCustoms"
     },
     {
@@ -43,6 +48,7 @@
       "name": "GoodDesigner",
       "domain": "designer.goodos.app",
       "service": "gooddesigner",
+      "repositoryUrl": "git@github.com:preps103/GoodDesigner.git",
       "productionPath": "/home/mgoodlo3/GoodDesigner"
     },
     {
@@ -50,6 +56,7 @@
       "name": "GoodEditor",
       "domain": "editor.goodos.app",
       "service": "goodeditor",
+      "repositoryUrl": "git@github.com:preps103/GoodEditor.git",
       "productionPath": "/home/mgoodlo3/GoodEditor"
     },
     {
@@ -57,6 +64,7 @@
       "name": "GoodEscrow",
       "domain": "escrow.goodos.app",
       "service": "goodescrow",
+      "repositoryUrl": "git@github.com:preps103/GoodEscrow.git",
       "productionPath": "/home/mgoodlo3/GoodEscrow"
     },
     {
@@ -64,6 +72,7 @@
       "name": "GoodFleet",
       "domain": "fleet.goodos.app",
       "service": "goodfleet",
+      "repositoryUrl": "git@github.com:preps103/GoodFleet-v2.52.git",
       "productionPath": "/home/mgoodlo3/GoodFleet"
     },
     {
@@ -71,6 +80,7 @@
       "name": "GoodQR",
       "domain": "qr.goodos.app",
       "service": "goodqr",
+      "repositoryUrl": "git@github.com:preps103/GoodQR.git",
       "productionPath": "/home/mgoodlo3/GoodQR"
     },
     {
@@ -78,6 +88,7 @@
       "name": "GoodScan",
       "domain": "scan.goodos.app",
       "service": "goodscan",
+      "repositoryUrl": "git@github.com:preps103/GoodScan-3D.git",
       "productionPath": "/home/mgoodlo3/GoodScan"
     },
     {
@@ -85,6 +96,7 @@
       "name": "GoodSpeech",
       "domain": "speech.goodos.app",
       "service": "goodspeech",
+      "repositoryUrl": "git@github.com:preps103/GoodSpeech.git",
       "productionPath": "/home/mgoodlo3/GoodSpeech"
     },
     {
@@ -92,6 +104,7 @@
       "name": "GoodSwapz",
       "domain": "swapz.goodos.app",
       "service": "goodswapz",
+      "repositoryUrl": "git@github.com:preps103/GoodSwapz.git",
       "productionPath": "/home/mgoodlo3/GoodSwapz"
     },
     {
@@ -99,6 +112,7 @@
       "name": "GoodTrusts",
       "domain": "trust.goodos.app",
       "service": "goodtrusts",
+      "repositoryUrl": "git@github.com:preps103/GoodTrusts-v1.7.git",
       "productionPath": "/home/mgoodlo3/GoodTrusts"
     },
     {
@@ -106,6 +120,7 @@
       "name": "GoodVoice",
       "domain": "voice.goodos.app",
       "service": "goodvoice",
+      "repositoryUrl": "git@github.com:preps103/GoodVoice-v1.3.git",
       "productionPath": "/home/mgoodlo3/GoodVoice"
     }
   ],
@@ -114,6 +129,7 @@
       "id": "goodbase",
       "name": "GoodBase",
       "domain": "base.goodos.app",
+      "repositoryUrl": "git@github.com:preps103/GoodBase.git",
       "services": [
         "goodbase-api",
         "goodbase-api-ha",
@@ -125,6 +141,7 @@
       "id": "goodid",
       "name": "GoodID",
       "domain": "id.goodos.app",
+      "repositoryUrl": "git@github.com:preps103/GoodID.git",
       "services": [
         "goodid"
       ],

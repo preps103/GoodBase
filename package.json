@@ -15,10 +15,11 @@
   "packageManager": "npm@10.9.8",
   "scripts": {
     "start": "node src/server.js",
-    "build": "node scripts/apply-goodads-growth-migration.js && node scripts/apply-goodads-payments-migration.js && node scripts/apply-goodswapz-marketplace-migration.js",
+    "build": "node scripts/apply-goodads-growth-migration.js && node scripts/apply-goodads-payments-migration.js && node scripts/apply-goodads-chat-migration.js && node scripts/apply-manager-testers-access-migration.js && node scripts/apply-goodcustom-chat-migration.js && node scripts/apply-goodcustom-quotes-migration.js && node scripts/apply-goodswapz-marketplace-migration.js",
     "dev": "nodemon src/server.js",
     "provision:goodspeech": "bash scripts/provision-goodspeech.sh",
     "worker": "node src/workers/goodapp-worker-v3.js",
+    "repair:corporate-passwords": "node scripts/restore-pre-bridge-passwords.js",
     "check": "npm run check:syntax && npm run check:openapi && npm test",
     "check:syntax": "find src scripts test bin -type f -name '*.js' -print0 | xargs -0 -n 1 node --check",
     "check:openapi": "node scripts/validate-openapi.js",
@@ -73,6 +74,7 @@
     "qrcode": "^1.5.4",
     "source-map": "0.8.0",
     "speakeasy": "^2.0.0",
+    "stripe": "22.3.2",
     "ws": "8.21.1"
   },
   "overrides": {

@@ -14,6 +14,8 @@ test("Fleet API is authenticated, tenant scoped, and mounted at a versioned path
   assert.match(routes, /router\.use\(authRequired, tenantContext\)/);
   assert.match(routes, /router\.use\(requireEmployee\)/);
   assert.match(routes, /EMPLOYEE_ACCESS_REQUIRED/);
+  assert.match(routes, /goodFleetAppRole/);
+  assert.match(routes, /fleet\.goodos\.app/);
   assert.match(routes, /request\.tenantContext\.organizationId/);
   assert.match(index, /router\.use\("\/api\/fleet\/v1", fleetRoutes\)/);
   assert.ok(
@@ -33,6 +35,46 @@ test("Fleet booking creation serializes by tenant and vehicle", () => {
   assert.match(routes, /pg_advisory_xact_lock/);
   assert.match(routes, /FOR UPDATE/);
   assert.match(routes, /VEHICLE_NOT_AVAILABLE/);
+});
+
+test("Pending reservations preserve requested vehicles without unsafe assignment", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  assert.match(routes, /requestedVehicleId = text\(body\.requestedCarId \|\| body\.carId/);
+  assert.match(routes, /else if \(requestedVehicleId\)/);
+  assert.match(routes, /Requested vehicle not found/);
+  assert.match(routes, /if \(customer\.status !== "active"\)/);
+  assert.doesNotMatch(routes, /new Date\(customer\.license_expiry\) < new Date\(pickupAt\)/);
+  assert.doesNotMatch(
+    routes,
+    /customer\.status !== "active" \|\| customer\.license_verification_status !== "verified"/
+  );
+});
+
+test("Vehicle checkout requires an assigned vehicle and verified renter ID", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  assert.match(routes, /merged\.status === "checked_out"/);
+  assert.match(routes, /VEHICLE_ASSIGNMENT_REQUIRED/);
+  assert.match(routes, /ID_VERIFICATION_REQUIRED/);
+  assert.match(routes, /license_verification_status !== "verified"/);
+  assert.match(routes, /Verify a valid government-issued driver license before vehicle checkout/);
+  assert.match(routes, /SET status='checked_out',version=version\+1/);
+  assert.match(routes, /vehicle\.checked_out/);
+});
+
+test("Customer intake defers identification and in-person verification is audited", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260728_goodfleet_checkout_identity.sql");
+  assert.match(routes, /text\(body\.licenseNumber, 100\) \|\| null/);
+  assert.match(routes, /text\(body\.licenseExpiry, 20\) \|\| null/);
+  assert.match(routes, /router\.post\("\/customers\/:customerId\/license-verification", requireLicenseVerifier/);
+  assert.match(routes, /customer\.license_verified/);
+  assert.match(routes, /license_verification_method='in_person'/);
+  assert.match(migration, /ALTER COLUMN license_number DROP NOT NULL/);
+  assert.match(migration, /ALTER COLUMN license_expiry DROP NOT NULL/);
+  assert.match(migration, /license_verified_at/);
+  assert.match(migration, /license_verified_by/);
+  assert.match(migration, /INSERT INTO backend_organization_memberships/);
+  assert.match(migration, /membership\.app_id = 'goodfleet'/);
 });
 
 test("Fleet schema enforces tenant uniqueness, compliance, and buffered booking exclusion", () => {
@@ -55,12 +97,22 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /router\.patch\("\/vehicles\/:vehicleId"/);
   assert.match(routes, /router\.patch\("\/customers\/:customerId"/);
   assert.match(routes, /router\.patch\("\/bookings\/:bookingId"/);
+  assert.match(routes, /router\.post\("\/bookings\/quote"/);
+  assert.match(routes, /router\.post\("\/bookings\/:bookingId\/extensions"/);
+  assert.match(routes, /calculateBookingPrice/);
+  assert.match(routes, /BOOKING_NOT_EDITABLE/);
+  assert.match(routes, /additionalCharges/);
   assert.match(routes, /router\.delete\("\/vehicles\/:vehicleId"/);
   assert.match(routes, /router\.post\("\/staff\/invitations"/);
   assert.match(routes, /router\.patch\("\/staff\/:userId"/);
   assert.match(routes, /router\.delete\("\/staff\/:userId"/);
   assert.match(routes, /inviteTeamMemberForUser/);
   assert.match(routes, /updateTeamMemberForUser/);
+  assert.match(routes, /INSERT INTO app_memberships/);
+  assert.match(routes, /app_id='goodfleet'/);
+  assert.match(routes, /app_role=\$2/);
+  assert.match(routes, /fleet_payment_operations WHERE organization_id=\$1/);
+  assert.match(routes, /payments: payments\.rows\.map\(paymentPayload\)/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS fleet_workspace_state/);
   assert.match(migration, /archived_at/);
   assert.match(migration, /fleet_bookings_organization_id_id_v2_key/);
@@ -82,14 +134,35 @@ test("Fleet returns and mileage updates publish durable operational notification
   assert.match(migration, /source = 'goodfleet-operations'/);
 });
 
-test("Fleet payment boundary is mounted but fails closed until processing is activated", () => {
+test("GoodFleet owner controls are durable and protected at the API boundary", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260728_goodfleet_vehicle_images_and_owner_settings_v3.sql");
+  assert.match(routes, /WORKSPACE_OBJECT_KEYS = new Set\(\["branding", "billingSettings", "ownerSettings"\]\)/);
+  assert.match(routes, /goodFleetAccessRole\(request\) !== "owner" && "ownerSettings" in state/);
+  assert.match(routes, /state\.ownerSettings = current\.rows\[0\]\?\.state_json\?\.ownerSettings \|\| \{\}/);
+  assert.match(migration, /2014-chevrolet-cruze-blue-metallic\.webp/);
+  assert.match(migration, /2014-hyundai-sonata-pearl-white\.webp/);
+  assert.match(migration, /Blue metallic glitter/);
+  assert.match(migration, /Pearl white/);
+});
+
+test("Fleet payments stay disabled without credentials and expose the complete provider workflow", () => {
   const routes = read("src/routes/fleet-payments.routes.js");
   const index = read("src/routes/index.js");
   const migration = read("migrations/20260726_goodfleet_readiness_v2.sql");
-  assert.match(routes, /router\.use\(authRequired, tenantContext\)/);
+  const productionMigration = read("migrations/20260728_goodfleet_payments_v3.sql");
+  assert.match(routes, /router\.use\(authRequired, tenantContext, requirePaymentEmployee\)/);
   assert.match(routes, /PAYMENTS_NOT_ACTIVATED/);
-  assert.match(routes, /acceptingPayments: false/);
+  assert.match(routes, /acceptingPayments: credentialsReady/);
   assert.match(routes, /STRIPE_WEBHOOK_SECRET/);
+  assert.match(routes, /router\.post\("\/webhooks\/stripe"/);
+  assert.match(routes, /constructEvent/);
+  assert.match(routes, /router\.post\("\/checkout-sessions"/);
+  assert.match(routes, /router\.post\("\/manual-payments"/);
+  assert.match(routes, /router\.post\("\/authorizations"/);
+  assert.match(routes, /router\.post\("\/:paymentId\/capture"/);
+  assert.match(routes, /router\.post\("\/:paymentId\/refunds"/);
+  assert.match(routes, /router\.post\("\/:paymentId\/void"/);
   assert.match(index, /router\.use\("\/api\/fleet\/v1\/payments", fleetPaymentsRoutes\)/);
   assert.match(migration, /fleet_payment_operations/);
   assert.match(migration, /fleet_payment_webhook_events/);
@@ -97,6 +170,8 @@ test("Fleet payment boundary is mounted but fails closed until processing is act
   assert.match(migration, /UNIQUE USING INDEX fleet_bookings_org_id_unique_idx/);
   assert.match(migration, /UNIQUE \(organization_id, idempotency_key\)/);
   assert.match(migration, /TO goodapp_backend_user/);
+  assert.match(productionMigration, /manual_payment/);
+  assert.match(productionMigration, /parent_operation_id/);
 });
 
 test("Public availability exposes sanitized inventory and honors booking conflicts", () => {

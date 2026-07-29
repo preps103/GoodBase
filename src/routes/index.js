@@ -27,6 +27,9 @@ const fleetCommunicationsRoutes = require("./fleet-communications.routes");
 const goodDesignerRoutes = require("./gooddesigner.routes");
 const fleetPaymentsRoutes = require("./fleet-payments.routes");
 const fleetPublicRoutes = require("./fleet-public.routes");
+const fleetContractsRoutes = require("./fleet-contracts.routes");
+const goodCustomChatRoutes = require("./goodcustom-chat.routes");
+const goodCustomQuotesRoutes = require("./goodcustom-quotes.routes");
 
 
 const billingRoutes = require("./billing.routes");
@@ -244,7 +247,7 @@ router.get("/backend-topbar.css", (req, res) => {
 });
 
 router.get("/backend-login.css", (req, res) => {
-  res.set("Cache-Control", "public, max-age=300");
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Cross-Origin-Resource-Policy", "cross-origin");
   res.type("text/css");
   res.sendFile(path.join(__dirname, "../public/backend-login.css"));
@@ -319,6 +322,8 @@ router.use("/api/health", healthRoutes);
 router.use("/api/internal/observability", goodbaseAlertDeliveryRoutes.receiverRouter);
 router.use("/api/apps/goodads/v1", goodAdsRoutes);
 router.use("/api/gooddesigner/v1", goodDesignerRoutes);
+router.use("/api/apps/goodcustom/v1/chat", goodCustomChatRoutes);
+router.use("/api/apps/goodcustom/v1/quotes", goodCustomQuotesRoutes);
 router.use("/api/apps", appsRoutes);
 router.use("/api/db", dbRoutes);
 router.use("/api/auth", authRoutes);
@@ -339,6 +344,7 @@ router.use("/api/teams", teamsRoutes);
 router.use("/api/fleet/v1/public", fleetPublicRoutes);
 router.use("/api/fleet/v1/communications", fleetCommunicationsRoutes);
 router.use("/api/fleet/v1/payments", fleetPaymentsRoutes);
+router.use("/api/fleet/v1/contracts", fleetContractsRoutes);
 router.use("/api/fleet/v1", fleetRoutes);
 router.use(
   "/storage/v2",
@@ -395,7 +401,49 @@ router.get("/postman/goodos-postman-collection.json", (req, res) => {
   res.type("json").sendFile(developerPublicFile("postman/goodos-postman-collection.json"));
 });
 
-router.get("/favicon.ico", (req, res) => res.status(204).end());
+function sendGoodBaseBrandAsset(res, contentType, relativePath) {
+  res.set("Cache-Control", "public, max-age=300, must-revalidate");
+  res.type(contentType).sendFile(developerPublicFile(relativePath));
+}
+
+router.get("/favicon.svg", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/svg+xml", "favicon.svg");
+});
+
+router.get("/favicon.ico", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/x-icon", "favicon.ico");
+});
+
+router.get("/goodbase-favicon-20260728.ico", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/x-icon", "favicon.ico");
+});
+
+router.get("/favicon-16x16.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "favicon-16x16.png");
+});
+
+router.get("/favicon-32x32.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "favicon-32x32.png");
+});
+
+router.get("/apple-touch-icon.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "apple-touch-icon.png");
+});
+
+router.get("/icons/goodbase-192.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "icons/goodbase-192.png");
+});
+
+router.get("/icons/goodbase-512.png", (req, res) => {
+  sendGoodBaseBrandAsset(res, "image/png", "icons/goodbase-512.png");
+});
+
+router.get("/site.webmanifest", (req, res) => {
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res
+    .type("application/manifest+json")
+    .sendFile(developerPublicFile("site.webmanifest"));
+});
 
 
 /* GOODOS_SETTINGS_LIVE_V1_MOUNT */

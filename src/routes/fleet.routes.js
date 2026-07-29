@@ -20,20 +20,25 @@ const WORKSPACE_ARRAY_KEYS = new Set([
   "supportTickets", "rates", "seasonalAdjustments", "dynamicPricingInsights",
   "discounts", "fees", "expenses", "addons", "onboardingSteps"
 ]);
-const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings"]);
+const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings", "ownerSettings"]);
 const MAX_WORKSPACE_BYTES = 2 * 1024 * 1024;
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
+const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
   "inspection", "maintenance", "out_of_service", "retired", "blocked", "recalled"
 ]);
 const CUSTOMER_STATUSES = new Set(["active", "suspended", "blacklisted"]);
-const LICENSE_STATUSES = new Set(["verified", "pending", "failed"]);
 const BOOKING_STATUSES = new Set([
   "quote", "pending_payment", "confirmed", "assigned", "checked_in", "checked_out",
   "extended", "completed", "no_show", "cancelled", "refunded", "overdue"
 ]);
 const PAYMENT_STATUSES = new Set(["unpaid", "partial", "paid", "refunded", "disputed", "failed"]);
+const ONBOARDING_MODULES = new Set([
+  "overview", "reservations", "calendar", "vehicles", "turnaround", "tracking",
+  "communications", "customers", "revenue", "staff-access", "integrations",
+  "audit-history", "help", "documentation", "settings"
+]);
 
 function actor(request) {
   return request.user?.id || null;
@@ -43,10 +48,43 @@ function organization(request) {
   return request.tenantContext.organizationId;
 }
 
+function goodFleetAppRole(request) {
+  const membership = (request.apps || []).find(app =>
+    text(app?.membershipStatus, 40).toLowerCase() === "active" &&
+    (text(app?.id, 80).toLowerCase() === "goodfleet" ||
+      text(app?.domain, 160).toLowerCase() === "fleet.goodos.app")
+  );
+  return text(membership?.role, 40).toLowerCase();
+}
+
+function goodFleetAccessRole(request) {
+  const organizationRole = text(request.tenantContext.organization?.membershipRole, 40).toLowerCase();
+  if (["owner", "admin", "manager"].includes(organizationRole)) return organizationRole;
+  const appRole = goodFleetAppRole(request);
+  if (EMPLOYEE_ROLES.has(appRole)) return appRole;
+  return organizationRole;
+}
+
+function normalizedFleetRole(request) {
+  const role = goodFleetAccessRole(request);
+  if (role === "owner") return "owner";
+  if (role === "admin" || role === "manager") return "manager";
+  if (role === "mechanic") return "mechanic";
+  return "staff";
+}
+
 function requireEmployee(request, response, next) {
-  const role = text(request.tenantContext.organization?.membershipRole, 40).toLowerCase();
+  const role = goodFleetAccessRole(request);
   if (!EMPLOYEE_ROLES.has(role)) {
     return fail(response, 403, "EMPLOYEE_ACCESS_REQUIRED", "GoodFleet employee access is required.");
+  }
+  return next();
+}
+
+function requireLicenseVerifier(request, response, next) {
+  const role = goodFleetAccessRole(request);
+  if (!LICENSE_VERIFIER_ROLES.has(role)) {
+    return fail(response, 403, "LICENSE_VERIFIER_ACCESS_REQUIRED", "Front-desk or management access is required to verify renter identification.");
   }
   return next();
 }
@@ -114,6 +152,94 @@ function timestamp(date, time, field) {
     throw error;
   }
   return parsed.toISOString();
+}
+
+function rentalDays(pickupAt, returnAt) {
+  return Math.max(1, Math.ceil(
+    (new Date(returnAt).getTime() - new Date(pickupAt).getTime()) / 86_400_000
+  ));
+}
+
+async function calculateBookingPrice(client, org, input, pickupAt, returnAt) {
+  const pricingVehicleId = text(input.carId || input.requestedCarId, 80);
+  if (!pricingVehicleId) {
+    const error = new Error("A requested vehicle is required to calculate the reservation price.");
+    error.statusCode = 400;
+    error.code = "VEHICLE_REQUIRED";
+    throw error;
+  }
+  const [vehicleResult, workspaceResult] = await Promise.all([
+    client.query(
+      `SELECT id,daily_rate FROM fleet_vehicles
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+      [org, pricingVehicleId]
+    ),
+    client.query(
+      `SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`,
+      [org]
+    )
+  ]);
+  if (!vehicleResult.rowCount) {
+    const error = new Error("Requested vehicle not found.");
+    error.statusCode = 404;
+    error.code = "VEHICLE_NOT_FOUND";
+    throw error;
+  }
+  const state = workspaceResult.rows[0]?.state_json || {};
+  const days = rentalDays(pickupAt, returnAt);
+  const dailyRate = Number(vehicleResult.rows[0].daily_rate);
+  const base = dailyRate * days;
+  const suppliedCode = text(input.discountCode || input.promoCode, 80).toLowerCase();
+  const discountRecord = Array.isArray(state.discounts)
+    ? state.discounts.find(item =>
+      String(item?.status || "").toLowerCase() === "active" &&
+      String(item?.code || "").trim().toLowerCase() === suppliedCode
+    )
+    : null;
+  let discount = 0;
+  if (discountRecord) {
+    const value = Math.max(0, Number(discountRecord.value) || 0);
+    discount = discountRecord.type === "percentage"
+      ? base * Math.min(value, 100) / 100
+      : Math.min(value, base);
+  }
+  const discountedBase = Math.max(0, base - discount);
+  const mandatoryFees = (Array.isArray(state.fees) ? state.fees : [])
+    .filter(item =>
+      String(item?.status || "").toLowerCase() === "active" &&
+      String(item?.type || "").toLowerCase() === "mandatory"
+    )
+    .reduce((sum, fee) => {
+      const value = Math.max(0, Number(fee.value) || 0);
+      if (fee.calculationType === "per_day") return sum + value * days;
+      if (fee.calculationType === "percentage") return sum + discountedBase * value / 100;
+      return sum + value;
+    }, 0);
+  const branch = (Array.isArray(state.branches) ? state.branches : [])
+    .find(item => String(item?.id || "") === String(input.pickupLocationId || ""));
+  const configuredTax = Number(branch?.financialConfig?.taxRate ?? state.billingSettings?.taxRate ?? 0);
+  const taxRate = Number.isFinite(configuredTax) ? Math.min(Math.max(configuredTax, 0), 100) : 0;
+  const additionalCharges = (Array.isArray(input.additionalCharges) ? input.additionalCharges : [])
+    .reduce((sum, charge) => sum + Math.max(0, Number(charge?.amount) || 0), 0);
+  const tax = (discountedBase + mandatoryFees + additionalCharges) * taxRate / 100;
+  return {
+    days,
+    dailyRate: Number(dailyRate.toFixed(2)),
+    base: Number(base.toFixed(2)),
+    discount: Number(discount.toFixed(2)),
+    mandatoryFees: Number(mandatoryFees.toFixed(2)),
+    additionalCharges: Number(additionalCharges.toFixed(2)),
+    taxRate: Number(taxRate.toFixed(4)),
+    tax: Number(tax.toFixed(2)),
+    total: Number((discountedBase + mandatoryFees + additionalCharges + tax).toFixed(2))
+  };
+}
+
+function dateOnly(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
 function sanitizeWorkspace(input) {
@@ -192,8 +318,11 @@ function customerPayload(row) {
   return {
     ...(row.payload || {}), id: row.id, name: row.full_name, email: row.email,
     phone: row.phone, status: row.status, licenseNumber: row.license_number,
-    licenseExpiry: row.license_expiry,
+    licenseExpiry: dateOnly(row.license_expiry),
     licenseVerificationStatus: row.license_verification_status,
+    licenseVerifiedAt: row.license_verified_at,
+    licenseVerifiedBy: row.license_verified_by,
+    licenseVerificationMethod: row.license_verification_method,
     version: row.version, createdAt: row.created_at, updatedAt: row.updated_at
   };
 }
@@ -211,6 +340,35 @@ function bookingPayload(row) {
     totalAmount: Number(row.total_amount), depositAmount: Number(row.deposit_amount),
     paidAmount: Number(row.paid_amount), version: row.version,
     createdAt: row.created_at, updatedAt: row.updated_at
+  };
+}
+
+function paymentPayload(row) {
+  const completed = ["succeeded", "captured"].includes(row.status);
+  const refunded = ["refunded", "partially_refunded", "voided"].includes(row.status) ||
+    (row.operation_type === "refund" && completed);
+  const storedType = row.request_json?.type;
+  return {
+    id: row.id,
+    bookingId: row.booking_id || undefined,
+    amount: Number(row.amount),
+    currency: row.currency,
+    status: refunded
+      ? "refunded"
+      : completed || row.status === "authorized"
+        ? "completed"
+        : row.status === "failed"
+          ? "failed"
+          : "pending",
+    method: row.request_json?.method || "Recorded payment",
+    transactionId: row.provider_reference || undefined,
+    createdAt: row.created_at,
+    description: row.request_json?.description || row.operation_type.replaceAll("_", " "),
+    type: row.operation_type === "refund"
+      ? "refund"
+      : storedType === "deposit" ? "deposit"
+        : storedType === "fine" ? "fine" : "rental",
+    refunded
   };
 }
 
@@ -356,7 +514,9 @@ router.get("/health", async (request, response, next) => {
         to_regclass('public.fleet_workspace_state') IS NOT NULL AS workspace_ready,
         to_regclass('public.fleet_chat_messages') IS NOT NULL AS chat_ready,
         to_regclass('public.fleet_customer_notifications') IS NOT NULL AS notifications_ready,
-        to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready`
+        to_regclass('public.fleet_staff_onboarding_progress') IS NOT NULL AS onboarding_ready,
+        to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready,
+        to_regclass('public.fleet_contract_envelopes') IS NOT NULL AS contract_schema_ready`
     );
     const readiness = result.rows[0];
     response.json({
@@ -371,10 +531,11 @@ router.get("/health", async (request, response, next) => {
 router.get("/bootstrap", async (request, response, next) => {
   try {
     const org = organization(request);
-    const [vehicles, customers, bookings, workspace, auditEvents, members] = await Promise.all([
+    const [vehicles, customers, bookings, payments, workspace, auditEvents, members] = await Promise.all([
       query(`SELECT * FROM fleet_vehicles WHERE organization_id=$1 AND archived_at IS NULL ORDER BY created_at DESC`, [org]),
       query(`SELECT * FROM fleet_customers WHERE organization_id=$1 AND archived_at IS NULL ORDER BY created_at DESC`, [org]),
       query(`SELECT * FROM fleet_bookings WHERE organization_id=$1 AND archived_at IS NULL ORDER BY pickup_at DESC`, [org]),
+      query(`SELECT * FROM fleet_payment_operations WHERE organization_id=$1 ORDER BY created_at DESC`, [org]),
       query(`SELECT state_json,version,updated_at FROM fleet_workspace_state WHERE organization_id=$1`, [org]),
       query(
         `SELECT * FROM fleet_audit_events
@@ -384,9 +545,14 @@ router.get("/bootstrap", async (request, response, next) => {
       query(
         `SELECT account.id,account.email,account.display_name,account.first_name,
                 account.last_name,account.platform_role,account.status,account.avatar_url,
-                membership.role AS organization_role
+                membership.role AS organization_role,
+                app_membership.role AS app_role
          FROM backend_organization_memberships membership
          JOIN users account ON account.id=membership.user_id
+         LEFT JOIN app_memberships app_membership
+           ON app_membership.user_id=account.id
+          AND app_membership.app_id='goodfleet'
+          AND app_membership.status='active'
          WHERE membership.organization_id=$1 AND membership.status='active'
          ORDER BY account.display_name,account.email`,
         [org]
@@ -397,6 +563,7 @@ router.get("/bootstrap", async (request, response, next) => {
       vehicles: vehicles.rows.map(vehiclePayload),
       customers: customers.rows.map(customerPayload),
       bookings: bookings.rows.map(bookingPayload),
+      payments: payments.rows.map(paymentPayload),
       workspace: {
         state: workspaceRow?.state_json || {},
         version: workspaceRow?.version || 0,
@@ -409,9 +576,9 @@ router.get("/bootstrap", async (request, response, next) => {
         email: member.email,
         phone: "",
         branchId: "",
-        role: member.platform_role === "owner" || member.organization_role === "owner"
+        role: member.platform_role === "owner" || member.organization_role === "owner" || member.app_role === "owner"
           ? "owner"
-          : member.platform_role === "manager" || member.organization_role === "admin"
+          : member.platform_role === "manager" || member.organization_role === "admin" || member.app_role === "manager" || member.app_role === "admin"
             ? "manager"
             : "staff",
         status: member.status === "active" ? "active" : "inactive",
@@ -425,16 +592,36 @@ router.post("/staff/invitations", async (request, response, next) => {
   try {
     const email = required(request.body?.email, "email", 320).toLowerCase();
     const requestedRole = text(request.body?.role, 40).toLowerCase();
-    const roleName = requestedRole === "owner"
+    const fleetRole = requestedRole === "owner"
       ? "owner"
       : requestedRole === "manager"
-        ? "admin"
-        : "user";
+        ? "manager"
+        : "staff";
+    const roleName = fleetRole === "owner" ? "owner" : fleetRole === "manager" ? "admin" : "user";
     const result = await teamsService.inviteTeamMemberForUser(
       actor(request),
       { email, roleName },
       { ipAddress: request.ip }
     );
+    if (result.memberAdded && result.member?.id) {
+      await query(
+        `INSERT INTO app_memberships (
+           user_id,app_id,role,status,organization_id,project_id,environment_id
+         ) VALUES ($1,'goodfleet',$2,'active',$3,'proj_goodos_platform','env_goodos_production')
+         ON CONFLICT (user_id,app_id) DO UPDATE SET
+           role=EXCLUDED.role,status='active',organization_id=EXCLUDED.organization_id,
+           project_id=EXCLUDED.project_id,environment_id=EXCLUDED.environment_id,updated_at=NOW()`,
+        [result.member.id, fleetRole, organization(request)]
+      );
+    } else if (result.invitation?.id) {
+      await query(
+        `UPDATE backend_user_invites
+         SET app_id='goodfleet',app_role=$2,organization_id=$3,
+             project_id='proj_goodos_platform',environment_id='env_goodos_production',updated_at=NOW()
+         WHERE id=$1`,
+        [result.invitation.id, fleetRole, organization(request)]
+      );
+    }
     response.status(result.memberAdded ? 200 : 201).json({
       success: true,
       data: {
@@ -449,11 +636,13 @@ router.post("/staff/invitations", async (request, response, next) => {
 router.patch("/staff/:userId", async (request, response, next) => {
   try {
     const requestedRole = text(request.body?.role, 40).toLowerCase();
-    const roleName = requestedRole === "owner"
+    const fleetRole = requestedRole === "owner"
       ? "owner"
       : requestedRole === "manager"
-        ? "admin"
-        : "user";
+        ? "manager"
+        : "staff";
+    const roleName = fleetRole === "owner" ? "owner" : fleetRole === "manager" ? "admin" : "user";
+    const membershipStatus = request.body?.status === "inactive" ? "disabled" : "active";
     await teamsService.updateTeamMemberForUser(
       actor(request),
       request.params.userId,
@@ -462,6 +651,15 @@ router.patch("/staff/:userId", async (request, response, next) => {
         status: request.body?.status === "inactive" ? "suspended" : "active"
       },
       { ipAddress: request.ip }
+    );
+    await query(
+      `INSERT INTO app_memberships (
+         user_id,app_id,role,status,organization_id,project_id,environment_id
+       ) VALUES ($1,'goodfleet',$2,$3,$4,'proj_goodos_platform','env_goodos_production')
+       ON CONFLICT (user_id,app_id) DO UPDATE SET
+         role=EXCLUDED.role,status=EXCLUDED.status,organization_id=EXCLUDED.organization_id,
+         project_id=EXCLUDED.project_id,environment_id=EXCLUDED.environment_id,updated_at=NOW()`,
+      [request.params.userId, fleetRole, membershipStatus, organization(request)]
     );
     response.json({ success: true, data: { updated: true } });
   } catch (error) { next(error); }
@@ -475,7 +673,146 @@ router.delete("/staff/:userId", async (request, response, next) => {
       { roleName: "user", status: "removed" },
       { ipAddress: request.ip }
     );
+    await query(
+      `UPDATE app_memberships
+       SET status='revoked',updated_at=NOW()
+       WHERE user_id=$1 AND app_id='goodfleet' AND organization_id=$2`,
+      [request.params.userId, organization(request)]
+    );
     response.json({ success: true, data: { removed: true } });
+  } catch (error) { next(error); }
+});
+
+router.get("/staff-onboarding", async (request, response, next) => {
+  try {
+    const progress = await query(
+      `SELECT tour_version,completed_modules,last_module,started_at,dismissed_at,
+              completed_at,updated_at
+         FROM fleet_staff_onboarding_progress
+        WHERE organization_id=$1 AND user_id=$2`,
+      [organization(request), actor(request)]
+    );
+    const row = progress.rows[0];
+    response.json({
+      success: true,
+      data: {
+        role: normalizedFleetRole(request),
+        tourVersion: row?.tour_version || 1,
+        completedModules: row?.completed_modules || [],
+        lastModule: row?.last_module || null,
+        startedAt: row?.started_at || null,
+        dismissedAt: row?.dismissed_at || null,
+        completedAt: row?.completed_at || null,
+        updatedAt: row?.updated_at || null
+      }
+    });
+  } catch (error) { next(error); }
+});
+
+router.put("/staff-onboarding", async (request, response, next) => {
+  try {
+    const rawModules = request.body?.completedModules;
+    if (!Array.isArray(rawModules)) {
+      return fail(response, 400, "INVALID_ONBOARDING_PROGRESS", "Completed training modules must be an array.");
+    }
+    const completedModules = [...new Set(rawModules.map(value => text(value, 80)))];
+    if (completedModules.some(moduleId => !ONBOARDING_MODULES.has(moduleId))) {
+      return fail(response, 400, "INVALID_ONBOARDING_MODULE", "Training progress includes an unknown module.");
+    }
+    const lastModule = text(request.body?.lastModule, 80) || null;
+    if (lastModule && !ONBOARDING_MODULES.has(lastModule)) {
+      return fail(response, 400, "INVALID_ONBOARDING_MODULE", "The last training module is unknown.");
+    }
+    const tourVersion = Number(request.body?.tourVersion || 1);
+    if (!Number.isInteger(tourVersion) || tourVersion < 1 || tourVersion > 100) {
+      return fail(response, 400, "INVALID_ONBOARDING_VERSION", "A valid training version is required.");
+    }
+    const saved = await query(
+      `INSERT INTO fleet_staff_onboarding_progress (
+         organization_id,user_id,tour_version,completed_modules,last_module,
+         role_at_start,dismissed_at,completed_at
+       ) VALUES (
+         $1,$2,$3,$4::text[],$5,$6,
+         CASE WHEN $7 THEN NOW() ELSE NULL END,
+         CASE WHEN $8 THEN NOW() ELSE NULL END
+       )
+       ON CONFLICT (organization_id,user_id) DO UPDATE SET
+         tour_version=EXCLUDED.tour_version,
+         completed_modules=EXCLUDED.completed_modules,
+         last_module=EXCLUDED.last_module,
+         role_at_start=EXCLUDED.role_at_start,
+         dismissed_at=EXCLUDED.dismissed_at,
+         completed_at=EXCLUDED.completed_at,
+         updated_at=NOW()
+       RETURNING tour_version,completed_modules,last_module,started_at,dismissed_at,
+                 completed_at,updated_at`,
+      [
+        organization(request), actor(request), tourVersion, completedModules, lastModule,
+        normalizedFleetRole(request), request.body?.dismissed === true,
+        request.body?.completed === true
+      ]
+    );
+    const row = saved.rows[0];
+    response.json({
+      success: true,
+      data: {
+        role: normalizedFleetRole(request),
+        tourVersion: row.tour_version,
+        completedModules: row.completed_modules,
+        lastModule: row.last_module,
+        startedAt: row.started_at,
+        dismissedAt: row.dismissed_at,
+        completedAt: row.completed_at,
+        updatedAt: row.updated_at
+      }
+    });
+  } catch (error) { next(error); }
+});
+
+router.get("/staff-onboarding/team", async (request, response, next) => {
+  try {
+    if (!["owner", "admin", "manager"].includes(goodFleetAccessRole(request))) {
+      return fail(response, 403, "ONBOARDING_OVERVIEW_FORBIDDEN", "Management access is required to view team training progress.");
+    }
+    const result = await query(
+      `SELECT account.id,account.email,account.display_name,account.first_name,
+              account.last_name,app_membership.role,
+              progress.tour_version,progress.completed_modules,progress.last_module,
+              progress.started_at,progress.dismissed_at,progress.completed_at,
+              progress.updated_at
+         FROM app_memberships app_membership
+         JOIN users account ON account.id=app_membership.user_id
+         LEFT JOIN fleet_staff_onboarding_progress progress
+           ON progress.organization_id=app_membership.organization_id
+          AND progress.user_id=app_membership.user_id
+        WHERE app_membership.organization_id=$1
+          AND app_membership.app_id='goodfleet'
+          AND app_membership.status='active'
+        ORDER BY account.display_name,account.email`,
+      [organization(request)]
+    );
+    response.json({
+      success: true,
+      data: result.rows.map(member => ({
+        userId: member.id,
+        name: member.display_name ||
+          [member.first_name, member.last_name].filter(Boolean).join(" ") ||
+          member.email,
+        email: member.email,
+        role: member.role === "owner"
+          ? "owner"
+          : member.role === "manager" || member.role === "admin"
+            ? "manager"
+            : member.role === "mechanic" ? "mechanic" : "staff",
+        tourVersion: member.tour_version || 1,
+        completedModules: member.completed_modules || [],
+        lastModule: member.last_module || null,
+        startedAt: member.started_at || null,
+        dismissedAt: member.dismissed_at || null,
+        completedAt: member.completed_at || null,
+        updatedAt: member.updated_at || null
+      }))
+    });
   } catch (error) { next(error); }
 });
 
@@ -499,6 +836,9 @@ router.put("/workspace", async (request, response, next) => {
       return fail(response, 409, "WORKSPACE_VERSION_CONFLICT", "Workspace changed in another session.", {
         currentVersion
       });
+    }
+    if (goodFleetAccessRole(request) !== "owner" && "ownerSettings" in state) {
+      state.ownerSettings = current.rows[0]?.state_json?.ownerSettings || {};
     }
     const saved = current.rowCount
       ? await client.query(
@@ -568,9 +908,14 @@ router.post("/customers", async (request, response, next) => {
        VALUES ($1,$2,lower($3),$4,$5,$6,$7,$8,$9::jsonb,$10,$10) RETURNING *`,
       [organization(request), required(body.name, "name", 200), required(body.email, "email", 320),
         text(body.phone, 50) || null, enumValue(body.status || "active", CUSTOMER_STATUSES, "status"),
-        required(body.licenseNumber, "licenseNumber", 100), required(body.licenseExpiry, "licenseExpiry", 20),
-        enumValue(body.licenseVerificationStatus || "pending", LICENSE_STATUSES, "licenseVerificationStatus"),
-        JSON.stringify(body), actor(request)]
+        text(body.licenseNumber, 100) || null, text(body.licenseExpiry, 20) || null,
+        "pending", JSON.stringify({
+          ...body,
+          licenseVerificationStatus: "pending",
+          licenseVerifiedAt: null,
+          licenseVerifiedBy: null,
+          licenseVerificationMethod: null
+        }), actor(request)]
     );
     const customer = customerPayload(result.rows[0]);
     await audit(client, request, "customer.created", "customer", customer.id, null, customer);
@@ -590,6 +935,7 @@ router.post("/bookings", async (request, response, next) => {
     const org = organization(request);
     const pickupAt = timestamp(body.startDate, body.pickupTime, "pickupAt");
     const returnAt = timestamp(body.endDate, body.dropoffTime, "returnAt");
+    const requestedVehicleId = text(body.requestedCarId || body.carId, 80);
     if (new Date(returnAt) <= new Date(pickupAt)) return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
     await client.query("BEGIN");
     if (body.carId) await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${body.carId}`]);
@@ -600,9 +946,9 @@ router.post("/bookings", async (request, response, next) => {
     );
     if (!customerResult.rowCount) { await client.query("ROLLBACK"); return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found."); }
     const customer = customerResult.rows[0];
-    if (customer.status !== "active" || customer.license_verification_status !== "verified" || new Date(customer.license_expiry) < new Date(pickupAt)) {
+    if (customer.status !== "active") {
       await client.query("ROLLBACK");
-      return fail(response, 409, "DRIVER_NOT_ELIGIBLE", "Customer must be active with a verified license valid through pickup.");
+      return fail(response, 409, "CUSTOMER_NOT_ELIGIBLE", "Customer account must be active to create a reservation.");
     }
 
     if (body.carId) {
@@ -616,8 +962,24 @@ router.post("/bookings", async (request, response, next) => {
         await client.query("ROLLBACK");
         return fail(response, 409, "VEHICLE_NOT_ELIGIBLE", "Vehicle is unavailable or has expired compliance documents.");
       }
+    } else if (requestedVehicleId) {
+      const requestedVehicle = await client.query(
+        `SELECT id FROM fleet_vehicles
+         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+        [org, requestedVehicleId]
+      );
+      if (!requestedVehicle.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(response, 404, "VEHICLE_NOT_FOUND", "Requested vehicle not found.");
+      }
     }
 
+    const price = await calculateBookingPrice(client, org, body, pickupAt, returnAt);
+    const storedPayload = cleanPayload({
+      ...body,
+      totalAmount: price.total,
+      pricing: price
+    });
     const reservation = text(body.reservationNumber, 80) || `GF-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
     const result = await client.query(
       `INSERT INTO fleet_bookings
@@ -626,8 +988,8 @@ router.post("/bookings", async (request, response, next) => {
       [org, reservation, body.customerId, body.carId || null, pickupAt, returnAt,
         required(body.pickupLocationId, "pickupLocationId", 200),
         required(body.returnLocationId, "returnLocationId", 200),
-        money(body.totalAmount, "totalAmount"), money(body.depositAmount || 0, "depositAmount"),
-        money(body.paidAmount || 0, "paidAmount"), JSON.stringify(body), actor(request)]
+        money(price.total, "totalAmount"), money(body.depositAmount || 0, "depositAmount"),
+        "0.00", JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
     await audit(client, request, "booking.created", "booking", booking.id, null, booking);
@@ -750,19 +1112,37 @@ router.patch("/customers/:customerId", async (request, response, next) => {
     }
     const before = customerPayload(existing.rows[0]);
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
+    const licenseNumber = text(merged.licenseNumber, 100) || null;
+    const licenseExpiry = text(merged.licenseExpiry, 20) || null;
+    const licenseChanged = licenseNumber !== (existing.rows[0].license_number || null) ||
+      licenseExpiry !== dateOnly(existing.rows[0].license_expiry);
+    const verificationStatus = licenseChanged
+      ? "pending"
+      : existing.rows[0].license_verification_status;
+    const verifiedAt = licenseChanged ? null : existing.rows[0].license_verified_at;
+    const verifiedBy = licenseChanged ? null : existing.rows[0].license_verified_by;
+    const verificationMethod = licenseChanged ? null : existing.rows[0].license_verification_method;
+    const storedPayload = {
+      ...merged,
+      licenseNumber,
+      licenseExpiry,
+      licenseVerificationStatus: verificationStatus,
+      licenseVerifiedAt: verifiedAt,
+      licenseVerifiedBy: verifiedBy,
+      licenseVerificationMethod: verificationMethod
+    };
     const result = await client.query(
       `UPDATE fleet_customers SET
         full_name=$3,email=lower($4),phone=$5,status=$6,license_number=$7,
-        license_expiry=$8,license_verification_status=$9,payload=$10::jsonb,
-        version=version+1,updated_by=$11,updated_at=NOW()
+        license_expiry=$8,license_verification_status=$9,license_verified_at=$10,
+        license_verified_by=$11,license_verification_method=$12,payload=$13::jsonb,
+        version=version+1,updated_by=$14,updated_at=NOW()
        WHERE organization_id=$1 AND id=$2 RETURNING *`,
       [org, request.params.customerId, required(merged.name, "name", 200),
         required(merged.email, "email", 320), text(merged.phone, 50) || null,
         enumValue(merged.status || "active", CUSTOMER_STATUSES, "status"),
-        required(merged.licenseNumber, "licenseNumber", 100),
-        required(merged.licenseExpiry, "licenseExpiry", 20),
-        enumValue(merged.licenseVerificationStatus || "pending", LICENSE_STATUSES, "licenseVerificationStatus"),
-        JSON.stringify(merged), actor(request)]
+        licenseNumber, licenseExpiry, verificationStatus, verifiedAt, verifiedBy,
+        verificationMethod, JSON.stringify(storedPayload), actor(request)]
     );
     const customer = customerPayload(result.rows[0]);
     await audit(client, request, "customer.updated", "customer", customer.id, before, customer);
@@ -773,6 +1153,218 @@ router.patch("/customers/:customerId", async (request, response, next) => {
     if (error.code === "23505") return fail(response, 409, "CUSTOMER_ALREADY_EXISTS", "Email or driver license already exists.");
     next(error);
   } finally { client.release(); }
+});
+
+router.post("/customers/:customerId/license-verification", requireLicenseVerifier, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const body = request.body || {};
+    const licenseNumber = required(body.licenseNumber, "licenseNumber", 100);
+    const licenseExpiry = required(body.licenseExpiry, "licenseExpiry", 20);
+    const expiry = new Date(`${licenseExpiry.slice(0, 10)}T23:59:59.999Z`);
+    if (Number.isNaN(expiry.getTime()) || expiry < new Date()) {
+      return fail(response, 400, "LICENSE_EXPIRED", "A current driver license is required for vehicle checkout.");
+    }
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM fleet_customers
+       WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+      [org, request.params.customerId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found.");
+    }
+    if (existing.rows[0].status !== "active") {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CUSTOMER_NOT_ELIGIBLE", "Only an active customer can be cleared for checkout.");
+    }
+    const before = customerPayload(existing.rows[0]);
+    const verifiedAt = new Date().toISOString();
+    const storedPayload = cleanPayload({
+      ...before,
+      licenseNumber,
+      licenseExpiry: licenseExpiry.slice(0, 10),
+      licenseVerificationStatus: "verified",
+      licenseVerifiedAt: verifiedAt,
+      licenseVerifiedBy: actor(request),
+      licenseVerificationMethod: "in_person"
+    });
+    const result = await client.query(
+      `UPDATE fleet_customers SET
+        license_number=$3,license_expiry=$4,license_verification_status='verified',
+        license_verified_at=$5,license_verified_by=$6,license_verification_method='in_person',
+        payload=$7::jsonb,version=version+1,updated_by=$6,updated_at=NOW()
+       WHERE organization_id=$1 AND id=$2 RETURNING *`,
+      [org, request.params.customerId, licenseNumber, licenseExpiry.slice(0, 10),
+        verifiedAt, actor(request), JSON.stringify(storedPayload)]
+    );
+    const customer = customerPayload(result.rows[0]);
+    await audit(client, request, "customer.license_verified", "customer", customer.id, before, {
+      ...customer,
+      details: "Government-issued driver license verified in person for vehicle checkout"
+    });
+    await client.query("COMMIT");
+    response.json({ success: true, data: customer });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23505") return fail(response, 409, "CUSTOMER_ALREADY_EXISTS", "Driver license already belongs to another customer.");
+    next(error);
+  } finally { client.release(); }
+});
+
+router.post("/bookings/quote", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const body = request.body || {};
+    const org = organization(request);
+    const pickupAt = timestamp(body.startDate, body.pickupTime, "pickupAt");
+    const returnAt = timestamp(body.endDate, body.dropoffTime, "returnAt");
+    if (new Date(returnAt) <= new Date(pickupAt)) {
+      return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
+    }
+    const price = await calculateBookingPrice(client, org, body, pickupAt, returnAt);
+    const assignedVehicleId = text(body.carId, 80);
+    let available = true;
+    if (assignedVehicleId) {
+      const conflict = await client.query(
+        `SELECT id,reservation_number FROM fleet_bookings
+          WHERE organization_id=$1 AND vehicle_id=$2 AND archived_at IS NULL
+            AND id::text<>COALESCE(NULLIF($5,''),'00000000-0000-0000-0000-000000000000')
+            AND status=ANY($6::text[])
+            AND tsrange(
+              (pickup_at AT TIME ZONE 'UTC') - interval '2 hours',
+              (return_at AT TIME ZONE 'UTC') + interval '2 hours',
+              '[)'
+            ) && tsrange(
+              ($3::timestamptz AT TIME ZONE 'UTC') - interval '2 hours',
+              ($4::timestamptz AT TIME ZONE 'UTC') + interval '2 hours',
+              '[)'
+            )
+          LIMIT 1`,
+        [org, assignedVehicleId, pickupAt, returnAt, text(body.bookingId, 80), ACTIVE_BOOKING_STATUSES]
+      );
+      available = !conflict.rowCount;
+    }
+    response.json({
+      success: true,
+      data: {
+        ...price,
+        available,
+        currency: "USD"
+      }
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/bookings/:bookingId/extensions", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const days = Number(request.body?.days);
+    if (!Number.isInteger(days) || days < 1 || days > 90) {
+      return fail(response, 400, "INVALID_EXTENSION", "Extension days must be between 1 and 90.");
+    }
+    const key = text(request.get("Idempotency-Key"), 255);
+    if (!key) {
+      return fail(response, 400, "IDEMPOTENCY_KEY_REQUIRED", "An Idempotency-Key header is required.");
+    }
+    await client.query("BEGIN");
+    const duplicate = await client.query(
+      `SELECT booking.* FROM fleet_payment_operations operation
+        JOIN fleet_bookings booking
+          ON booking.organization_id=operation.organization_id
+         AND booking.id=operation.booking_id
+       WHERE operation.organization_id=$1 AND operation.idempotency_key=$2`,
+      [org, key]
+    );
+    if (duplicate.rowCount) {
+      await client.query("COMMIT");
+      return response.json({ success: true, data: bookingPayload(duplicate.rows[0]) });
+    }
+    const existing = await client.query(
+      `SELECT * FROM fleet_bookings
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+      [org, request.params.bookingId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    }
+    const before = bookingPayload(existing.rows[0]);
+    if (!["confirmed", "assigned", "checked_in", "checked_out", "extended", "overdue"].includes(before.status)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "BOOKING_CANNOT_BE_EXTENDED", "Only active confirmed rentals can be extended.");
+    }
+    const nextReturn = new Date(existing.rows[0].return_at);
+    nextReturn.setUTCDate(nextReturn.getUTCDate() + days);
+    const merged = cleanPayload({
+      ...before,
+      endDate: nextReturn.toISOString().slice(0, 10),
+      dropoffTime: nextReturn.toISOString().slice(11, 16)
+    });
+    if (merged.carId) {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${merged.carId}`]);
+    }
+    const price = await calculateBookingPrice(
+      client,
+      org,
+      merged,
+      existing.rows[0].pickup_at,
+      nextReturn.toISOString()
+    );
+    const additionalAmount = Math.max(0, price.total - Number(existing.rows[0].total_amount));
+    const paymentStatus = Number(existing.rows[0].paid_amount) <= 0 ? "unpaid" : "partial";
+    const storedPayload = cleanPayload({
+      ...merged,
+      totalAmount: price.total,
+      paymentStatus,
+      pricing: price,
+      lastExtension: {
+        days,
+        additionalAmount: Number(additionalAmount.toFixed(2)),
+        requestedAt: new Date().toISOString(),
+        requestedBy: actor(request)
+      }
+    });
+    const updated = await client.query(
+      `UPDATE fleet_bookings
+          SET return_at=$3,status='extended',payment_status=$4,total_amount=$5,
+              payload=$6::jsonb,version=version+1,updated_by=$7,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2 RETURNING *`,
+      [org, request.params.bookingId, nextReturn.toISOString(), paymentStatus,
+        price.total.toFixed(2), JSON.stringify(storedPayload), actor(request)]
+    );
+    if (additionalAmount > 0) {
+      await client.query(
+        `INSERT INTO fleet_payment_operations
+          (organization_id,booking_id,customer_id,operation_type,provider,idempotency_key,
+           amount,currency,status,request_json,created_by)
+         VALUES ($1,$2,$3,'invoice','internal',$4,$5,'USD','pending',$6::jsonb,$7)`,
+        [org, request.params.bookingId, existing.rows[0].customer_id, key,
+          additionalAmount.toFixed(2), JSON.stringify({
+            method: "Credit Card",
+            description: `${days}-day rental extension`,
+            type: "rental"
+          }), actor(request)]
+      );
+    }
+    const booking = bookingPayload(updated.rows[0]);
+    await audit(client, request, "booking.extended", "booking", booking.id, before, booking);
+    await client.query("COMMIT");
+    response.json({ success: true, data: booking });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23P01") return fail(response, 409, "VEHICLE_NOT_AVAILABLE", "This vehicle is already committed during the requested extension.");
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
 router.patch("/bookings/:bookingId", async (request, response, next) => {
@@ -790,6 +1382,16 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
       return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
     }
     const before = bookingPayload(existing.rows[0]);
+    const tripFields = new Set([
+      "customerId", "carId", "requestedCarId", "startDate", "endDate",
+      "pickupTime", "dropoffTime", "pickupLocationId", "returnLocationId",
+      "insuranceSelection", "discountCode", "promoCode"
+    ]);
+    const changesTrip = Object.keys(request.body || {}).some(key => tripFields.has(key));
+    if (changesTrip && ["completed", "cancelled", "refunded"].includes(before.status)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "BOOKING_NOT_EDITABLE", "Completed, cancelled, and refunded reservations cannot have trip details changed.");
+    }
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
     const returnCompleted = before.status !== "completed" && merged.status === "completed";
     if (returnCompleted) {
@@ -801,6 +1403,40 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
     if (new Date(returnAt) <= new Date(pickupAt)) {
       await client.query("ROLLBACK");
       return fail(response, 400, "INVALID_RENTAL_PERIOD", "Return must be after pickup.");
+    }
+    const customerRecord = await client.query(
+      `SELECT status FROM fleet_customers
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR SHARE`,
+      [org, merged.customerId]
+    );
+    if (!customerRecord.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found.");
+    }
+    if (customerRecord.rows[0].status !== "active") {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CUSTOMER_NOT_ELIGIBLE", "Customer account must be active.");
+    }
+    if (merged.status === "checked_out") {
+      if (!merged.carId) {
+        await client.query("ROLLBACK");
+        return fail(response, 409, "VEHICLE_ASSIGNMENT_REQUIRED", "Assign an eligible vehicle before checkout.");
+      }
+      const customer = await client.query(
+        `SELECT status,license_verification_status,
+                (license_expiry IS NOT NULL AND license_expiry >= CURRENT_DATE) AS license_current
+           FROM fleet_customers
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+          FOR SHARE`,
+        [org, merged.customerId]
+      );
+      const renter = customer.rows[0];
+      if (!renter || renter.status !== "active" ||
+          renter.license_verification_status !== "verified" ||
+          !renter.license_current) {
+        await client.query("ROLLBACK");
+        return fail(response, 409, "ID_VERIFICATION_REQUIRED", "Verify a valid government-issued driver license before vehicle checkout.");
+      }
     }
     if (merged.carId && ACTIVE_BOOKING_STATUSES.includes(merged.status)) {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${merged.carId}`]);
@@ -821,6 +1457,22 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         return fail(response, 409, "VEHICLE_NOT_ELIGIBLE", "Vehicle is unavailable or has expired compliance documents.");
       }
     }
+    const price = await calculateBookingPrice(client, org, merged, pickupAt, returnAt);
+    const paidAmount = Number(before.paidAmount);
+    const paymentStatus = before.paymentStatus === "disputed"
+      ? "disputed"
+      : before.paymentStatus === "refunded"
+        ? "refunded"
+        : paidAmount <= 0
+          ? "unpaid"
+          : paidAmount + 0.005 >= price.total ? "paid" : "partial";
+    const storedPayload = cleanPayload({
+      ...merged,
+      totalAmount: price.total,
+      paidAmount,
+      paymentStatus,
+      pricing: price
+    });
     const result = await client.query(
       `UPDATE fleet_bookings SET
         reservation_number=$3,customer_id=$4,vehicle_id=$5,pickup_at=$6,return_at=$7,
@@ -833,12 +1485,70 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         required(merged.pickupLocationId, "pickupLocationId", 200),
         required(merged.returnLocationId, "returnLocationId", 200),
         enumValue(merged.status, BOOKING_STATUSES, "status"),
-        enumValue(merged.paymentStatus, PAYMENT_STATUSES, "paymentStatus"),
-        money(merged.totalAmount, "totalAmount"),
+        enumValue(paymentStatus, PAYMENT_STATUSES, "paymentStatus"),
+        money(price.total, "totalAmount"),
         money(merged.depositAmount || 0, "depositAmount"),
-        money(merged.paidAmount || 0, "paidAmount"), JSON.stringify(merged), actor(request)]
+        money(paidAmount, "paidAmount"), JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
+    if (booking.status === "checked_out" && booking.carId && before.status !== "checked_out") {
+      const vehicleBefore = await client.query(
+        `SELECT * FROM fleet_vehicles
+         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+        [org, booking.carId]
+      );
+      if (vehicleBefore.rowCount) {
+        await client.query(
+          `UPDATE fleet_vehicles
+           SET status='checked_out',version=version+1,updated_by=$3,updated_at=NOW()
+           WHERE organization_id=$1 AND id=$2`,
+          [org, booking.carId, actor(request)]
+        );
+        await audit(client, request, "vehicle.checked_out", "vehicle", booking.carId,
+          vehiclePayload(vehicleBefore.rows[0]), {
+            id: booking.carId,
+            status: "checked_out",
+            bookingId: booking.id,
+            details: `Vehicle released for reservation ${booking.reservationNumber}`
+          });
+      }
+    }
+    if (
+      ["completed", "cancelled"].includes(booking.status) &&
+      booking.carId &&
+      !["completed", "cancelled"].includes(before.status)
+    ) {
+      const nextVehicleStatus = booking.status === "completed" &&
+        storedPayload.checkinCleanliness &&
+        storedPayload.checkinCleanliness !== "clean"
+        ? "cleaning"
+        : "available";
+      const vehicleBefore = await client.query(
+        `SELECT * FROM fleet_vehicles
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`,
+        [org, booking.carId]
+      );
+      if (vehicleBefore.rowCount) {
+        await client.query(
+          `UPDATE fleet_vehicles
+              SET status=$3,
+                  payload=payload || $4::jsonb,
+                  version=version+1,updated_by=$5,updated_at=NOW()
+            WHERE organization_id=$1 AND id=$2`,
+          [org, booking.carId, nextVehicleStatus, JSON.stringify({
+            mileage: storedPayload.checkinMileage,
+            fuelLevel: storedPayload.checkinFuelLevel
+          }), actor(request)]
+        );
+        await audit(client, request, "vehicle.returned", "vehicle", booking.carId,
+          vehiclePayload(vehicleBefore.rows[0]), {
+            id: booking.carId,
+            status: nextVehicleStatus,
+            bookingId: booking.id,
+            details: `Vehicle returned for reservation ${booking.reservationNumber}`
+          });
+      }
+    }
     await audit(client, request, "booking.updated", "booking", booking.id, before, booking);
     let returnedVehicle = null;
     if (returnCompleted && booking.carId) {

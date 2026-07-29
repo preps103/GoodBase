@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const database = require("../config/database");
+const deploymentManifest = require("../../deploy/application-paths.json");
 
 const { pool, query } = database;
 const BACKUP_ROOT = "/var/backups/goodos-site-updates";
@@ -22,6 +23,56 @@ const PM2_HOME = path.resolve(
   "/home/mgoodlo3/.pm2"
 );
 const PM2_CONTROL_COMMAND = "/usr/local/sbin/goodos-pm2-control";
+const STAGED_PRESERVE_PATHS = [
+  ".env",
+  ".env.local",
+  ".env.production",
+  ".env.development",
+  "data",
+  "secrets",
+  "storage",
+  "uploads",
+  "voice_database.json",
+];
+
+function canonicalDeploymentSites() {
+  const applications = deploymentManifest.applications.map((application) => ({
+    appId: application.id,
+    name: application.name,
+    domain: application.domain,
+    repositoryUrl: application.repositoryUrl,
+    appPath: application.productionPath,
+    processName: application.service,
+  }));
+  const platformServices = deploymentManifest.platformServices.map((service) => ({
+    appId: service.id,
+    name: service.name,
+    domain: service.domain,
+    repositoryUrl: service.repositoryUrl,
+    appPath: service.productionPath,
+    processName: service.services[0],
+  }));
+
+  return [...applications, ...platformServices].map((site) => ({
+    ...site,
+    branch: "main",
+    processManager: "pm2",
+    healthUrl: `https://${site.domain}`,
+  }));
+}
+
+function canonicalSiteByAppId(appId) {
+  const normalized = cleanText(appId, 200).toLowerCase();
+  return canonicalDeploymentSites().find((site) => site.appId === normalized) || null;
+}
+
+function canonicalSiteByProcessName(processName) {
+  const normalized = cleanText(processName, 200);
+  if (GOODBASE_PM2_PROCESSES.includes(normalized)) {
+    return canonicalSiteByAppId("goodbase");
+  }
+  return canonicalDeploymentSites().find((site) => site.processName === normalized) || null;
+}
 
 function identifier(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -199,6 +250,210 @@ function validateSiteInput(input = {}, { partial = false } = {}) {
   }
 
   return output;
+}
+
+function inspectApplicationPath(appPath) {
+  const resolved = validateAppPath(appPath);
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) {
+      return {
+        exists: false,
+        accessible: false,
+        gitRepository: false,
+        issue: "Application path is not a directory.",
+      };
+    }
+    fs.accessSync(resolved, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+    return {
+      exists: true,
+      accessible: true,
+      gitRepository: fs.existsSync(path.join(resolved, ".git")),
+      issue: null,
+    };
+  } catch (error) {
+    return {
+      exists: error.code !== "ENOENT",
+      accessible: false,
+      gitRepository: false,
+      issue:
+        error.code === "ENOENT"
+          ? "Application directory does not exist."
+          : "GoodBase cannot access the application directory. Deployment access must be provisioned.",
+    };
+  }
+}
+
+async function reconcileCanonicalDeploymentSites() {
+  const canonicalSites = canonicalDeploymentSites();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    for (const site of canonicalSites) {
+      await client.query(
+        `
+          INSERT INTO backend_deployment_sites (
+            id, app_id, name, domain, repository_url, branch, app_path,
+            process_manager, process_name, health_url, status, auto_rollback,
+            install_dependencies, run_build, organization_id, project_id,
+            environment_id, metadata_json
+          )
+          VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ready',true,true,true,
+            'org_goodos','proj_goodos_platform','env_goodos_production',
+            jsonb_build_object(
+              'canonicalMapping', true,
+              'mappingSource', 'deploy/application-paths.json'
+            )
+          )
+          ON CONFLICT (app_id) WHERE app_id IS NOT NULL
+          DO UPDATE SET
+            name = EXCLUDED.name,
+            domain = EXCLUDED.domain,
+            repository_url = EXCLUDED.repository_url,
+            branch = EXCLUDED.branch,
+            app_path = EXCLUDED.app_path,
+            process_manager = EXCLUDED.process_manager,
+            process_name = EXCLUDED.process_name,
+            health_url = EXCLUDED.health_url,
+            status = CASE
+              WHEN backend_deployment_sites.status IN ('queued','deploying')
+                THEN backend_deployment_sites.status
+              ELSE 'ready'
+            END,
+            metadata_json =
+              COALESCE(backend_deployment_sites.metadata_json, '{}'::jsonb) ||
+              EXCLUDED.metadata_json,
+            updated_at = CASE
+              WHEN (
+                backend_deployment_sites.name,
+                backend_deployment_sites.domain,
+                backend_deployment_sites.repository_url,
+                backend_deployment_sites.branch,
+                backend_deployment_sites.app_path,
+                backend_deployment_sites.process_manager,
+                backend_deployment_sites.process_name,
+                backend_deployment_sites.health_url
+              ) IS DISTINCT FROM (
+                EXCLUDED.name,
+                EXCLUDED.domain,
+                EXCLUDED.repository_url,
+                EXCLUDED.branch,
+                EXCLUDED.app_path,
+                EXCLUDED.process_manager,
+                EXCLUDED.process_name,
+                EXCLUDED.health_url
+              )
+                THEN NOW()
+              ELSE backend_deployment_sites.updated_at
+            END
+        `,
+        [
+          `deploysite_${crypto.createHash("md5").update(site.appId).digest("hex")}`,
+          site.appId,
+          site.name,
+          site.domain,
+          normalizeGithubRepository(site.repositoryUrl),
+          site.branch,
+          validateAppPath(site.appPath),
+          site.processManager,
+          validateProcessName(site.processName, site.processManager),
+          validateHealthUrl(site.healthUrl),
+        ]
+      );
+    }
+    await client.query("COMMIT");
+    return canonicalSites;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function assessSiteConfiguration(site, targets = []) {
+  const issues = [];
+  const canonical = canonicalSiteByAppId(site.appId);
+  const pathInspection = site.appPath
+    ? inspectApplicationPath(site.appPath)
+    : {
+        exists: false,
+        accessible: false,
+        gitRepository: false,
+        issue: "Application path is not configured.",
+      };
+
+  if (!site.repositoryUrl) issues.push("GitHub repository is not configured.");
+  if (!site.appPath) issues.push("Application path is not configured.");
+  if (!site.processName && site.processManager !== "none") {
+    issues.push("Runtime process is not configured.");
+  }
+  if (pathInspection.issue) issues.push(pathInspection.issue);
+
+  const target = targets.find((item) => item.processName === site.processName);
+  if (site.processManager === "pm2" && !target) {
+    issues.push(`PM2 process ${site.processName || "(not configured)"} was not discovered.`);
+  } else if (target && target.status !== "online") {
+    issues.push(`PM2 process ${target.processName} is ${target.status}.`);
+  }
+
+  if (canonical) {
+    if (path.resolve(site.appPath || "/") !== path.resolve(canonical.appPath)) {
+      issues.push(`Deployment path must be ${canonical.appPath}.`);
+    }
+    if (comparableRepository(site.repositoryUrl) !== comparableRepository(canonical.repositoryUrl)) {
+      issues.push(`Repository must be ${comparableRepository(canonical.repositoryUrl)}.`);
+    }
+    if (site.processName !== canonical.processName) {
+      issues.push(`Runtime process must be ${canonical.processName}.`);
+    }
+    if (site.domain !== canonical.domain) {
+      issues.push(`Domain must be ${canonical.domain}.`);
+    }
+  }
+
+  return {
+    ready: issues.length === 0,
+    issues,
+    deploymentMode: pathInspection.gitRepository ? "managed-checkout" : "staged-release",
+    pathExists: pathInspection.exists,
+    pathAccessible: pathInspection.accessible,
+    gitRepository: pathInspection.gitRepository,
+    runtimePath: target?.runtimePath || null,
+  };
+}
+
+function assertCanonicalSiteMapping(site) {
+  const canonical = canonicalSiteByAppId(site.appId);
+  if (!canonical) return site;
+
+  const mismatches = [];
+  if (path.resolve(site.appPath || "/") !== path.resolve(canonical.appPath)) {
+    mismatches.push(`path ${canonical.appPath}`);
+  }
+  if (comparableRepository(site.repositoryUrl) !== comparableRepository(canonical.repositoryUrl)) {
+    mismatches.push(`repository ${comparableRepository(canonical.repositoryUrl)}`);
+  }
+  if (site.processManager !== canonical.processManager) {
+    mismatches.push(`process manager ${canonical.processManager}`);
+  }
+  if (site.processName !== canonical.processName) {
+    mismatches.push(`process ${canonical.processName}`);
+  }
+  if (site.domain !== canonical.domain) {
+    mismatches.push(`domain ${canonical.domain}`);
+  }
+
+  if (mismatches.length) {
+    throw statusError(
+      409,
+      `${site.name || canonical.name} must use its canonical ${mismatches.join(", ")}.`,
+      "CANONICAL_DEPLOYMENT_MAPPING_REQUIRED"
+    );
+  }
+  return site;
 }
 
 async function addEvent(runId, step, message, level = "info", metadata = {}) {
@@ -490,6 +745,160 @@ async function buildApplication(runId, site, appPath) {
   }
 }
 
+async function copyPreservedRuntimeState(appPath, stagePath) {
+  const names = new Set(STAGED_PRESERVE_PATHS);
+  const entries = await fsp.readdir(appPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (
+      entry.isFile() &&
+      (entry.name.endsWith(".db") ||
+        entry.name.includes(".sqlite") ||
+        entry.name === "voice_database.json")
+    ) {
+      names.add(entry.name);
+    }
+  }
+
+  for (const name of names) {
+    const source = path.join(appPath, name);
+    const destination = path.join(stagePath, name);
+    if (!fs.existsSync(source)) continue;
+    await fsp.rm(destination, { recursive: true, force: true });
+    await fsp.cp(source, destination, {
+      recursive: true,
+      force: true,
+      preserveTimestamps: true,
+    });
+  }
+}
+
+function stagedRsyncExclusions() {
+  return [
+    "--exclude=.env",
+    "--exclude=.env.*",
+    "--exclude=secrets/",
+    "--exclude=uploads/",
+    "--exclude=storage/",
+    "--exclude=data/",
+    "--exclude=*.db",
+    "--exclude=*.sqlite*",
+    "--exclude=voice_database.json",
+  ];
+}
+
+async function restoreStagedBackup(runId, site, appPath, backupApplication) {
+  await addEvent(runId, "rollback", `Restoring the pre-update release for ${site.name}.`, "warning");
+  await commandWithEvents(
+    runId,
+    "rollback",
+    "rsync",
+    ["-a", "--delete", `${backupApplication}${path.sep}`, `${appPath}${path.sep}`],
+    { timeoutMs: 20 * 60 * 1000 }
+  );
+  await restartApplication(runId, site);
+  await verifyHealth(runId, site);
+  await addEvent(runId, "rollback", "The pre-update release was restored.", "warning");
+}
+
+async function executeStagedRelease(runId, site, appPath, configuredRepository, branch) {
+  const backupDir = path.join(BACKUP_ROOT, runId);
+  const stagePath = path.join(backupDir, "staging");
+  const backupApplication = path.join(backupDir, "application");
+  let promoted = false;
+
+  await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 });
+  await commandWithEvents(
+    runId,
+    "checkout",
+    "git",
+    [
+      "clone",
+      "--branch",
+      branch,
+      "--single-branch",
+      "--depth",
+      "1",
+      configuredRepository,
+      stagePath,
+    ],
+    { timeoutMs: 10 * 60 * 1000 }
+  );
+
+  const targetCommit = (
+    await commandWithEvents(runId, "checkout", "git", ["rev-parse", "HEAD"], {
+      cwd: stagePath,
+      timeoutMs: 15000,
+    })
+  ).stdout.trim();
+  await updateRun(runId, { targetCommit });
+
+  await copyPreservedRuntimeState(appPath, stagePath);
+  await installDependencies(runId, site, stagePath);
+  await buildApplication(runId, site, stagePath);
+
+  await fsp.mkdir(backupApplication, { recursive: true, mode: 0o700 });
+  await commandWithEvents(
+    runId,
+    "backup",
+    "cp",
+    ["-a", "--link", `${appPath}${path.sep}.`, `${backupApplication}${path.sep}`],
+    { timeoutMs: 20 * 60 * 1000 }
+  );
+  await fsp.writeFile(
+    path.join(backupDir, "deployment.json"),
+    JSON.stringify(
+      {
+        runId,
+        siteId: site.id,
+        appId: site.appId,
+        siteName: site.name,
+        appPath,
+        repositoryUrl: configuredRepository,
+        branch,
+        targetCommit,
+        deploymentMode: "staged-release",
+        preservePaths: STAGED_PRESERVE_PATHS,
+        createdAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ),
+    { mode: 0o600 }
+  );
+  await addEvent(runId, "backup", `A rollback copy was saved to ${backupApplication}.`);
+
+  try {
+    await commandWithEvents(
+      runId,
+      "promote",
+      "rsync",
+      [
+        "-a",
+        "--delete",
+        ...stagedRsyncExclusions(),
+        `${stagePath}${path.sep}`,
+        `${appPath}${path.sep}`,
+      ],
+      { timeoutMs: 20 * 60 * 1000 }
+    );
+    promoted = true;
+
+    await restartApplication(runId, site);
+    await verifyHealth(runId, site);
+    return { targetCommit, deployedCommit: targetCommit, backupApplication };
+  } catch (error) {
+    if (promoted && site.autoRollback) {
+      try {
+        await restoreStagedBackup(runId, site, appPath, backupApplication);
+        error.stagedRollbackSucceeded = true;
+      } catch (rollbackError) {
+        error.stagedRollbackError = rollbackError;
+      }
+    }
+    throw error;
+  }
+}
+
 function pm2ProcessNamesForSite(site) {
   const configured = validateProcessName(site.processName, "pm2");
   const isGoodBase =
@@ -626,6 +1035,7 @@ async function performRollback(runId, site, appPath, previousCommit) {
 async function executeDeployment(runId) {
   const run = await loadRun(runId);
   const site = await loadSite(run.siteId);
+  assertCanonicalSiteMapping(site);
   const appPath = validateAppPath(site.appPath, { mustExist: true });
   const metadata = safeJson(site.metadata, {});
   const allowLocalTest = process.env.GOODOS_DEPLOYMENT_ALLOW_LOCAL_TEST === "1" && metadata.testMode === true;
@@ -639,6 +1049,7 @@ async function executeDeployment(runId) {
   let lockHeld = false;
   let previousCommit = null;
   let targetCommit = null;
+  const stagedDeployment = path.resolve(appPath) !== "/var/www/GoodBase";
 
   try {
     const lockResult = await lockClient.query(
@@ -654,6 +1065,42 @@ async function executeDeployment(runId) {
     await updateRun(runId, { status: "running", startedAt: new Date() });
     await updateSiteAfterRun(site.id, runId, { status: "deploying" });
     await addEvent(runId, "preflight", `Starting update for ${site.name}.`);
+
+    if (stagedDeployment) {
+      await addEvent(
+        runId,
+        "preflight",
+        "Using a staged release so the running application remains untouched until install and build succeed."
+      );
+      const staged = await executeStagedRelease(
+        runId,
+        site,
+        appPath,
+        configuredRepository,
+        branch
+      );
+      targetCommit = staged.targetCommit;
+      const deployedCommit = staged.deployedCommit;
+
+      await updateRun(runId, {
+        status: "success",
+        targetCommit,
+        deployedCommit,
+        completedAt: new Date(),
+        summary: {
+          appPath,
+          branch,
+          processManager: site.processManager,
+          processName: site.processName,
+          healthUrl: site.healthUrl || null,
+          deploymentMode: "staged-release",
+        },
+      });
+      await updateSiteAfterRun(site.id, runId, { status: "ready", deployedCommit });
+      await addEvent(runId, "complete", `Staged deployment completed at ${deployedCommit}.`);
+
+      return { status: "success", previousCommit: null, targetCommit, deployedCommit };
+    }
 
     if (!fs.existsSync(path.join(appPath, ".git"))) {
       throw new Error("Application directory is not a Git repository.");
@@ -771,7 +1218,9 @@ async function executeDeployment(runId) {
     let rollbackSucceeded = false;
     let rollbackError = null;
 
-    if (site.autoRollback && previousCommit) {
+    if (error.stagedRollbackSucceeded) {
+      rollbackSucceeded = true;
+    } else if (!stagedDeployment && site.autoRollback && previousCommit) {
       try {
         await performRollback(runId, site, appPath, previousCommit);
         rollbackSucceeded = true;
@@ -782,20 +1231,21 @@ async function executeDeployment(runId) {
     }
 
     const status = rollbackSucceeded ? "rolled_back" : "failed";
+    rollbackError = rollbackError || error.stagedRollbackError || null;
     const message = rollbackError
       ? `${error.message}; rollback failed: ${rollbackError.message}`
       : error.message;
 
     await updateRun(runId, {
       status,
-      rollbackCommit: rollbackSucceeded ? previousCommit : null,
+      rollbackCommit: rollbackSucceeded ? previousCommit || site.lastDeployedCommit || null : null,
       errorMessage: message,
       completedAt: new Date(),
       summary: { rollbackSucceeded },
     }).catch(() => {});
     await updateSiteAfterRun(site.id, runId, {
       status: rollbackSucceeded ? "ready" : "failed",
-      deployedCommit: rollbackSucceeded ? previousCommit : null,
+      deployedCommit: rollbackSucceeded ? previousCommit || site.lastDeployedCommit || null : null,
     }).catch(() => {});
 
     if (!rollbackSucceeded) throw error;
@@ -892,25 +1342,40 @@ async function discoverServerApps() {
   const discovered = [];
 
   for (const item of rows) {
-    const cwd = item.pm2_env?.pm_cwd || null;
-    let repositoryUrl = null;
-    let branch = null;
+    const runtimePath = item.pm2_env?.pm_cwd || null;
+    const canonical = canonicalSiteByProcessName(item.name);
+    const deploymentPath = canonical?.appPath || runtimePath;
+    let repositoryUrl = canonical?.repositoryUrl || null;
+    let branch = canonical?.branch || null;
 
-    if (cwd && fs.existsSync(path.join(cwd, ".git"))) {
+    if (deploymentPath && fs.existsSync(path.join(deploymentPath, ".git"))) {
       try {
-        repositoryUrl = (await runCommand("git", ["remote", "get-url", "origin"], { cwd, timeoutMs: 15000 })).stdout.trim();
+        repositoryUrl = (await runCommand("git", ["remote", "get-url", "origin"], {
+          cwd: deploymentPath,
+          timeoutMs: 15000,
+        })).stdout.trim();
       } catch {}
       try {
-        branch = (await runCommand("git", ["branch", "--show-current"], { cwd, timeoutMs: 15000 })).stdout.trim();
+        branch = (await runCommand("git", ["branch", "--show-current"], {
+          cwd: deploymentPath,
+          timeoutMs: 15000,
+        })).stdout.trim();
       } catch {}
     }
 
     discovered.push({
+      appId: canonical?.appId || null,
       processName: item.name,
       status: item.pm2_env?.status || "unknown",
-      appPath: cwd,
+      appPath: deploymentPath,
+      deploymentPath,
+      runtimePath,
       repositoryUrl,
       branch: branch || "main",
+      deploymentMode:
+        deploymentPath && fs.existsSync(path.join(deploymentPath, ".git"))
+          ? "managed-checkout"
+          : "staged-release",
       processManager: "pm2",
       pid: item.pid || null,
       port: item.pm2_env?.env?.PORT || item.pm2_env?.PORT || null,
@@ -1052,6 +1517,13 @@ module.exports = {
   validateProcessManager,
   validateProcessName,
   validateHealthUrl,
+  canonicalDeploymentSites,
+  canonicalSiteByAppId,
+  canonicalSiteByProcessName,
+  inspectApplicationPath,
+  reconcileCanonicalDeploymentSites,
+  assessSiteConfiguration,
+  assertCanonicalSiteMapping,
   loadSite,
   loadRun,
   addEvent,
