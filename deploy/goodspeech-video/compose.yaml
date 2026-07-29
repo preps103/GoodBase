@@ -4,7 +4,7 @@ services:
   goodmotion-video:
     build:
       context: ../../services/goodmotion-video
-    image: goodos/goodmotion-video:1.0.0
+    image: goodos/goodmotion-video:1.0.1
     restart: unless-stopped
     init: true
     ports:
