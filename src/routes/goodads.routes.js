@@ -9,6 +9,9 @@ const service = require("../services/goodads.service");
 const chatService = require("../services/goodads-chat.service");
 const social = require("../services/goodads-social.service");
 const payments = require("../services/goodads-payments.service");
+const workflows = require("../services/goodads-workflows.service");
+const ads = require("../services/goodads-ads.service");
+const analytics = require("../services/goodads-analytics.service");
 
 const router = express.Router();
 const publicFormReadLimiter = rateLimit({
@@ -26,6 +29,24 @@ const publicFormWriteLimiter = rateLimit({
 const generationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const publishingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const bulkPublishingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const publicLinkClickLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
@@ -111,6 +132,25 @@ router.post("/public/forms/:slug/submissions", publicFormWriteLimiter, (req, res
     payload: req.body,
     idempotencyKey: req.get("Idempotency-Key"),
     userAgent: req.get("User-Agent"),
+  }))
+));
+router.get("/public/link-hubs/:slug", publicFormReadLimiter, (req, res) => (
+  handle(res, "link-hub.public", service.getPublicLinkHub(req.params.slug))
+));
+router.post("/public/link-hubs/:slug/clicks", publicLinkClickLimiter, (req, res) => (
+  handle(res, "link-hub.click", service.recordLinkHubClick({
+    slug: req.params.slug,
+    linkId: req.body?.linkId,
+    userAgent: req.get("User-Agent"),
+    referrer: req.get("Referer"),
+  }))
+));
+router.post("/public/engagement-webhooks/:provider", paymentWebhookLimiter, (req, res) => (
+  handle(res, "engagement.ingest", workflows.ingestEngagement({
+    provider: req.params.provider,
+    payload: req.body,
+    rawBody: req.rawBody,
+    headers: req.headers,
   }))
 ));
 router.get("/public/payment-offers/:slug", publicFormReadLimiter, (req, res) => (
@@ -204,10 +244,22 @@ router.post("/chat/channels/:channelId/read", (req, res) => handle(res, "chat.re
 router.get("/dashboard", (req, res) => handle(res, "dashboard", service.dashboard(req.tenantContext)));
 router.get("/workspace", (req, res) => handle(res, "workspace", service.workspace(req.tenantContext)));
 router.get("/workspace/brand", (req, res) => handle(res, "brand", service.listResources({ type: "brand", context: req.tenantContext, limit: 1 })));
-router.get("/capabilities", (req, res) => handle(res, "capabilities", social.capabilities({
-  context: req.tenantContext,
-  userId: req.user.id,
-})));
+router.get("/capabilities", (req, res) => handle(
+  res,
+  "capabilities",
+  social.capabilities({
+    context: req.tenantContext,
+    userId: req.user.id,
+  }).then((capabilities) => ({
+    ...capabilities,
+    modules: {
+      ...capabilities.modules,
+      ...workflows.workflowCapabilities(),
+      ...ads.capabilities(),
+      ...analytics.capabilities(),
+    },
+  }))
+));
 router.get("/connections/providers", (_req, res) => success(res, { data: social.publicProviders() }));
 router.get("/connections", (req, res) => handle(res, "connections.list", social.listConnections({
   context: req.tenantContext,
@@ -236,16 +288,34 @@ router.delete("/connections/provider/:platform", (req, res) => handle(res, "conn
   userId: req.user.id,
   provider: req.params.platform,
 })));
+router.delete("/connections/account/:id", (req, res) => handle(res, "connections.account.disconnect", social.disconnectConnection({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
+})));
 router.post("/generation/content", generationLimiter, (req, res) => handle(res, "generation.content", service.generateContent({
   payload: req.body,
   context: req.tenantContext,
 })));
-router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", social.publish({
+router.post("/publishing/jobs", publishingLimiter, (req, res) => handle(res, "publishing.create", social.publish({
   context: req.tenantContext,
   userId: req.user.id,
   idempotencyKey: req.get("Idempotency-Key"),
   providers: req.body?.providers,
+  connectionIds: req.body?.connectionIds,
   content: req.body?.content,
+  scheduledFor: req.body?.scheduledFor,
+  timezone: req.body?.timezone,
+  approvalId: req.body?.approvalId,
+})));
+router.post("/publishing/batches", bulkPublishingLimiter, (req, res) => handle(res, "publishing.batch.create", social.publishBatch({
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+  providers: req.body?.providers,
+  connectionIds: req.body?.connectionIds,
+  items: req.body?.items,
+  timezone: req.body?.timezone,
 })));
 router.get("/publishing/jobs", (req, res) => handle(res, "publishing.list", social.listPublishJobs({
   context: req.tenantContext,
@@ -255,6 +325,16 @@ router.get("/publishing/jobs", (req, res) => handle(res, "publishing.list", soci
   status: req.query.status,
 })));
 router.get("/publishing/jobs/:id", (req, res) => handle(res, "publishing.get", social.getPublishJob({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
+})));
+router.post("/publishing/jobs/:id/cancel", (req, res) => handle(res, "publishing.cancel", social.cancelPublishJob({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
+})));
+router.post("/publishing/jobs/:id/retry", (req, res) => handle(res, "publishing.retry", social.retryPublishJob({
   context: req.tenantContext,
   userId: req.user.id,
   id: req.params.id,
@@ -305,6 +385,144 @@ router.get("/payments/sessions", (req, res) => handle(res, "payments.sessions", 
   limit: req.query.limit,
 })));
 
+router.get("/engagement", (req, res) => handle(res, "engagement.list", workflows.listEngagement({
+  context: req.tenantContext,
+  status: req.query.status,
+  itemType: req.query.itemType,
+  provider: req.query.provider,
+  assignedTo: req.query.assignedTo,
+  search: req.query.search,
+  limit: req.query.limit,
+  offset: req.query.offset,
+})));
+router.patch("/engagement/:id", (req, res) => handle(res, "engagement.update", workflows.updateEngagement({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+})));
+
+router.get("/approvals", (req, res) => handle(res, "approvals.list", service.listResources({
+  type: "approvals",
+  context: req.tenantContext,
+  limit: req.query.limit,
+  offset: req.query.offset,
+  status: req.query.status,
+})));
+router.post("/approvals", (req, res) => handle(res, "approvals.create", workflows.saveApproval({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+})));
+router.get("/approvals/:id", (req, res) => handle(res, "approvals.get", service.getResource({
+  type: "approvals",
+  id: req.params.id,
+  context: req.tenantContext,
+})));
+router.put("/approvals/:id", (req, res) => handle(res, "approvals.update", workflows.saveApproval({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.patch("/approvals/:id", (req, res) => handle(res, "approvals.update", workflows.saveApproval({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/approvals/:id", (req, res) => handle(res, "approvals.archive", service.archiveResource({
+  type: "approvals",
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/approvals/:id/decision", (req, res) => handle(
+  res,
+  "approvals.decision",
+  workflows.decideApproval({
+    id: req.params.id,
+    decision: req.body?.decision,
+    note: req.body?.note,
+    context: req.tenantContext,
+    userId: req.user.id,
+  }).then(async (approval) => {
+    let publishingJob = null;
+    let publishingError = null;
+    if (
+      approval.status === "approved"
+      && approval.publication?.autoQueue === true
+    ) {
+      try {
+        publishingJob = await social.publish({
+          context: req.tenantContext,
+          userId: approval.ownerUserId || req.user.id,
+          idempotencyKey: `approval:${approval.id}`,
+          connectionIds: approval.publication.connectionIds,
+          content: approval.publication.content,
+          scheduledFor: approval.publication.scheduledFor,
+          timezone: approval.publication.timezone,
+          approvalId: approval.id,
+        });
+      } catch (requestError) {
+        publishingError = {
+          code: requestError.code || "GOODADS_APPROVED_PUBLISH_FAILED",
+          message: requestError.message,
+        };
+      }
+    }
+    return { approval, publishingJob, publishingError };
+  })
+));
+
+router.get("/automations", (req, res) => handle(res, "automations.list", service.listResources({
+  type: "automations",
+  context: req.tenantContext,
+  limit: req.query.limit,
+  offset: req.query.offset,
+  status: req.query.status,
+})));
+router.post("/automations", (req, res) => handle(res, "automations.create", workflows.saveAutomation({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.get("/automations/:id", (req, res) => handle(res, "automations.get", service.getResource({
+  type: "automations",
+  id: req.params.id,
+  context: req.tenantContext,
+})));
+router.put("/automations/:id", (req, res) => handle(res, "automations.update", workflows.saveAutomation({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.patch("/automations/:id", (req, res) => handle(res, "automations.update", workflows.saveAutomation({
+  id: req.params.id,
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.delete("/automations/:id", (req, res) => handle(res, "automations.archive", service.archiveResource({
+  type: "automations",
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+router.post("/automations/:id/run", (req, res) => handle(res, "automations.run", workflows.runAutomation({
+  id: req.params.id,
+  input: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+})));
+router.get("/automations/:id/runs", (req, res) => handle(res, "automations.runs", workflows.listAutomationRuns({
+  id: req.params.id,
+  context: req.tenantContext,
+  limit: req.query.limit,
+})));
+
 function registerResource(path, type) {
   router.get(`/${path}`, (req, res) => handle(res, `${type}.list`, service.listResources({
     type,
@@ -349,12 +567,10 @@ function registerResource(path, type) {
 [
   ["campaigns", "campaigns"],
   ["content", "content"],
-  ["approvals", "approvals"],
   ["calendar", "calendar"],
   ["analytics", "analytics"],
   ["media", "media"],
   ["link-hubs", "link_hubs"],
-  ["automations", "automations"],
   ["notifications", "notifications"],
   ["email-campaigns", "email_campaigns"],
   ["designs", "designs"],
@@ -366,12 +582,120 @@ function registerResource(path, type) {
   ["funnels", "funnels"],
   ["lead-forms", "lead_forms"],
   ["leads", "leads"],
+  ["rss-feeds", "rss_feeds"],
   ["brand", "brand"],
 ].forEach(([path, type]) => registerResource(path, type));
 
-router.post("/campaigns/:id/launch", (_req, res) => (
-  handle(res, "campaign.launch", Promise.resolve().then(() => social.rejectPaidCampaignLaunch()))
+router.post("/rss-feeds/:id/sync", (req, res) => handle(res, "rss-feed.sync", service.syncRssFeed({
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+
+router.post("/rss-feeds/:id/items/:itemId/repurpose", generationLimiter, (req, res) => (
+  handle(res, "rss-feed.repurpose", service.repurposeRssItem({
+    id: req.params.id,
+    itemId: req.params.itemId,
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  }))
 ));
+
+router.get("/ads/providers", (_req, res) => success(res, { data: ads.publicProviders() }));
+router.get("/analytics/overview", (req, res) => handle(res, "analytics.overview", analytics.overview({
+  context: req.tenantContext,
+  from: req.query.from,
+  to: req.query.to,
+})));
+router.post("/analytics/provider-sync", publishingLimiter, (req, res) => handle(
+  res,
+  "analytics.provider-sync",
+  analytics.syncProviderMetrics({
+    context: req.tenantContext,
+    from: req.body?.from,
+    to: req.body?.to,
+  })
+));
+router.get("/ads/accounts", (req, res) => handle(res, "ads.accounts.list", ads.listAdAccounts({
+  context: req.tenantContext,
+})));
+router.post("/ads/accounts/discover", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.accounts.discover",
+  ads.discoverAccounts({
+    provider: req.body?.provider,
+    connectionId: req.body?.connectionId,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.post("/ads/accounts", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.accounts.save",
+  ads.saveAdAccount({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.delete("/ads/accounts/:id", (req, res) => handle(
+  res,
+  "ads.accounts.disable",
+  ads.disableAdAccount({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.post("/ads/operations/:id/retry", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.operation.retry",
+  ads.retryOperation({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.get("/campaigns/:id/provider-state", (req, res) => handle(
+  res,
+  "campaign.provider-state",
+  ads.getCampaignState({
+    campaignId: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.post("/campaigns/:id/launch", publishingLimiter, (req, res) => (
+  handle(res, "campaign.launch", ads.launchCampaign({
+    campaignId: req.params.id,
+    adAccountIds: req.body?.adAccountIds,
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+  }))
+));
+router.post("/campaigns/:id/provider-campaigns/:providerCampaignId/activation-approval", (req, res) => (
+  handle(res, "campaign.activation-approval", ads.requestActivationApproval({
+    campaignId: req.params.id,
+    providerCampaignId: req.params.providerCampaignId,
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+  }))
+));
+["sync", "pause", "activate", "archive"].forEach((operationType) => {
+  router.post(
+    `/campaigns/:id/provider-campaigns/:providerCampaignId/${operationType}`,
+    publishingLimiter,
+    (req, res) => handle(res, `campaign.${operationType}`, ads.queueLifecycleOperation({
+      campaignId: req.params.id,
+      providerCampaignId: req.params.providerCampaignId,
+      operationType,
+      approvalId: req.body?.approvalId,
+      context: req.tenantContext,
+      userId: req.user.id,
+      idempotencyKey: req.get("Idempotency-Key"),
+    }))
+  );
+});
 
 router.post("/funnels/:id/publish", (req, res) => handle(res, "funnel.publish", service.transitionResource({
   type: "funnels",

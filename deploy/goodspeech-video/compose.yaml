@@ -1,0 +1,40 @@
+name: goodspeech-video
+
+services:
+  goodmotion-video:
+    build:
+      context: ../../services/goodmotion-video
+    image: goodos/goodmotion-video:1.0.1
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8890:8890"
+    environment:
+      GOODMOTION_VIDEO_TOKEN: ${GOODMOTION_VIDEO_TOKEN:?GOODMOTION_VIDEO_TOKEN is required}
+      GOODMOTION_T2V_MODEL: ${GOODMOTION_T2V_MODEL:-Wan-AI/Wan2.1-T2V-1.3B}
+      GOODMOTION_I2V_MODEL: ${GOODMOTION_I2V_MODEL:-Wan-AI/Wan2.1-I2V-14B-480P}
+      HF_HOME: /var/lib/goodmotion/models
+    volumes:
+      - goodmotion_models:/var/lib/goodmotion/models
+      - goodmotion_outputs:/var/lib/goodmotion/outputs
+      - goodmotion_inputs:/var/lib/goodmotion/inputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "8gb"
+    read_only: true
+    tmpfs:
+      - /tmp:size=4g,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  goodmotion_models:
+  goodmotion_outputs:
+  goodmotion_inputs:
