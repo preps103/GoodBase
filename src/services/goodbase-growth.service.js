@@ -247,7 +247,15 @@ async function dispatchSms(limit=25) {
     try{
       const result=await signedProviderRequest({status:row.provider_status==="enabled"?"ready":row.provider_status,endpoint_url:row.controller_url,credential_ref:row.secret_ref},{idempotencyKey:row.id,purpose:row.purpose,...JSON.parse(decryptValue(row.encrypted_payload))});
       await database.query(`UPDATE goodbase_sms_deliveries SET status='delivered',provider_message_id=$2,completed_at=NOW(),error_code=NULL WHERE id=$1`,[row.id,result.messageId||null]);delivered++;
-    }catch(error){await database.query(`UPDATE goodbase_sms_deliveries SET status='failed',error_code=$2,next_attempt_at=NOW()+(LEAST(600,POWER(2,attempts)*5)::text||' seconds')::interval WHERE id=$1`,[row.id,error.code||"SMS_PROVIDER_ERROR"]);}
+      if(row.fleet_notification_id){
+        await database.query(`UPDATE fleet_customer_notification_deliveries SET status='delivered',provider_reference=$2,attempted_at=NOW(),delivered_at=NOW(),error_code=NULL,updated_at=NOW() WHERE notification_id=$1 AND channel='sms'`,[row.fleet_notification_id,result.messageId||null]);
+      }
+    }catch(error){
+      await database.query(`UPDATE goodbase_sms_deliveries SET status='failed',error_code=$2,next_attempt_at=NOW()+(LEAST(600,POWER(2,attempts)*5)::text||' seconds')::interval WHERE id=$1`,[row.id,error.code||"SMS_PROVIDER_ERROR"]);
+      if(row.fleet_notification_id){
+        await database.query(`UPDATE fleet_customer_notification_deliveries SET status='failed',attempted_at=NOW(),error_code=$2,updated_at=NOW() WHERE notification_id=$1 AND channel='sms'`,[row.fleet_notification_id,error.code||"SMS_PROVIDER_ERROR"]);
+      }
+    }
   }
   return {selected:claimed.rowCount,delivered};
 }

@@ -84,17 +84,37 @@ test("Contract storage freezes the agreement and preserves tamper-evident comple
   assert.match(routes, /auditChainHead/);
 });
 
-test("Sending and reminding customers creates durable in-app notifications", () => {
+test("Sending and reminding customers creates durable in-app, email, and SMS deliveries", () => {
   const routes = read("src/routes/fleet-contracts.routes.js");
+  const migration = read("migrations/20260729_goodfleet_contract_notifications_sms_v1.sql");
+  const growth = read("src/services/goodbase-growth.service.js");
 
   assert.match(routes, /fleet_customer_notifications/);
   assert.match(routes, /fleet_customer_notification_deliveries/);
   assert.match(routes, /backend_email_queue/);
-  assert.match(routes, /ARRAY\['in_app','email'\]/);
+  assert.match(routes, /goodbase_sms_deliveries/);
+  assert.match(routes, /encryptValue/);
+  assert.match(routes, /contract_signing/);
+  assert.match(routes, /smsStatus/);
   assert.match(routes, /This link is personal, expires automatically/);
   assert.match(routes, /'\/account\/contracts'/);
   assert.match(routes, /router\.post\("\/:envelopeId\/send"/);
   assert.match(routes, /router\.post\("\/:envelopeId\/remind"/);
+  assert.match(migration, /recipient_phone/);
+  assert.match(migration, /'in_app', 'email', 'sms'/);
+  assert.match(migration, /fleet_notification_id/);
+  assert.match(growth, /channel='sms'/);
+});
+
+test("Completed agreements notify assigned GoodFleet management with a deep link", () => {
+  const routes = read("src/routes/fleet-contracts.routes.js");
+
+  assert.match(routes, /notifyManagementOfCompletion/);
+  assert.match(routes, /membership\.app_id='goodfleet'/);
+  assert.match(routes, /membership\.role IN \('owner','admin','manager'\)/);
+  assert.match(routes, /fleet\.contract\.completed/);
+  assert.match(routes, /\/bookings\?tab=contracts&contract=/);
+  assert.match(routes, /managementNotificationCount/);
 });
 
 test("Fleet readiness includes the contract signing schema", () => {

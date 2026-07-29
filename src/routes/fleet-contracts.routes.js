@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
+const { encryptValue } = require("../services/secret.service");
 
 const router = express.Router();
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff"]);
@@ -36,6 +37,16 @@ function sha256(value) {
 
 function randomToken() {
   return crypto.randomBytes(32).toString("base64url");
+}
+
+function normalizePhone(value) {
+  const raw = clean(value, 30);
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (raw.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return null;
 }
 
 function organization(request) {
@@ -359,6 +370,117 @@ function validateSignatureInput(body, expectedName) {
   return { signerName, signatureType, signatureText, signatureData };
 }
 
+async function notifyManagementOfCompletion(client, recipient, completedRecordHash) {
+  const bookingResult = await client.query(
+    `SELECT reservation_number
+       FROM fleet_bookings
+      WHERE organization_id=$1 AND id=$2
+      LIMIT 1`,
+    [recipient.organization_id, recipient.booking_id]
+  );
+  const reservationNumber = bookingResult.rows[0]?.reservation_number || recipient.booking_id;
+  const managers = await client.query(
+    `SELECT DISTINCT users.id,users.email,users.display_name,
+            COALESCE(membership.project_id,'proj_goodos_platform') AS project_id,
+            COALESCE(membership.environment_id,'env_goodos_production') AS environment_id
+       FROM app_memberships membership
+       JOIN users ON users.id=membership.user_id
+      WHERE membership.app_id='goodfleet'
+        AND membership.status='active'
+        AND membership.role IN ('owner','admin','manager')
+        AND (membership.organization_id=$1 OR membership.organization_id IS NULL)
+        AND users.status='active'`,
+    [recipient.organization_id]
+  );
+  const title = `Rental agreement signed: ${recipient.contract_number}`;
+  const message = `${recipient.full_name} completed rental agreement ${recipient.contract_number} for reservation ${reservationNumber}. Review the signed agreement and completion record.`;
+  const actionUrl = `/bookings?tab=contracts&contract=${encodeURIComponent(recipient.envelope_id)}`;
+  let created = 0;
+
+  for (const manager of managers.rows) {
+    const key = sha256(`${recipient.envelope_id}|${manager.id}|completed`).slice(0, 32);
+    const notificationId = `ntf_gf_contract_signed_${key}`;
+    const messageId = `msg_gf_contract_signed_${key}`;
+    const queueId = `ntq_gf_contract_signed_${key}`;
+    const payload = {
+      appId: "goodfleet",
+      envelopeId: recipient.envelope_id,
+      contractNumber: recipient.contract_number,
+      bookingId: recipient.booking_id,
+      reservationNumber,
+      signerName: recipient.full_name,
+      completedRecordHash,
+    };
+    const inserted = await client.query(
+      `INSERT INTO backend_notifications (
+         id,notification_key,category,channel,title,message,severity,status,
+         recipient_user_id,recipient_email,source,source_id,action_url,
+         payload_json,metadata_json,organization_id,project_id,environment_id
+       ) VALUES (
+         $1,'fleet.contract.completed','reservation','in_app',$2,$3,'success','unread',
+         $4,$5,'goodfleet-contracts',$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12
+       )
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [
+        notificationId,
+        title,
+        message,
+        manager.id,
+        manager.email,
+        recipient.envelope_id,
+        actionUrl,
+        JSON.stringify(payload),
+        JSON.stringify({ appId: "goodfleet", eventType: "fleet.contract.completed" }),
+        recipient.organization_id,
+        manager.project_id,
+        manager.environment_id,
+      ]
+    );
+    if (!inserted.rowCount) continue;
+
+    await client.query(
+      `INSERT INTO backend_message_center (
+         id,notification_id,user_id,email,title,body,severity,status,action_url,
+         metadata_json,organization_id,project_id,environment_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,'success','unread',$7,$8::jsonb,$9,$10,$11)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        messageId,
+        notificationId,
+        manager.id,
+        manager.email,
+        title,
+        message,
+        actionUrl,
+        JSON.stringify({ appId: "goodfleet", source: "goodfleet-contracts" }),
+        recipient.organization_id,
+        manager.project_id,
+        manager.environment_id,
+      ]
+    );
+    await client.query(
+      `INSERT INTO backend_notification_queue (
+         id,notification_id,queue_type,channel,status,priority,scheduled_at,
+         payload_json,metadata_json,organization_id,project_id,environment_id
+       ) VALUES ($1,$2,'notification','in_app','completed',20,NOW(),$3::jsonb,$4::jsonb,$5,$6,$7)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        queueId,
+        notificationId,
+        JSON.stringify({ title, message, severity: "success", actionUrl }),
+        JSON.stringify({ appId: "goodfleet", messageId }),
+        recipient.organization_id,
+        manager.project_id,
+        manager.environment_id,
+      ]
+    );
+    created += 1;
+  }
+
+  return created;
+}
+
 async function completeSignature(client, request, recipient, body, actorUserId = null) {
   if (!SIGNABLE_ENVELOPE_STATUSES.has(recipient.envelope_status)) {
     const error = new Error("This agreement is not available for signature.");
@@ -450,13 +572,22 @@ async function completeSignature(client, request, recipient, body, actorUserId =
         WHERE organization_id=$1 AND id=$2`,
       [recipient.organization_id, recipient.envelope_id, completedAt, completedRecordHash, actorUserId]
     );
+    const managementNotificationCount = await notifyManagementOfCompletion(
+      client,
+      recipient,
+      completedRecordHash
+    );
     await recordEvent(client, {
       request,
       organizationId: recipient.organization_id,
       envelopeId: recipient.envelope_id,
       actorUserId,
       eventType: "envelope.completed",
-      data: { documentHash: recipient.document_hash, completedRecordHash },
+      data: {
+        documentHash: recipient.document_hash,
+        completedRecordHash,
+        managementNotificationCount,
+      },
     });
   } else {
     await client.query(
@@ -468,11 +599,42 @@ async function completeSignature(client, request, recipient, body, actorUserId =
   }
 }
 
-async function notifyRecipient(client, request, envelope, recipient, eventType, signingUrl) {
-  const recipientUser = await client.query(
-    `SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1`,
-    [recipient.email]
+async function notifyRecipient(
+  client,
+  request,
+  envelope,
+  recipient,
+  eventType,
+  signingUrl,
+  signingUrlExpiresAt
+) {
+  const contactResult = await client.query(
+    `SELECT booking.customer_id,customer.phone,users.id AS recipient_user_id
+       FROM fleet_bookings booking
+       JOIN fleet_customers customer
+         ON customer.organization_id=booking.organization_id AND customer.id=booking.customer_id
+       LEFT JOIN users ON lower(users.email)=lower($3)
+      WHERE booking.organization_id=$1 AND booking.id=$2
+      LIMIT 1`,
+    [envelope.organization_id, envelope.booking_id, recipient.email]
   );
+  const contact = contactResult.rows[0] || {};
+  const phone = normalizePhone(contact.phone);
+  const smsProvider = phone
+    ? await client.query(
+      `SELECT id,organization_id,project_id,environment_id
+         FROM goodbase_consumer_auth_providers
+        WHERE organization_id=$1
+          AND provider_type IN ('phone_otp','sms_mfa')
+          AND status='enabled'
+          AND controller_url IS NOT NULL
+          AND secret_ref IS NOT NULL
+        ORDER BY updated_at DESC
+        LIMIT 1`,
+      [envelope.organization_id]
+    )
+    : { rows: [] };
+  const provider = smsProvider.rows[0] || null;
   const title = eventType === "reminder"
     ? `Signature reminder: ${envelope.contract_number}`
     : `Rental agreement ready: ${envelope.contract_number}`;
@@ -485,25 +647,27 @@ Open your secure agreement:
 ${signingUrl}
 
 This link is personal, expires automatically, and can be used only to complete this agreement. If you did not expect this request, contact GoodFleet support.`;
+  const smsBody = `${title}. ${body} Secure link: ${signingUrl} This personal link expires automatically. Do not forward it.`;
+  const channels = ["in_app", "email", ...(phone ? ["sms"] : [])];
   const inserted = await client.query(
     `INSERT INTO fleet_customer_notifications (
-       organization_id,customer_id,recipient_user_id,recipient_email,title,body,
+       organization_id,customer_id,recipient_user_id,recipient_email,recipient_phone,title,body,
        category,channels,status,action_url,client_request_id,created_by
      )
-     SELECT $1,booking.customer_id,$2,$3,$4,$5,'reservation',
-            ARRAY['in_app','email']::text[],'partially_delivered','/account/contracts',$6,$7
-       FROM fleet_bookings booking
-      WHERE booking.organization_id=$1 AND booking.id=$8
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'reservation',$8::text[],
+             'partially_delivered','/account/contracts',$9,$10)
      RETURNING id`,
     [
       envelope.organization_id,
-      recipientUser.rows[0]?.id || null,
+      contact.customer_id,
+      contact.recipient_user_id || null,
       recipient.email,
+      phone,
       title,
       body,
+      channels,
       `contract:${eventType}:${envelope.id}:${crypto.randomUUID()}`,
       request.user.id,
-      envelope.booking_id,
     ]
   );
   if (inserted.rowCount) {
@@ -515,13 +679,25 @@ This link is personal, expires automatically, and can be used only to complete t
          ($1,'email','pending',NULL,NULL)`,
       [inserted.rows[0].id]
     );
+    if (phone) {
+      await client.query(
+        `INSERT INTO fleet_customer_notification_deliveries
+          (notification_id,channel,status,error_code)
+         VALUES ($1,'sms',$2,$3)`,
+        [
+          inserted.rows[0].id,
+          provider ? "pending" : "failed",
+          provider ? null : "SMS_PROVIDER_UNAVAILABLE",
+        ]
+      );
+    }
     await client.query(
       `INSERT INTO backend_email_queue
         (id,notification_id,to_email,to_name,subject,body_text,provider,status,organization_id,created_at,updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,'internal','pending',$7,NOW(),NOW())
        ON CONFLICT (id) DO NOTHING`,
       [
-        `gfcontract_${inserted.rows[0].id}`,
+        `gfemail_${inserted.rows[0].id}`,
         String(inserted.rows[0].id),
         recipient.email,
         recipient.full_name,
@@ -530,7 +706,37 @@ This link is personal, expires automatically, and can be used only to complete t
         envelope.organization_id,
       ]
     );
+    if (phone && provider) {
+      await client.query(
+        `INSERT INTO goodbase_sms_deliveries (
+           organization_id,project_id,environment_id,user_id,destination_hash,
+           encrypted_payload,provider_id,purpose,expires_at,fleet_notification_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,'contract_signing',$8,$9)`,
+        [
+          provider.organization_id,
+          provider.project_id,
+          provider.environment_id,
+          contact.recipient_user_id || null,
+          sha256(phone),
+          encryptValue(JSON.stringify({
+            phone,
+            message: smsBody,
+            signingUrl,
+            notificationId: inserted.rows[0].id,
+          })),
+          provider.id,
+          signingUrlExpiresAt,
+          inserted.rows[0].id,
+        ]
+      );
+    }
   }
+  return {
+    channels,
+    inApp: "delivered",
+    email: "queued",
+    sms: !phone ? "phone_missing_or_invalid" : provider ? "queued" : "provider_unavailable",
+  };
 }
 
 router.get("/sign/:token", signingLimiter, async (request, response, next) => {
@@ -1081,6 +1287,15 @@ async function sendOrRemind(request, response, next, eventType) {
         WHERE organization_id=$1 AND id=$2`,
       [organization(request), envelope.id, eventType, request.user.id]
     );
+    const delivery = await notifyRecipient(
+      client,
+      request,
+      envelope,
+      recipient,
+      eventType,
+      signingUrl,
+      tokenExpiresAt
+    );
     await recordEvent(client, {
       request,
       organizationId: organization(request),
@@ -1091,10 +1306,10 @@ async function sendOrRemind(request, response, next, eventType) {
       data: {
         recipientEmail: recipient.email,
         tokenExpiresAt,
-        deliveryChannels: ["in_app", "secure_link"],
+        deliveryChannels: delivery.channels,
+        smsStatus: delivery.sms,
       },
     });
-    await notifyRecipient(client, request, envelope, recipient, eventType, signingUrl);
     await client.query("COMMIT");
     const saved = await loadEnvelope(client, envelope.id, organization(request), false);
     response.set("Cache-Control", "no-store");
@@ -1104,6 +1319,7 @@ async function sendOrRemind(request, response, next, eventType) {
         envelope: saved,
         signingUrl,
         signingUrlExpiresAt: tokenExpiresAt,
+        delivery,
       },
     });
   } catch (error) {
