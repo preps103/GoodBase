@@ -18,6 +18,8 @@ const database =
 
 const legacyJobs =
   require("../services/job.service");
+const marketplaceMessages =
+  require("../services/fleet-marketplace-message.service");
 
 const pool =
   database.pool ||
@@ -436,6 +438,8 @@ async function tick() {
 
     const outboxResults =
       await processOutbox();
+    const marketplaceMessageResults =
+      await marketplaceMessages.processScheduledTripMessages();
 
     let legacyBatchProcessed = false;
 
@@ -455,6 +459,8 @@ async function tick() {
     await heartbeat("online", {
       outboxProcessed:
         outboxResults.length,
+      marketplaceMessagesProcessed:
+        marketplaceMessageResults.length,
       legacyBatchProcessed,
       lastTickAt:
         new Date().toISOString()
@@ -463,17 +469,21 @@ async function tick() {
     observeWorkerTick({
       status: "success",
       durationMs: Number(process.hrtime.bigint() - tickStarted) / 1e6,
-      eventCount: outboxResults.length,
+      eventCount:
+        outboxResults.length +
+        marketplaceMessageResults.length,
     });
 
     if (
       outboxResults.length > 0 ||
+      marketplaceMessageResults.length > 0 ||
       legacyBatchProcessed
     ) {
       console.log(
         "[goodapp-worker-v3] tick",
         JSON.stringify({
           outboxResults,
+          marketplaceMessageResults,
           legacyBatchProcessed
         })
       );

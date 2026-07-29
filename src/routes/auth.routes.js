@@ -361,6 +361,35 @@ router.post(
     const confirmPassword =
       String(req.body?.confirmPassword || "");
 
+    const requestedApp =
+      String(req.body?.app || "")
+        .trim()
+        .toLowerCase();
+
+    const isGoodFleetRegistration =
+      requestedApp === "fleet" ||
+      requestedApp === "goodfleet";
+
+    const requestedAccountType =
+      String(req.body?.accountType || "")
+        .trim()
+        .toLowerCase();
+
+    const goodFleetRole =
+      requestedAccountType === "host"
+        ? "host"
+        : "customer";
+
+    const phone =
+      String(req.body?.phone || "")
+        .trim()
+        .slice(0, 40);
+
+    const company =
+      String(req.body?.company || "")
+        .trim()
+        .slice(0, 160);
+
     if (!validSignupEmail(email)) {
       return error(
         res,
@@ -492,7 +521,19 @@ router.post(
           displayName,
           JSON.stringify({
             registrationSource:
-              "goodos_public_signup",
+              isGoodFleetRegistration
+                ? "goodfleet_public_signup"
+                : "goodos_public_signup",
+            registrationApp:
+              isGoodFleetRegistration
+                ? "goodfleet"
+                : "goodos",
+            accountType:
+              isGoodFleetRegistration
+                ? goodFleetRole
+                : "member",
+            ...(phone ? { phone } : {}),
+            ...(company ? { company } : {}),
             registeredAt:
               new Date().toISOString()
           })
@@ -540,6 +581,48 @@ router.post(
         `,
         [user.id]
       );
+
+      if (isGoodFleetRegistration) {
+        await client.query(
+          `
+            INSERT INTO app_memberships (
+              user_id,
+              app_id,
+              role,
+              status,
+              organization_id,
+              project_id,
+              environment_id
+            )
+            SELECT
+              $1::uuid,
+              'goodfleet',
+              $2,
+              'pending',
+              'org_goodos',
+              'proj_goodos_platform',
+              'env_goodos_production'
+            WHERE EXISTS (
+              SELECT 1
+              FROM apps
+              WHERE id = 'goodfleet'
+                AND status = 'active'
+            )
+            ON CONFLICT (user_id, app_id)
+            DO UPDATE SET
+              role = EXCLUDED.role,
+              status = 'pending',
+              organization_id =
+                EXCLUDED.organization_id,
+              project_id =
+                EXCLUDED.project_id,
+              environment_id =
+                EXCLUDED.environment_id,
+              updated_at = NOW()
+          `,
+          [user.id, goodFleetRole]
+        );
+      }
 
       verification =
         await createVerificationToken({
@@ -605,7 +688,14 @@ router.post(
       metadata: {
         email: user.email,
         emailSent,
-        membershipAppId: "goodos",
+        membershipAppId:
+          isGoodFleetRegistration
+            ? "goodfleet"
+            : "goodos",
+        membershipRole:
+          isGoodFleetRegistration
+            ? goodFleetRole
+            : "member",
         userAgent:
           req.headers["user-agent"] || null
       }
@@ -831,7 +921,7 @@ router.get(
             status = 'active',
             updated_at = NOW()
           WHERE user_id = $1::uuid
-            AND app_id = 'goodos'
+            AND app_id IN ('goodos', 'goodfleet')
             AND status = 'pending'
         `,
         [verification.user_id]

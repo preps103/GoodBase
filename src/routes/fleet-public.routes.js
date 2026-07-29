@@ -78,20 +78,70 @@ router.get("/availability", async (request, response, next) => {
       return fail(response, 400, "INVALID_RENTAL_PERIOD", "Valid pickup and return dates are required.");
     }
     const category = String(request.query.category || "").trim().slice(0, 80);
+    const pickupLocationId = clean(request.query.location, 200);
+    const search = clean(request.query.search, 160).toLowerCase();
+    const deliveryRequired = ["true", "1", "delivery"].includes(
+      clean(request.query.delivery, 20).toLowerCase(),
+    );
     const result = await query(
       `SELECT vehicle.id,vehicle.make,vehicle.model,vehicle.model_year,vehicle.daily_rate,
               vehicle.payload->>'category' AS category,
               vehicle.payload->>'imageUrl' AS image_url,
               vehicle.payload->>'seats' AS seats,
               vehicle.payload->>'fuelType' AS fuel_type,
-              vehicle.payload->>'transmission' AS transmission
+              vehicle.payload->>'transmission' AS transmission,
+              listing.id AS listing_id,listing.title,listing.description,
+              listing.instant_book,listing.delivery_enabled,
+              listing.delivery_radius_miles,listing.delivery_fee,
+              listing.minimum_trip_days,listing.maximum_trip_days,
+              listing.advance_notice_hours,listing.mileage_limit_per_day,
+              host.user_id AS host_user_id,
+              COALESCE(host.display_name,'GoodFleet') AS host_name,
+              COALESCE(review_summary.rating,0) AS host_rating,
+              COALESCE(review_summary.review_count,0) AS host_review_count
        FROM fleet_vehicles vehicle
+       JOIN fleet_vehicle_listings listing
+         ON listing.organization_id=vehicle.organization_id
+        AND listing.vehicle_id=vehicle.id
+        AND listing.status='active'
+        AND listing.archived_at IS NULL
+       LEFT JOIN fleet_host_profiles host
+         ON host.organization_id=listing.organization_id
+        AND host.id=listing.host_profile_id
+       LEFT JOIN LATERAL (
+         SELECT ROUND(AVG(review.rating)::numeric,2) AS rating,
+                COUNT(*)::integer AS review_count
+           FROM fleet_trip_reviews review
+          WHERE review.organization_id=listing.organization_id
+            AND review.reviewee_user_id=host.user_id
+            AND review.status='published'
+       ) review_summary ON TRUE
        WHERE vehicle.organization_id=$1
          AND vehicle.archived_at IS NULL
-         AND vehicle.status='available'
-         AND (vehicle.registration_expiry IS NULL OR vehicle.registration_expiry >= $2::date)
-         AND (vehicle.insurance_expiry IS NULL OR vehicle.insurance_expiry >= $2::date)
+         AND vehicle.status IN ('available','reserved')
+         AND vehicle.registration_expiry IS NOT NULL
+         AND vehicle.registration_expiry >= $3::date
+         AND vehicle.insurance_expiry IS NOT NULL
+         AND vehicle.insurance_expiry >= $3::date
+         AND COALESCE(vehicle.payload->>'recallStatus','clear') IN ('clear','resolved')
+         AND (
+           listing.operator_managed OR (
+             host.status='active'
+             AND host.identity_verification_status='verified'
+           )
+         )
          AND ($4='' OR lower(vehicle.payload->>'category')=lower($4))
+         AND ($6='' OR vehicle.assigned_branch_id=$6)
+         AND (NOT $7::boolean OR listing.delivery_enabled)
+         AND (
+           $8='' OR
+           lower(concat(vehicle.make,' ',vehicle.model,' ',listing.title)) LIKE '%' || $8 || '%'
+         )
+         AND (
+           EXTRACT(EPOCH FROM ($2::timestamptz-NOW())) / 3600
+         ) >= listing.advance_notice_hours
+         AND CEIL(EXTRACT(EPOCH FROM ($3::timestamptz-$2::timestamptz)) / 86400)
+           BETWEEN listing.minimum_trip_days AND listing.maximum_trip_days
          AND NOT EXISTS (
            SELECT 1 FROM fleet_bookings booking
            WHERE booking.organization_id=vehicle.organization_id
@@ -115,7 +165,10 @@ router.get("/availability", async (request, response, next) => {
         pickupAt,
         returnAt,
         category,
-        ["pending_payment", "confirmed", "assigned", "checked_in", "checked_out", "extended", "overdue"]
+        ["pending_payment", "confirmed", "assigned", "checked_in", "checked_out", "extended", "overdue"],
+        pickupLocationId,
+        deliveryRequired,
+        search,
       ]
     );
     response.json({
@@ -131,8 +184,121 @@ router.get("/availability", async (request, response, next) => {
         fuelType: vehicle.fuel_type || "gasoline",
         transmission: vehicle.transmission || "automatic",
         dailyRate: Number(vehicle.daily_rate),
-        imageUrl: vehicle.image_url || null
+        imageUrl: vehicle.image_url || null,
+        listingId: vehicle.listing_id,
+        title: vehicle.title,
+        description: vehicle.description,
+        instantBook: Boolean(vehicle.instant_book),
+        deliveryEnabled: Boolean(vehicle.delivery_enabled),
+        deliveryRadiusMiles: vehicle.delivery_radius_miles === null
+          ? null
+          : Number(vehicle.delivery_radius_miles),
+        deliveryFee: Number(vehicle.delivery_fee),
+        minimumTripDays: vehicle.minimum_trip_days,
+        maximumTripDays: vehicle.maximum_trip_days,
+        advanceNoticeHours: vehicle.advance_notice_hours,
+        mileageLimitPerDay: vehicle.mileage_limit_per_day,
+        host: {
+          id: vehicle.host_user_id || null,
+          name: vehicle.host_name,
+          rating: Number(vehicle.host_rating),
+          reviewCount: Number(vehicle.host_review_count),
+          operatorManaged: !vehicle.host_user_id,
+        },
       }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/listings/:listingId", async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT listing.*,vehicle.make,vehicle.model,vehicle.model_year,
+              vehicle.daily_rate,vehicle.assigned_branch_id,
+              vehicle.payload AS vehicle_payload,
+              COALESCE(host.display_name,'GoodFleet') AS host_name,
+              host.user_id AS host_user_id,
+              COALESCE(review_summary.rating,0) AS host_rating,
+              COALESCE(review_summary.review_count,0) AS host_review_count
+         FROM fleet_vehicle_listings listing
+         JOIN fleet_vehicles vehicle
+           ON vehicle.organization_id=listing.organization_id
+          AND vehicle.id=listing.vehicle_id
+         LEFT JOIN fleet_host_profiles host
+           ON host.organization_id=listing.organization_id
+          AND host.id=listing.host_profile_id
+         LEFT JOIN LATERAL (
+           SELECT ROUND(AVG(review.rating)::numeric,2) AS rating,
+                  COUNT(*)::integer AS review_count
+             FROM fleet_trip_reviews review
+            WHERE review.organization_id=listing.organization_id
+              AND review.reviewee_user_id=host.user_id
+              AND review.status='published'
+         ) review_summary ON TRUE
+        WHERE listing.organization_id=$1
+          AND listing.id=$2
+          AND listing.status='active'
+          AND listing.archived_at IS NULL
+          AND vehicle.archived_at IS NULL
+          AND vehicle.registration_expiry IS NOT NULL
+          AND vehicle.registration_expiry>=CURRENT_DATE
+          AND vehicle.insurance_expiry IS NOT NULL
+          AND vehicle.insurance_expiry>=CURRENT_DATE
+          AND (listing.operator_managed OR host.status='active')
+        LIMIT 1`,
+      [PUBLIC_ORGANIZATION_ID, request.params.listingId],
+    );
+    const listing = result.rows[0];
+    if (!listing) {
+      return fail(
+        response,
+        404,
+        "LISTING_NOT_FOUND",
+        "This vehicle listing is not available.",
+      );
+    }
+    response.json({
+      success: true,
+      data: {
+        id: listing.id,
+        vehicleId: listing.vehicle_id,
+        title: listing.title,
+        description: listing.description,
+        dailyRate: Number(listing.daily_rate),
+        imageUrl: listing.vehicle_payload?.imageUrl || null,
+        make: listing.make,
+        model: listing.model,
+        year: listing.model_year,
+        category: listing.vehicle_payload?.category || "Vehicle",
+        seats: Number(listing.vehicle_payload?.seats || 0),
+        fuelType: listing.vehicle_payload?.fuelType || "gasoline",
+        transmission: listing.vehicle_payload?.transmission || "automatic",
+        pickupLocationId: listing.assigned_branch_id,
+        instantBook: Boolean(listing.instant_book),
+        deliveryEnabled: Boolean(listing.delivery_enabled),
+        deliveryRadiusMiles: listing.delivery_radius_miles === null
+          ? null
+          : Number(listing.delivery_radius_miles),
+        deliveryFee: Number(listing.delivery_fee),
+        minimumTripDays: listing.minimum_trip_days,
+        maximumTripDays: listing.maximum_trip_days,
+        advanceNoticeHours: listing.advance_notice_hours,
+        mileageLimitPerDay: listing.mileage_limit_per_day,
+        additionalMileRate: listing.additional_mile_rate === null
+          ? null
+          : Number(listing.additional_mile_rate),
+        rules: listing.rules_json || {},
+        features: listing.features_json || [],
+        host: {
+          id: listing.host_user_id || null,
+          name: listing.host_name,
+          rating: Number(listing.host_rating),
+          reviewCount: Number(listing.host_review_count),
+          operatorManaged: !listing.host_user_id,
+        },
+      },
     });
   } catch (error) {
     next(error);

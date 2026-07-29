@@ -7,6 +7,8 @@ const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
 
 const router = express.Router();
+const PUBLIC_ORGANIZATION_ID =
+  process.env.GOODFLEET_PUBLIC_ORGANIZATION_ID || "org_goodos";
 const MONEY_TYPES = new Set(["rental", "deposit", "fine"]);
 const MANUAL_METHODS = new Map([
   ["cash", "Cash"],
@@ -61,6 +63,25 @@ function requirePaymentEmployee(request, response, next) {
       : String(appRole || organizationRole).toLowerCase()
   )) {
     return fail(response, 403, "PAYMENT_ACCESS_REQUIRED", "GoodFleet payment access is required.");
+  }
+  return next();
+}
+
+function requirePaymentCustomer(request, response, next) {
+  const role = String(
+    (request.apps || []).find(app =>
+      String(app?.membershipStatus || "").toLowerCase() === "active" &&
+      (String(app?.id || "").toLowerCase() === "goodfleet" ||
+        String(app?.domain || "").toLowerCase() === "fleet.goodos.app")
+    )?.role || ""
+  ).toLowerCase();
+  if (!["customer", "host"].includes(role)) {
+    return fail(
+      response,
+      403,
+      "CUSTOMER_PAYMENT_ACCESS_REQUIRED",
+      "A GoodFleet guest or host account is required.",
+    );
   }
   return next();
 }
@@ -386,6 +407,198 @@ router.post("/webhooks/stripe", async (request, response) => {
     return fail(response, 500, "WEBHOOK_PROCESSING_FAILED", "The verified event could not be processed.");
   }
 });
+
+router.get(
+  "/customer-capability",
+  authRequired,
+  tenantContext,
+  requirePaymentCustomer,
+  async (_request, response, next) => {
+    try {
+      const schema = await query(
+        `SELECT
+          to_regclass('public.fleet_payment_operations') IS NOT NULL AS ledger_ready,
+          to_regclass('public.fleet_payment_webhook_events') IS NOT NULL AS webhook_store_ready`
+      );
+      const readiness = schema.rows[0];
+      const credentialsReady = credentialsConfigured();
+      response.json({
+        success: true,
+        data: {
+          provider: "stripe",
+          configured:
+            credentialsReady &&
+            readiness.ledger_ready &&
+            readiness.webhook_store_ready,
+          acceptingPayments:
+            credentialsReady &&
+            readiness.ledger_ready &&
+            readiness.webhook_store_ready,
+          payoutsEnabled: credentialsReady,
+          webhooksHealthy: credentialsReady,
+          currency: currency(process.env.STRIPE_DEFAULT_CURRENCY || "USD"),
+          supportedMethods: credentialsReady
+            ? ["card", "apple_pay", "google_pay"]
+            : [],
+          missingRequirements: credentialsReady
+            ? []
+            : ["Payment provider activation is pending"],
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.post(
+  "/customer-checkout-sessions",
+  authRequired,
+  tenantContext,
+  requirePaymentCustomer,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    try {
+      const key = requiredIdempotencyKey(request, response);
+      if (!key) return;
+      const stripe = stripeClient();
+      await client.query("BEGIN");
+      const duplicate = await existingOperation(
+        client,
+        PUBLIC_ORGANIZATION_ID,
+        key,
+      );
+      if (duplicate) {
+        await client.query("COMMIT");
+        return response.json({
+          success: true,
+          data: operationPayload(duplicate),
+        });
+      }
+      const booking = await loadBooking(
+        client,
+        PUBLIC_ORGANIZATION_ID,
+        request.body?.bookingId,
+        true,
+      );
+      const ownsBooking =
+        booking.guest_user_id === request.user.id ||
+        (
+          await client.query(
+            `SELECT 1
+               FROM fleet_customers
+              WHERE organization_id=$1
+                AND id=$2
+                AND user_id=$3
+                AND archived_at IS NULL
+              LIMIT 1`,
+            [PUBLIC_ORGANIZATION_ID, booking.customer_id, request.user.id],
+          )
+        ).rowCount > 0;
+      if (!ownsBooking) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          403,
+          "BOOKING_PAYMENT_FORBIDDEN",
+          "This reservation does not belong to your GoodFleet account.",
+        );
+      }
+      const balanceDue = Math.max(
+        0,
+        Number(booking.total_amount) - Number(booking.paid_amount),
+      );
+      if (balanceDue <= 0) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "BOOKING_ALREADY_PAID",
+          "This reservation has no remaining balance.",
+        );
+      }
+      const operation = await insertOperation(client, {
+        organizationId: PUBLIC_ORGANIZATION_ID,
+        bookingId: booking.id,
+        customerId: booking.customer_id,
+        operationType: "checkout",
+        idempotencyKey: key,
+        amount: balanceDue,
+        currency: currency(request.body?.currency),
+        request: {
+          method: "Credit Card",
+          description: `Reservation ${booking.reservation_number} balance`,
+          customerInitiated: true,
+        },
+        actor: actor(request),
+      });
+      const returnUrl = safeReturnUrl(
+        request.body?.returnUrl || "https://fleet.goodos.app/account/payments",
+      );
+      const separator = returnUrl.includes("?") ? "&" : "?";
+      const session = await stripe.checkout.sessions.create(
+        {
+          mode: "payment",
+          customer_email: booking.customer_email,
+          client_reference_id: booking.id,
+          success_url: `${returnUrl}${separator}payment=success&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${returnUrl}${separator}payment=cancelled`,
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency: currency(request.body?.currency).toLowerCase(),
+                unit_amount: cents(balanceDue),
+                product_data: {
+                  name: `GoodFleet reservation ${booking.reservation_number}`,
+                },
+              },
+            },
+          ],
+          payment_intent_data: {
+            metadata: {
+              organizationId: PUBLIC_ORGANIZATION_ID,
+              bookingId: booking.id,
+              operationId: operation.id,
+            },
+          },
+          metadata: {
+            organizationId: PUBLIC_ORGANIZATION_ID,
+            bookingId: booking.id,
+            operationId: operation.id,
+          },
+        },
+        { idempotencyKey: key },
+      );
+      const updated = await client.query(
+        `UPDATE fleet_payment_operations
+            SET provider_reference=$2,status='requires_action',
+                response_json=$3::jsonb,updated_at=NOW()
+          WHERE id=$1
+          RETURNING *`,
+        [
+          operation.id,
+          session.id,
+          JSON.stringify({
+            checkoutSessionId: session.id,
+            checkoutUrl: session.url,
+            expiresAt: new Date(session.expires_at * 1000).toISOString(),
+          }),
+        ],
+      );
+      await client.query("COMMIT");
+      return response.status(201).json({
+        success: true,
+        data: operationPayload(updated.rows[0]),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
 
 router.use(authRequired, tenantContext, requirePaymentEmployee);
 
