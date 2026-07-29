@@ -11,6 +11,7 @@ const { encryptValue } = require("../services/secret.service");
 
 const router = express.Router();
 const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
+const GOODFLEET_TESTING_MODE = String(process.env.GOODFLEET_TESTING_MODE || "true").toLowerCase() === "true";
 
 const ACTIVE_BOOKING_STATUSES = [
   "pending_payment", "confirmed", "assigned", "checked_in",
@@ -34,7 +35,7 @@ const VEHICLE_STATUSES = new Set([
 const CUSTOMER_STATUSES = new Set(["active", "suspended", "blacklisted"]);
 const BOOKING_STATUSES = new Set([
   "quote", "pending_payment", "confirmed", "assigned", "checked_in", "checked_out",
-  "extended", "completed", "no_show", "cancelled", "refunded", "overdue"
+  "extended", "needs_attention", "completed", "no_show", "cancelled", "refunded", "overdue"
 ]);
 const PAYMENT_STATUSES = new Set(["unpaid", "partial", "paid", "refunded", "disputed", "failed"]);
 const ONBOARDING_MODULES = new Set([
@@ -1384,6 +1385,118 @@ router.post("/bookings/:bookingId/extensions", async (request, response, next) =
   }
 });
 
+router.post("/bookings/:bookingId/reopen", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    if (request.body?.confirmed !== true) {
+      return fail(response, 400, "BOOKING_REOPEN_CONFIRMATION_REQUIRED", "Confirm that this completed reservation should be reopened.");
+    }
+    const accessRole = goodFleetAccessRole(request);
+    if (!EMPLOYEE_ROLES.has(accessRole)) {
+      return fail(response, 403, "EMPLOYEE_ACCESS_REQUIRED", "Only a GoodFleet team member can reopen a completed reservation.");
+    }
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM fleet_bookings
+        WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+        FOR UPDATE`,
+      [org, request.params.bookingId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    }
+    const before = bookingPayload(existing.rows[0]);
+    if (before.status === "needs_attention") {
+      await client.query("COMMIT");
+      return response.json({ success: true, data: before });
+    }
+    if (before.status !== "completed") {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "BOOKING_REOPEN_NOT_AVAILABLE", "Only a completed reservation can be reopened for follow-up.");
+    }
+    const reopenedAt = new Date().toISOString();
+    const storedPayload = cleanPayload({
+      ...before,
+      status: "needs_attention",
+      returnInspectionStatus: "required",
+      returnInspectionCompletedAt: null,
+      reopenedAt,
+      reopenedBy: actor(request),
+      reopenCount: Math.max(0, Number(before.reopenCount) || 0) + 1,
+    });
+    delete storedPayload.returnPhotoOverride;
+    const updated = await client.query(
+      `UPDATE fleet_bookings
+          SET status='needs_attention',payload=$3::jsonb,version=version+1,
+              updated_by=$4,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2
+        RETURNING *`,
+      [org, request.params.bookingId, JSON.stringify(storedPayload), actor(request)]
+    );
+    if (before.carId) {
+      const vehicleBefore = await client.query(
+        `SELECT * FROM fleet_vehicles
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+          FOR UPDATE`,
+        [org, before.carId]
+      );
+      if (vehicleBefore.rowCount) {
+        const vehiclePayloadBefore = vehiclePayload(vehicleBefore.rows[0]);
+        const nextVehiclePayload = cleanPayload({
+          ...vehiclePayloadBefore,
+          isInspected: false,
+          returnInspectionBookingId: before.id,
+          returnInspectionRequiredAt: reopenedAt,
+        });
+        await client.query(
+          `UPDATE fleet_vehicles
+              SET status='inspection',payload=$3::jsonb,version=version+1,
+                  updated_by=$4,updated_at=NOW()
+            WHERE organization_id=$1 AND id=$2`,
+          [org, before.carId, JSON.stringify(nextVehiclePayload), actor(request)]
+        );
+        await audit(
+          client,
+          request,
+          "vehicle.follow_up_required",
+          "vehicle",
+          before.carId,
+          vehiclePayloadBefore,
+          {
+            ...nextVehiclePayload,
+            status: "inspection",
+            bookingId: before.id,
+            details: `Vehicle held for follow-up after reopening ${before.reservationNumber}`
+          }
+        );
+      }
+    }
+    const booking = bookingPayload(updated.rows[0]);
+    await audit(
+      client,
+      request,
+      "booking.reopened",
+      "booking",
+      booking.id,
+      before,
+      {
+        ...booking,
+        details: `Completed reservation ${booking.reservationNumber} reopened for team follow-up`,
+        reopenedByRole: accessRole,
+      }
+    );
+    await client.query("COMMIT");
+    return response.json({ success: true, data: booking });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/bookings/:bookingId/return-link", async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -1443,7 +1556,7 @@ router.post("/bookings/:bookingId/return-link", async (request, response, next) 
       return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
     }
     const booking = result.rows[0];
-    if (!["checked_out", "extended", "overdue"].includes(booking.status)) {
+    if (!["checked_out", "extended", "overdue", "needs_attention"].includes(booking.status)) {
       await client.query("ROLLBACK");
       return fail(response, 409, "RETURN_LINK_NOT_AVAILABLE", "The secure return link is available after the vehicle is checked out.");
     }
@@ -1585,6 +1698,15 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
       return fail(response, 409, "BOOKING_NOT_EDITABLE", "Completed, cancelled, and refunded reservations cannot have trip details changed.");
     }
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
+    if (before.status === "completed" && merged.status !== "completed") {
+      await client.query("ROLLBACK");
+      return fail(
+        response,
+        409,
+        "BOOKING_REOPEN_ENDPOINT_REQUIRED",
+        "Use the controlled reopen action to move a completed reservation back into follow-up."
+      );
+    }
     const returnCompleted = before.status !== "completed" && merged.status === "completed";
     let returnPhotoOverride = null;
     if (Object.prototype.hasOwnProperty.call(request.body || {}, "returnPhotoOverride")) {
@@ -1602,15 +1724,22 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
       if (
         overrideInput?.confirmed !== true ||
         overrideInput?.physicalInspectionConfirmed !== true ||
-        reason.length < 10
+        (!GOODFLEET_TESTING_MODE && reason.length < 10)
       ) {
         await client.query("ROLLBACK");
-        return fail(response, 400, "RETURN_OVERRIDE_CONFIRMATION_REQUIRED", "Confirm the physical inspection and enter a reason of at least 10 characters.");
+        return fail(
+          response,
+          400,
+          "RETURN_OVERRIDE_CONFIRMATION_REQUIRED",
+          GOODFLEET_TESTING_MODE
+            ? "Confirm the physical inspection."
+            : "Confirm the physical inspection and enter a reason of at least 10 characters."
+        );
       }
       returnPhotoOverride = {
         confirmed: true,
         physicalInspectionConfirmed: true,
-        reason,
+        reason: reason || "Testing mode override — explanation requirement disabled.",
         usedAt: new Date().toISOString(),
         usedBy: actor(request),
         usedByRole: accessRole,

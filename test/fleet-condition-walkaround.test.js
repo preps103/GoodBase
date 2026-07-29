@@ -52,6 +52,7 @@ test("Booking transitions fail closed until departure and return evidence is sub
 test("Management may override missing return photos only after a confirmed physical inspection", () => {
   const routes = read("src/routes/fleet.routes.js");
 
+  assert.match(routes, /GOODFLEET_TESTING_MODE/);
   assert.match(routes, /MANAGEMENT_RETURN_OVERRIDE_ROLES/);
   assert.match(routes, /MANAGEMENT_RETURN_OVERRIDE_REQUIRED/);
   assert.match(routes, /RETURN_OVERRIDE_CONFIRMATION_REQUIRED/);
@@ -59,6 +60,23 @@ test("Management may override missing return photos only after a confirmed physi
   assert.match(routes, /reason\.length < 10/);
   assert.match(routes, /booking\.return_photo_override/);
   assert.match(routes, /usedByRole/);
+});
+
+test("Completed bookings can be reopened into an audited needs-attention workflow", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260729_goodfleet_testing_reopen_v1.sql");
+  const applyScript = read("scripts/apply-goodfleet-testing-reopen-migration.js");
+  const packageJson = read("package.json");
+
+  assert.match(routes, /\/bookings\/:bookingId\/reopen/);
+  assert.match(routes, /BOOKING_REOPEN_CONFIRMATION_REQUIRED/);
+  assert.match(routes, /BOOKING_REOPEN_ENDPOINT_REQUIRED/);
+  assert.match(routes, /status='needs_attention'/);
+  assert.match(routes, /booking\.reopened/);
+  assert.match(routes, /vehicle\.follow_up_required/);
+  assert.match(migration, /needs_attention/);
+  assert.match(applyScript, /needsAttentionStatus/);
+  assert.match(packageJson, /apply-goodfleet-testing-reopen-migration/);
 });
 
 test("Return links use the encrypted SMS queue and a customer-authenticated deep link", () => {
