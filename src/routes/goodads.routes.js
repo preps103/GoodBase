@@ -12,6 +12,7 @@ const payments = require("../services/goodads-payments.service");
 const workflows = require("../services/goodads-workflows.service");
 const ads = require("../services/goodads-ads.service");
 const analytics = require("../services/goodads-analytics.service");
+const competitorIntelligence = require("../services/goodads-competitor-intelligence.service");
 
 const router = express.Router();
 const publicFormReadLimiter = rateLimit({
@@ -257,6 +258,7 @@ router.get("/capabilities", (req, res) => handle(
       ...workflows.workflowCapabilities(),
       ...ads.capabilities(),
       ...analytics.capabilities(),
+      ...competitorIntelligence.capabilities(),
     },
   }))
 ));
@@ -603,6 +605,124 @@ router.post("/rss-feeds/:id/items/:itemId/repurpose", generationLimiter, (req, r
 ));
 
 router.get("/ads/providers", (_req, res) => success(res, { data: ads.publicProviders() }));
+router.get("/competitor-intelligence/overview", (req, res) => handle(
+  res,
+  "competitor-intelligence.overview",
+  competitorIntelligence.overview({ context: req.tenantContext })
+));
+router.get("/competitor-intelligence/competitors", (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.list",
+  competitorIntelligence.listCompetitors({
+    context: req.tenantContext,
+    search: req.query.search,
+    status: req.query.status,
+    limit: req.query.limit,
+  })
+));
+router.post("/competitor-intelligence/competitors", (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.create",
+  competitorIntelligence.saveCompetitor({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.get("/competitor-intelligence/competitors/:id", (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.get",
+  competitorIntelligence.getCompetitor({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.put("/competitor-intelligence/competitors/:id", (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.update",
+  competitorIntelligence.saveCompetitor({
+    id: req.params.id,
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.delete("/competitor-intelligence/competitors/:id", (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.archive",
+  competitorIntelligence.archiveCompetitor({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.post("/competitor-intelligence/competitors/:id/sync", publishingLimiter, (req, res) => handle(
+  res,
+  "competitor-intelligence.competitors.sync",
+  competitorIntelligence.syncCompetitor({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.get("/competitor-intelligence/creatives", (req, res) => handle(
+  res,
+  "competitor-intelligence.creatives.list",
+  competitorIntelligence.listCreatives({
+    context: req.tenantContext,
+    competitorId: req.query.competitorId,
+    channel: req.query.channel,
+    sourceProvider: req.query.sourceProvider,
+    favorite: req.query.favorite,
+    search: req.query.search,
+    limit: req.query.limit,
+    offset: req.query.offset,
+  })
+));
+router.post("/competitor-intelligence/creatives", (req, res) => handle(
+  res,
+  "competitor-intelligence.creatives.create",
+  competitorIntelligence.saveCreative({
+    competitorId: req.body?.competitorId,
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.put("/competitor-intelligence/creatives/:id", (req, res) => handle(
+  res,
+  "competitor-intelligence.creatives.update",
+  competitorIntelligence.saveCreative({
+    id: req.params.id,
+    competitorId: req.body?.competitorId,
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.delete("/competitor-intelligence/creatives/:id", (req, res) => handle(
+  res,
+  "competitor-intelligence.creatives.archive",
+  competitorIntelligence.archiveCreative({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.get("/competitor-intelligence/alerts", (req, res) => handle(
+  res,
+  "competitor-intelligence.alerts.list",
+  competitorIntelligence.listAlerts({
+    context: req.tenantContext,
+    limit: req.query.limit,
+  })
+));
+router.patch("/competitor-intelligence/alerts/:id/acknowledge", (req, res) => handle(
+  res,
+  "competitor-intelligence.alerts.acknowledge",
+  competitorIntelligence.acknowledgeAlert({
+    id: req.params.id,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
 router.get("/analytics/overview", (req, res) => handle(res, "analytics.overview", analytics.overview({
   context: req.tenantContext,
   from: req.query.from,
