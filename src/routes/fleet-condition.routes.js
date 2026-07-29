@@ -26,6 +26,10 @@ const REQUIRED_SLOTS = [
   "dashboard",
   "front_interior",
   "rear_interior",
+];
+const ALLOWED_SLOTS = [
+  ...REQUIRED_SLOTS,
+  // Retained so previously captured evidence remains compatible.
   "odometer",
   "fuel_gauge",
 ];
@@ -158,7 +162,6 @@ async function bookingAccess(client, request, bookingId) {
     booking,
     employee,
     customer,
-    actorType: employee ? "employee" : customer ? "customer" : null,
   };
 }
 
@@ -295,6 +298,9 @@ router.post("/booking/:bookingId/:phase", async (request, response, next) => {
     if (phase === "departure" && !access.employee) {
       return fail(response, 403, "EMPLOYEE_WALKAROUND_REQUIRED", "A GoodFleet employee must complete the departure walkaround.");
     }
+    if (phase === "return" && !access.customer) {
+      return fail(response, 403, "CUSTOMER_RETURN_REQUIRED", "The customer must capture and submit the return photos.");
+    }
     const allowedStatuses = phase === "departure" ? DEPARTURE_STATUSES : RETURN_STATUSES;
     if (!allowedStatuses.has(access.booking.status)) {
       return fail(
@@ -345,7 +351,7 @@ router.post("/booking/:bookingId/:phase", async (request, response, next) => {
         access.booking.vehicle_id,
         access.booking.customer_id,
         phase,
-        access.actorType,
+        phase === "return" ? "customer" : "employee",
         request.user.id,
         mileage,
         fuelLevel,
@@ -370,8 +376,8 @@ router.post("/:reportId/photos/:slot", receivePhoto, async (request, response, n
   let finalPath = null;
   try {
     const slot = clean(request.params.slot, 40);
-    if (!REQUIRED_SLOTS.includes(slot)) {
-      return fail(response, 400, "INVALID_PHOTO_SLOT", "Choose a required vehicle photo angle.");
+    if (!ALLOWED_SLOTS.includes(slot)) {
+      return fail(response, 400, "INVALID_PHOTO_SLOT", "Choose a supported vehicle photo angle.");
     }
     if (!request.file?.buffer) {
       return fail(response, 400, "PHOTO_REQUIRED", "Take or choose a vehicle photo.");
@@ -389,6 +395,9 @@ router.post("/:reportId/photos/:slot", receivePhoto, async (request, response, n
     }
     if (access.report.phase === "departure" && !access.employee) {
       return fail(response, 403, "EMPLOYEE_WALKAROUND_REQUIRED", "A GoodFleet employee must capture departure photos.");
+    }
+    if (access.report.phase === "return" && !access.customer) {
+      return fail(response, 403, "CUSTOMER_RETURN_REQUIRED", "The customer must capture the return photos.");
     }
 
     await fileSystem.mkdir(PHOTO_ROOT, { recursive: true, mode: 0o750 });
@@ -465,6 +474,9 @@ router.post("/:reportId/submit", async (request, response, next) => {
     }
     if (access.report.phase === "departure" && !access.employee) {
       return fail(response, 403, "EMPLOYEE_WALKAROUND_REQUIRED", "A GoodFleet employee must submit the departure walkaround.");
+    }
+    if (access.report.phase === "return" && !access.customer) {
+      return fail(response, 403, "CUSTOMER_RETURN_REQUIRED", "The customer must submit the return photos.");
     }
     if (access.report.status === "submitted") {
       const photos = await photosForReports(client, access.report.organization_id, [access.report.id]);

@@ -1445,13 +1445,19 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
               AND report.booking_id=$2
               AND report.phase='departure'
               AND report.status='submitted'
+              AND report.captured_by_type='employee'
               AND COALESCE((report.acknowledgement_json->>'confirmed')::boolean,false)=true
               AND (
-                SELECT COUNT(DISTINCT photo.slot)
+                SELECT COUNT(DISTINCT photo.slot) FILTER (
+                  WHERE photo.slot=ANY(ARRAY[
+                    'front','rear','driver_side','passenger_side','dashboard',
+                    'front_interior','rear_interior'
+                  ]::text[])
+                )
                   FROM fleet_condition_photos photo
                  WHERE photo.organization_id=report.organization_id
                    AND photo.report_id=report.id
-              )=9
+              )=7
             LIMIT 1`,
           [org, request.params.bookingId]
         );
@@ -1474,13 +1480,19 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
             AND report.booking_id=$2
             AND report.phase='return'
             AND report.status='submitted'
+            AND report.captured_by_type='customer'
             AND COALESCE((report.acknowledgement_json->>'confirmed')::boolean,false)=true
             AND (
-              SELECT COUNT(DISTINCT photo.slot)
+              SELECT COUNT(DISTINCT photo.slot) FILTER (
+                WHERE photo.slot=ANY(ARRAY[
+                  'front','rear','driver_side','passenger_side','dashboard',
+                  'front_interior','rear_interior'
+                ]::text[])
+              )
                 FROM fleet_condition_photos photo
                WHERE photo.organization_id=report.organization_id
                  AND photo.report_id=report.id
-            )=9
+            )=7
           LIMIT 1`,
         [org, request.params.bookingId]
       );

@@ -19,9 +19,17 @@ test("GoodFleet condition reports store scoped immutable walkaround evidence", (
 
 test("GoodFleet walkaround photo API validates, scopes, audits, and privately serves images", () => {
   const routes = read("src/routes/fleet-condition.routes.js");
+  const requiredSlots = routes.match(/const REQUIRED_SLOTS = \[([\s\S]*?)\];/)?.[1] || "";
+  const allowedSlots = routes.match(/const ALLOWED_SLOTS = \[([\s\S]*?)\];/)?.[1] || "";
+  assert.equal((requiredSlots.match(/"/g) || []).length / 2, 7);
+  assert.doesNotMatch(requiredSlots, /"odometer"|"fuel_gauge"/);
+  assert.match(allowedSlots, /"odometer"/);
+  assert.match(allowedSlots, /"fuel_gauge"/);
   assert.match(routes, /imageType\(request\.file\.buffer\)/);
   assert.match(routes, /MAX_PHOTO_BYTES/);
   assert.match(routes, /EMPLOYEE_WALKAROUND_REQUIRED/);
+  assert.match(routes, /CUSTOMER_RETURN_REQUIRED/);
+  assert.match(routes, /phase === "return" && !access\.customer/);
   assert.match(routes, /customer_email/);
   assert.match(routes, /condition\.photo\.captured/);
   assert.match(routes, /condition\.report\.submitted/);
@@ -35,5 +43,8 @@ test("Booking transitions fail closed until departure and return evidence is sub
   assert.match(routes, /RETURN_WALKAROUND_REQUIRED/);
   assert.match(routes, /phase='departure'/);
   assert.match(routes, /phase='return'/);
+  assert.match(routes, /captured_by_type='employee'/);
+  assert.match(routes, /captured_by_type='customer'/);
   assert.match(routes, /COUNT\(DISTINCT photo\.slot\)/);
+  assert.match(routes, /\)=7/);
 });
