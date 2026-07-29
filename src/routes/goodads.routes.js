@@ -10,6 +10,8 @@ const chatService = require("../services/goodads-chat.service");
 const social = require("../services/goodads-social.service");
 const payments = require("../services/goodads-payments.service");
 const workflows = require("../services/goodads-workflows.service");
+const ads = require("../services/goodads-ads.service");
+const analytics = require("../services/goodads-analytics.service");
 
 const router = express.Router();
 const publicFormReadLimiter = rateLimit({
@@ -253,6 +255,8 @@ router.get("/capabilities", (req, res) => handle(
     modules: {
       ...capabilities.modules,
       ...workflows.workflowCapabilities(),
+      ...ads.capabilities(),
+      ...analytics.capabilities(),
     },
   }))
 ));
@@ -598,9 +602,100 @@ router.post("/rss-feeds/:id/items/:itemId/repurpose", generationLimiter, (req, r
   }))
 ));
 
-router.post("/campaigns/:id/launch", (_req, res) => (
-  handle(res, "campaign.launch", Promise.resolve().then(() => social.rejectPaidCampaignLaunch()))
+router.get("/ads/providers", (_req, res) => success(res, { data: ads.publicProviders() }));
+router.get("/analytics/overview", (req, res) => handle(res, "analytics.overview", analytics.overview({
+  context: req.tenantContext,
+  from: req.query.from,
+  to: req.query.to,
+})));
+router.post("/analytics/provider-sync", publishingLimiter, (req, res) => handle(
+  res,
+  "analytics.provider-sync",
+  analytics.syncProviderMetrics({
+    context: req.tenantContext,
+    from: req.body?.from,
+    to: req.body?.to,
+  })
 ));
+router.get("/ads/accounts", (req, res) => handle(res, "ads.accounts.list", ads.listAdAccounts({
+  context: req.tenantContext,
+})));
+router.post("/ads/accounts/discover", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.accounts.discover",
+  ads.discoverAccounts({
+    provider: req.body?.provider,
+    connectionId: req.body?.connectionId,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.post("/ads/accounts", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.accounts.save",
+  ads.saveAdAccount({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.delete("/ads/accounts/:id", (req, res) => handle(
+  res,
+  "ads.accounts.disable",
+  ads.disableAdAccount({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.post("/ads/operations/:id/retry", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.operation.retry",
+  ads.retryOperation({
+    id: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.get("/campaigns/:id/provider-state", (req, res) => handle(
+  res,
+  "campaign.provider-state",
+  ads.getCampaignState({
+    campaignId: req.params.id,
+    context: req.tenantContext,
+  })
+));
+router.post("/campaigns/:id/launch", publishingLimiter, (req, res) => (
+  handle(res, "campaign.launch", ads.launchCampaign({
+    campaignId: req.params.id,
+    adAccountIds: req.body?.adAccountIds,
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+  }))
+));
+router.post("/campaigns/:id/provider-campaigns/:providerCampaignId/activation-approval", (req, res) => (
+  handle(res, "campaign.activation-approval", ads.requestActivationApproval({
+    campaignId: req.params.id,
+    providerCampaignId: req.params.providerCampaignId,
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+  }))
+));
+["sync", "pause", "activate", "archive"].forEach((operationType) => {
+  router.post(
+    `/campaigns/:id/provider-campaigns/:providerCampaignId/${operationType}`,
+    publishingLimiter,
+    (req, res) => handle(res, `campaign.${operationType}`, ads.queueLifecycleOperation({
+      campaignId: req.params.id,
+      providerCampaignId: req.params.providerCampaignId,
+      operationType,
+      approvalId: req.body?.approvalId,
+      context: req.tenantContext,
+      userId: req.user.id,
+      idempotencyKey: req.get("Idempotency-Key"),
+    }))
+  );
+});
 
 router.post("/funnels/:id/publish", (req, res) => handle(res, "funnel.publish", service.transitionResource({
   type: "funnels",

@@ -44,17 +44,6 @@ test("provider capability registry reports only installed publishing adapters", 
   }
 });
 
-test("paid campaigns fail closed until real provider adapters are installed", () => {
-  assert.throws(
-    () => social.rejectPaidCampaignLaunch(),
-    (error) => (
-      error.statusCode === 503
-      && error.code === "GOODADS_AD_PROVIDER_NOT_READY"
-      && /remains saved and ready/i.test(error.message)
-    )
-  );
-});
-
 test("GoodAds routes expose capability truth and durable publishing history", () => {
   const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
   assert.match(routes, /router\.get\("\/capabilities"/);
@@ -63,7 +52,9 @@ test("GoodAds routes expose capability truth and durable publishing history", ()
   assert.match(routes, /router\.post\("\/publishing\/jobs\/:id\/cancel"/);
   assert.match(routes, /router\.post\("\/publishing\/jobs\/:id\/retry"/);
   assert.match(routes, /router\.delete\("\/connections\/account\/:id"/);
-  assert.match(routes, /social\.rejectPaidCampaignLaunch\(\)/);
+  assert.match(routes, /ads\.launchCampaign\(/);
+  assert.match(routes, /\/ads\/accounts\/discover/);
+  assert.match(routes, /\/activation-approval/);
   assert.doesNotMatch(routes, /campaigns\.launched/);
 });
 

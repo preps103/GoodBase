@@ -749,6 +749,17 @@ function safeCustomerEmail(value) {
   return email || null;
 }
 
+function safeAttribution(value) {
+  const data = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    source: boundedText(data.source, 120),
+    medium: boundedText(data.medium, 120),
+    campaign: boundedText(data.campaign, 120),
+    content: boundedText(data.content, 120),
+    term: boundedText(data.term, 120),
+  };
+}
+
 async function createCheckout({ slug, payload, idempotencyKey }) {
   const requestKey = boundedText(idempotencyKey, 200);
   if (!requestKey) {
@@ -804,11 +815,13 @@ async function createCheckout({ slug, payload, idempotencyKey }) {
   const sessionId = crypto.randomUUID();
   const accessToken = publicSessionToken(sessionId);
   const customerEmail = safeCustomerEmail(payload?.customerEmail);
+  const attribution = safeAttribution(payload?.attribution);
+  const pageUrl = boundedText(payload?.pageUrl, 2048);
   const inserted = await query(
     `INSERT INTO goodads_payment_sessions (
        id, organization_id, offer_id, provider, idempotency_key, public_token_hash,
-       amount_minor, currency, customer_email, status
-     ) VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7, $8, $9, 'creating')
+       amount_minor, currency, customer_email, status, metadata
+     ) VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7, $8, $9, 'creating', $10::jsonb)
      RETURNING *`,
     [
       sessionId,
@@ -820,6 +833,7 @@ async function createCheckout({ slug, payload, idempotencyKey }) {
       offer.amount_minor,
       offer.currency,
       customerEmail,
+      JSON.stringify({ attribution, pageUrl }),
     ]
   );
   const session = inserted.rows[0];
@@ -840,7 +854,7 @@ async function createCheckout({ slug, payload, idempotencyKey }) {
         : await createSquareCheckout(checkoutArgs);
     await query(
       `UPDATE goodads_payment_sessions
-       SET provider_reference = $2, checkout_url = $3, metadata = $4::jsonb,
+       SET provider_reference = $2, checkout_url = $3, metadata = metadata || $4::jsonb,
          status = 'pending', updated_at = NOW()
        WHERE id = $1::uuid`,
       [sessionId, checkout.reference, checkout.checkoutUrl, JSON.stringify(checkout.metadata)]
