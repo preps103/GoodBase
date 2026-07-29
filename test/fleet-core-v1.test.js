@@ -118,6 +118,22 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(migration, /fleet_bookings_organization_id_id_v2_key/);
 });
 
+test("Fleet returns and mileage updates publish durable operational notifications", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260729_goodfleet_operational_notifications_v1.sql");
+  assert.match(routes, /notificationService\.createNotification/);
+  assert.match(routes, /returnInspectionStatus = "required"/);
+  assert.match(routes, /status='inspection'/);
+  assert.match(routes, /fleet\.return_inspection_required/);
+  assert.match(routes, /fleet\.oil_change_approaching/);
+  assert.match(routes, /maintenanceReminderMiles/);
+  assert.match(routes, /maybeNotifyOilService\(org, actor\(request\), vehicle\)/);
+  assert.match(routes, /tab=checklists&action=new/);
+  assert.match(routes, /tab=maintenance&action=new/);
+  assert.match(migration, /backend_notifications_goodfleet_operation_once_idx/);
+  assert.match(migration, /source = 'goodfleet-operations'/);
+});
+
 test("GoodFleet owner controls are durable and protected at the API boundary", () => {
   const routes = read("src/routes/fleet.routes.js");
   const migration = read("migrations/20260728_goodfleet_vehicle_images_and_owner_settings_v3.sql");
