@@ -5,6 +5,7 @@ const express = require("express");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
+const notificationService = require("../services/notification.service");
 const teamsService = require("../services/teams.service");
 
 const router = express.Router();
@@ -222,6 +223,126 @@ async function audit(client, request, action, entityType, entityId, before, afte
       before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null,
       request.id || request.get("X-Request-ID") || null, request.ip || null]
   );
+}
+
+async function fleetOperatorRecipients(organizationId, actingUserId) {
+  const result = await query(
+    `SELECT DISTINCT account.id,account.email
+     FROM backend_organization_memberships membership
+     JOIN users account ON account.id=membership.user_id
+     WHERE membership.organization_id=$1
+       AND membership.status='active'
+       AND account.status='active'
+       AND (
+         membership.role IN ('owner','admin')
+         OR account.platform_role IN ('owner','manager')
+         OR account.id=$2::uuid
+       )`,
+    [organizationId, actingUserId || null]
+  );
+  return result.rows;
+}
+
+async function notifyFleetOperators({
+  organizationId,
+  actingUserId,
+  sourceId,
+  notificationKey,
+  title,
+  message,
+  severity,
+  category,
+  actionUrl,
+  payload
+}) {
+  const recipients = await fleetOperatorRecipients(organizationId, actingUserId);
+  await Promise.all(recipients.map(async recipient => {
+    const existing = await query(
+      `SELECT id
+       FROM backend_notifications
+       WHERE organization_id=$1
+         AND source='goodfleet-operations'
+         AND source_id=$2
+         AND recipient_user_id=$3::uuid
+       LIMIT 1`,
+      [organizationId, sourceId, recipient.id]
+    );
+    if (existing.rowCount) return;
+
+    try {
+      await notificationService.createNotification({
+        appId: "goodfleet",
+        organizationId,
+        recipientUserId: recipient.id,
+        recipientEmail: recipient.email,
+        notificationKey,
+        title,
+        message,
+        severity,
+        category,
+        actionUrl,
+        source: "goodfleet-operations",
+        sourceId,
+        payload
+      });
+    } catch (error) {
+      if (error.code !== "23505") throw error;
+    }
+  }));
+}
+
+function nextOilServiceMileage(vehicle) {
+  const configured = Number(vehicle.nextServiceMileage);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  const lastOilChange = Number(vehicle.lastOilChangeMileage);
+  const interval = Number(vehicle.oilChangeInterval);
+  return Number.isFinite(lastOilChange) && Number.isFinite(interval) && interval > 0
+    ? lastOilChange + interval
+    : null;
+}
+
+async function maybeNotifyOilService(organizationId, actingUserId, vehicle) {
+  const currentMileage = Number(vehicle.mileage);
+  const nextMileage = nextOilServiceMileage(vehicle);
+  if (!Number.isFinite(currentMileage) || !Number.isFinite(nextMileage)) return;
+
+  const workspace = await query(
+    `SELECT state_json
+     FROM fleet_workspace_state
+     WHERE organization_id=$1`,
+    [organizationId]
+  );
+  const configuredThreshold = Number(
+    workspace.rows[0]?.state_json?.ownerSettings?.operations?.maintenanceReminderMiles
+  );
+  const reminderMiles = Number.isFinite(configuredThreshold) && configuredThreshold >= 0
+    ? configuredThreshold
+    : 500;
+  const milesRemaining = Math.round(nextMileage - currentMileage);
+  if (milesRemaining > reminderMiles) return;
+
+  const dueNow = milesRemaining <= 0;
+  await notifyFleetOperators({
+    organizationId,
+    actingUserId,
+    sourceId: `oil-change:${vehicle.id}:${Math.round(nextMileage)}`,
+    notificationKey: dueNow ? "fleet.oil_change_due" : "fleet.oil_change_approaching",
+    title: dueNow
+      ? `${vehicle.make} ${vehicle.model} oil change is due`
+      : `${vehicle.make} ${vehicle.model} is nearing its oil change`,
+    message: dueNow
+      ? `Current mileage is ${Math.round(currentMileage).toLocaleString()} mi. The oil-change interval at ${Math.round(nextMileage).toLocaleString()} mi has been reached.`
+      : `${milesRemaining.toLocaleString()} mi remain before the oil change due at ${Math.round(nextMileage).toLocaleString()} mi.`,
+    severity: dueNow ? "error" : "warning",
+    category: "maintenance",
+    actionUrl: `/operations?tab=maintenance&action=new&carId=${encodeURIComponent(vehicle.id)}&service=oil_change`,
+    payload: {
+      vehicleId: vehicle.id,
+      currentMileage,
+      nextServiceMileage: nextMileage,
+      milesRemaining
+    }
+  });
 }
 
 router.use(authRequired, tenantContext);
@@ -554,6 +675,13 @@ router.patch("/vehicles/:vehicleId", async (request, response, next) => {
     const vehicle = vehiclePayload(result.rows[0]);
     await audit(client, request, "vehicle.updated", "vehicle", vehicle.id, before, vehicle);
     await client.query("COMMIT");
+    await maybeNotifyOilService(org, actor(request), vehicle).catch(error => {
+      console.error("GoodFleet oil-change notification failed", {
+        organizationId: org,
+        vehicleId: vehicle.id,
+        message: error.message
+      });
+    });
     response.json({ success: true, data: vehicle });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -663,6 +791,11 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
     }
     const before = bookingPayload(existing.rows[0]);
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
+    const returnCompleted = before.status !== "completed" && merged.status === "completed";
+    if (returnCompleted) {
+      merged.returnInspectionStatus = "required";
+      merged.returnInspectionRequiredAt = new Date().toISOString();
+    }
     const pickupAt = timestamp(merged.startDate, merged.pickupTime, "pickupAt");
     const returnAt = timestamp(merged.endDate, merged.dropoffTime, "returnAt");
     if (new Date(returnAt) <= new Date(pickupAt)) {
@@ -707,7 +840,94 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
     );
     const booking = bookingPayload(result.rows[0]);
     await audit(client, request, "booking.updated", "booking", booking.id, before, booking);
+    let returnedVehicle = null;
+    if (returnCompleted && booking.carId) {
+      const currentVehicle = await client.query(
+        `SELECT *
+         FROM fleet_vehicles
+         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+         FOR UPDATE`,
+        [org, booking.carId]
+      );
+      if (currentVehicle.rowCount) {
+        const beforeVehicle = vehiclePayload(currentVehicle.rows[0]);
+        const storedMileage = Number(beforeVehicle.mileage);
+        const reportedMileage = Number(booking.checkinMileage);
+        const returnMileage = Number.isFinite(reportedMileage)
+          ? reportedMileage
+          : Number.isFinite(storedMileage) ? storedMileage : 0;
+        if (Number.isFinite(storedMileage) && returnMileage < storedMileage) {
+          await client.query("ROLLBACK");
+          return fail(
+            response,
+            400,
+            "INVALID_RETURN_MILEAGE",
+            "Return mileage cannot be lower than the vehicle's current mileage."
+          );
+        }
+        const vehicleState = {
+          ...cleanPayload(beforeVehicle),
+          mileage: returnMileage,
+          fuelLevel: Number.isFinite(Number(booking.checkinFuelLevel))
+            ? Number(booking.checkinFuelLevel)
+            : beforeVehicle.fuelLevel,
+          isInspected: false,
+          returnInspectionBookingId: booking.id,
+          returnInspectionRequiredAt: merged.returnInspectionRequiredAt
+        };
+        const updatedVehicle = await client.query(
+          `UPDATE fleet_vehicles
+           SET status='inspection',payload=$3::jsonb,version=version+1,
+               updated_by=$4,updated_at=NOW()
+           WHERE organization_id=$1 AND id=$2
+           RETURNING *`,
+          [org, booking.carId, JSON.stringify(vehicleState), actor(request)]
+        );
+        returnedVehicle = vehiclePayload(updatedVehicle.rows[0]);
+        await audit(
+          client,
+          request,
+          "vehicle.return_inspection_required",
+          "vehicle",
+          returnedVehicle.id,
+          beforeVehicle,
+          {
+            ...returnedVehicle,
+            bookingId: booking.id,
+            details: `Return inspection required for ${booking.reservationNumber}`
+          }
+        );
+      }
+    }
     await client.query("COMMIT");
+    if (returnedVehicle) {
+      await Promise.all([
+        notifyFleetOperators({
+          organizationId: org,
+          actingUserId: actor(request),
+          sourceId: `return-inspection:${booking.id}`,
+          notificationKey: "fleet.return_inspection_required",
+          title: `${returnedVehicle.make} ${returnedVehicle.model} needs a return inspection`,
+          message: `${booking.reservationNumber} was returned at ${Math.round(Number(returnedVehicle.mileage) || 0).toLocaleString()} mi. Complete the condition, fuel, damage, and cleanliness inspection before making this vehicle available.`,
+          severity: "warning",
+          category: "inspection",
+          actionUrl: `/operations?tab=checklists&action=new&bookingId=${encodeURIComponent(booking.id)}&carId=${encodeURIComponent(returnedVehicle.id)}&type=return`,
+          payload: {
+            bookingId: booking.id,
+            reservationNumber: booking.reservationNumber,
+            vehicleId: returnedVehicle.id,
+            returnMileage: returnedVehicle.mileage
+          }
+        }),
+        maybeNotifyOilService(org, actor(request), returnedVehicle)
+      ]).catch(error => {
+        console.error("GoodFleet return notification failed", {
+          organizationId: org,
+          bookingId: booking.id,
+          message: error.message
+        });
+      });
+    }
     response.json({ success: true, data: booking });
   } catch (error) {
     await client.query("ROLLBACK");
