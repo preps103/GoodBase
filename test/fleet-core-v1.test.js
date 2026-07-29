@@ -15,6 +15,10 @@ test("Fleet API is authenticated, tenant scoped, and mounted at a versioned path
   assert.match(routes, /router\.use\(requireEmployee\)/);
   assert.match(routes, /EMPLOYEE_ACCESS_REQUIRED/);
   assert.match(routes, /goodFleetAppRole/);
+  assert.match(routes, /requireOwner/);
+  assert.match(routes, /requireFleetEditor/);
+  assert.match(routes, /requireBookingEditor/);
+  assert.match(routes, /allowedWorkspaceKeys/);
   assert.match(routes, /fleet\.goodos\.app/);
   assert.match(routes, /request\.tenantContext\.organizationId/);
   assert.match(index, /router\.use\("\/api\/fleet\/v1", fleetRoutes\)/);
@@ -118,6 +122,15 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(migration, /fleet_bookings_organization_id_id_v2_key/);
 });
 
+test("Fleet workspace edits produce durable module-level audit records", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  assert.match(routes, /WORKSPACE_AUDIT_DESCRIPTORS/);
+  assert.match(routes, /auditWorkspaceChanges/);
+  assert.match(routes, /changedWorkspaceFields/);
+  assert.match(routes, /`\$\{entityType\}\.\$\{operation\}`/);
+  assert.match(routes, /auditLogs: auditEvents\.rows\.map\(auditPayload\)/);
+});
+
 test("Fleet returns and mileage updates publish durable operational notifications", () => {
   const routes = read("src/routes/fleet.routes.js");
   const migration = read("migrations/20260729_goodfleet_operational_notifications_v1.sql");
@@ -138,8 +151,9 @@ test("GoodFleet owner controls are durable and protected at the API boundary", (
   const routes = read("src/routes/fleet.routes.js");
   const migration = read("migrations/20260728_goodfleet_vehicle_images_and_owner_settings_v3.sql");
   assert.match(routes, /WORKSPACE_OBJECT_KEYS = new Set\(\["branding", "billingSettings", "ownerSettings"\]\)/);
-  assert.match(routes, /goodFleetAccessRole\(request\) !== "owner" && "ownerSettings" in state/);
-  assert.match(routes, /state\.ownerSettings = current\.rows\[0\]\?\.state_json\?\.ownerSettings \|\| \{\}/);
+  assert.match(routes, /function allowedWorkspaceKeys/);
+  assert.match(routes, /permittedWorkspaceKeys/);
+  assert.match(routes, /delete state\[key\]/);
   assert.match(migration, /2014-chevrolet-cruze-blue-metallic\.webp/);
   assert.match(migration, /2014-hyundai-sonata-pearl-white\.webp/);
   assert.match(migration, /Blue metallic glitter/);
@@ -153,6 +167,7 @@ test("Fleet payments stay disabled without credentials and expose the complete p
   const productionMigration = read("migrations/20260728_goodfleet_payments_v3.sql");
   assert.match(routes, /router\.use\(authRequired, tenantContext, requirePaymentEmployee\)/);
   assert.match(routes, /PAYMENTS_NOT_ACTIVATED/);
+  assert.match(routes, /new Set\(\["owner", "admin", "manager"\]\)/);
   assert.match(routes, /acceptingPayments: credentialsReady/);
   assert.match(routes, /STRIPE_WEBHOOK_SECRET/);
   assert.match(routes, /router\.post\("\/webhooks\/stripe"/);

@@ -24,9 +24,31 @@ const WORKSPACE_ARRAY_KEYS = new Set([
   "discounts", "fees", "expenses", "addons", "onboardingSteps"
 ]);
 const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings", "ownerSettings"]);
+const WORKSPACE_AUDIT_DESCRIPTORS = {
+  contracts: ["contract", "Contract"],
+  branches: ["branch", "Branch"],
+  maintenance: ["maintenance", "Maintenance record"],
+  damageReports: ["damage_report", "Damage report"],
+  inspections: ["inspection", "Inspection"],
+  supportTickets: ["support_ticket", "Support ticket"],
+  rates: ["rate", "Rate"],
+  seasonalAdjustments: ["seasonal_adjustment", "Seasonal adjustment"],
+  dynamicPricingInsights: ["dynamic_pricing_insight", "Dynamic pricing insight"],
+  discounts: ["discount", "Discount"],
+  fees: ["fee", "Fee"],
+  expenses: ["expense", "Expense"],
+  addons: ["addon", "Add-on"],
+  onboardingSteps: ["onboarding_step", "Onboarding step"],
+  branding: ["branding", "Branding settings"],
+  billingSettings: ["billing_settings", "Billing settings"],
+  ownerSettings: ["owner_settings", "Owner settings"]
+};
 const MAX_WORKSPACE_BYTES = 2 * 1024 * 1024;
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
 const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
+const OWNER_ROLES = new Set(["owner", "admin"]);
+const FLEET_EDITOR_ROLES = new Set(["owner", "admin", "manager"]);
+const BOOKING_EDITOR_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const MANAGEMENT_RETURN_OVERRIDE_ROLES = new Set(["owner", "admin", "manager"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
@@ -91,6 +113,47 @@ function requireLicenseVerifier(request, response, next) {
     return fail(response, 403, "LICENSE_VERIFIER_ACCESS_REQUIRED", "Front-desk or management access is required to verify renter identification.");
   }
   return next();
+}
+
+function requireOwner(request, response, next) {
+  if (!OWNER_ROLES.has(goodFleetAccessRole(request))) {
+    return fail(response, 403, "OWNER_ACCESS_REQUIRED", "GoodFleet owner access is required.");
+  }
+  return next();
+}
+
+function requireFleetEditor(request, response, next) {
+  if (!FLEET_EDITOR_ROLES.has(goodFleetAccessRole(request))) {
+    return fail(response, 403, "FLEET_EDIT_ACCESS_REQUIRED", "Fleet management access is required.");
+  }
+  return next();
+}
+
+function requireBookingEditor(request, response, next) {
+  if (!BOOKING_EDITOR_ROLES.has(goodFleetAccessRole(request))) {
+    return fail(response, 403, "BOOKING_EDIT_ACCESS_REQUIRED", "Reservation desk access is required.");
+  }
+  return next();
+}
+
+function allowedWorkspaceKeys(request) {
+  const role = goodFleetAccessRole(request);
+  if (role === "owner" || role === "admin") {
+    return new Set([...WORKSPACE_ARRAY_KEYS, ...WORKSPACE_OBJECT_KEYS]);
+  }
+  if (role === "manager") {
+    return new Set([...WORKSPACE_ARRAY_KEYS, "branding", "billingSettings"]);
+  }
+  if (role === "staff") {
+    return new Set([
+      "maintenance", "damageReports", "inspections", "supportTickets",
+      "onboardingSteps"
+    ]);
+  }
+  if (role === "mechanic") {
+    return new Set(["maintenance", "damageReports", "inspections", "onboardingSteps"]);
+  }
+  return new Set();
 }
 
 function fail(response, status, code, message, details) {
@@ -320,6 +383,130 @@ function auditPayload(row) {
     details: row.after_json?.details || row.action,
     ipAddress: row.ip_address || undefined
   };
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.keys(value).sort().reduce((result, key) => {
+      result[key] = canonicalJson(value[key]);
+      return result;
+    }, {});
+  }
+  return value;
+}
+
+function jsonEqual(left, right) {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+}
+
+function workspaceEntityId(key, item, index) {
+  const explicitId = text(item?.id, 200);
+  if (explicitId) return explicitId;
+  return `${key}:${sha256(JSON.stringify(canonicalJson(item || {}))).slice(0, 20)}:${index}`;
+}
+
+function workspaceItemLabel(item, fallback) {
+  return text(
+    item?.name || item?.title || item?.label || item?.code ||
+      item?.description || item?.id || fallback,
+    160
+  );
+}
+
+function changedWorkspaceFields(before, after) {
+  return [...new Set([
+    ...Object.keys(before || {}),
+    ...Object.keys(after || {})
+  ])].filter(key => !jsonEqual(before?.[key], after?.[key]));
+}
+
+function workspaceAuditSnapshot(item, changedFields = []) {
+  if (!item || typeof item !== "object") return item;
+  const allowed = [
+    "id", "name", "title", "label", "code", "status", "type", "category",
+    "bookingId", "vehicleId", "customerId", "branchId", "date", "startDate",
+    "endDate", "amount", "price", "dailyRate", "enabled"
+  ];
+  const snapshot = {};
+  for (const key of allowed) {
+    if (key in item) snapshot[key] = item[key];
+  }
+  if (changedFields.length) snapshot.changedFields = changedFields;
+  return snapshot;
+}
+
+async function auditWorkspaceChanges(client, request, beforeState, afterState) {
+  const changedSections = [];
+  for (const [key, [entityType, label]] of Object.entries(WORKSPACE_AUDIT_DESCRIPTORS)) {
+    const beforeValue = beforeState?.[key];
+    const afterValue = afterState?.[key];
+    if (jsonEqual(beforeValue, afterValue)) continue;
+    changedSections.push(key);
+
+    if (WORKSPACE_ARRAY_KEYS.has(key)) {
+      const beforeItems = Array.isArray(beforeValue) ? beforeValue : [];
+      const afterItems = Array.isArray(afterValue) ? afterValue : [];
+      const beforeMap = new Map(beforeItems.map((item, index) => [
+        workspaceEntityId(key, item, index), item
+      ]));
+      const afterMap = new Map(afterItems.map((item, index) => [
+        workspaceEntityId(key, item, index), item
+      ]));
+
+      for (const [entityId, item] of afterMap) {
+        const previous = beforeMap.get(entityId);
+        const operation = previous ? "updated" : "created";
+        if (previous && jsonEqual(previous, item)) continue;
+        const changedFields = previous ? changedWorkspaceFields(previous, item) : [];
+        await audit(
+          client,
+          request,
+          `${entityType}.${operation}`,
+          entityType,
+          entityId,
+          previous ? workspaceAuditSnapshot(previous) : null,
+          {
+            ...workspaceAuditSnapshot(item, changedFields),
+            details: `${label} ${workspaceItemLabel(item, entityId)} ${operation}`
+          }
+        );
+      }
+
+      for (const [entityId, item] of beforeMap) {
+        if (afterMap.has(entityId)) continue;
+        await audit(
+          client,
+          request,
+          `${entityType}.deleted`,
+          entityType,
+          entityId,
+          workspaceAuditSnapshot(item),
+          {
+            id: entityId,
+            deleted: true,
+            details: `${label} ${workspaceItemLabel(item, entityId)} deleted`
+          }
+        );
+      }
+      continue;
+    }
+
+    const changedFields = changedWorkspaceFields(beforeValue, afterValue);
+    await audit(
+      client,
+      request,
+      `${entityType}.updated`,
+      entityType,
+      organization(request),
+      workspaceAuditSnapshot(beforeValue),
+      {
+        ...workspaceAuditSnapshot(afterValue, changedFields),
+        details: `${label} updated`
+      }
+    );
+  }
+  return changedSections;
 }
 
 function vehiclePayload(row) {
@@ -606,7 +793,7 @@ router.get("/bootstrap", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
-router.post("/staff/invitations", async (request, response, next) => {
+router.post("/staff/invitations", requireOwner, async (request, response, next) => {
   try {
     const email = required(request.body?.email, "email", 320).toLowerCase();
     const requestedRole = text(request.body?.role, 40).toLowerCase();
@@ -651,7 +838,7 @@ router.post("/staff/invitations", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
-router.patch("/staff/:userId", async (request, response, next) => {
+router.patch("/staff/:userId", requireOwner, async (request, response, next) => {
   try {
     const requestedRole = text(request.body?.role, 40).toLowerCase();
     const fleetRole = requestedRole === "owner"
@@ -683,7 +870,7 @@ router.patch("/staff/:userId", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
-router.delete("/staff/:userId", async (request, response, next) => {
+router.delete("/staff/:userId", requireOwner, async (request, response, next) => {
   try {
     await teamsService.updateTeamMemberForUser(
       actor(request),
@@ -848,6 +1035,7 @@ router.put("/workspace", async (request, response, next) => {
       `SELECT state_json,version FROM fleet_workspace_state WHERE organization_id=$1 FOR UPDATE`,
       [org]
     );
+    const previousState = current.rows[0]?.state_json || {};
     const currentVersion = current.rows[0]?.version || 0;
     if (requestedVersion !== currentVersion) {
       await client.query("ROLLBACK");
@@ -855,8 +1043,15 @@ router.put("/workspace", async (request, response, next) => {
         currentVersion
       });
     }
-    if (goodFleetAccessRole(request) !== "owner" && "ownerSettings" in state) {
-      state.ownerSettings = current.rows[0]?.state_json?.ownerSettings || {};
+    const permittedWorkspaceKeys = allowedWorkspaceKeys(request);
+    for (const key of [...WORKSPACE_ARRAY_KEYS, ...WORKSPACE_OBJECT_KEYS]) {
+      if (!permittedWorkspaceKeys.has(key)) {
+        if (Object.prototype.hasOwnProperty.call(previousState, key)) {
+          state[key] = previousState[key];
+        } else {
+          delete state[key];
+        }
+      }
     }
     const saved = current.rowCount
       ? await client.query(
@@ -872,16 +1067,28 @@ router.put("/workspace", async (request, response, next) => {
         [org, JSON.stringify(state), actor(request)]
       );
     const result = saved.rows[0];
+    const changedSections = await auditWorkspaceChanges(
+      client,
+      request,
+      previousState,
+      result.state_json
+    );
     await audit(client, request, "workspace.updated", "workspace", org, null, {
       version: result.version,
-      keys: Object.keys(state),
+      changedSections,
       details: "GoodFleet operational workspace saved"
     });
     await client.query("COMMIT");
+    const auditEvents = await client.query(
+      `SELECT * FROM fleet_audit_events
+       WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`,
+      [org]
+    );
     response.json({ success: true, data: {
       state: result.state_json,
       version: result.version,
-      updatedAt: result.updated_at
+      updatedAt: result.updated_at,
+      auditLogs: auditEvents.rows.map(auditPayload)
     }});
   } catch (error) {
     await client.query("ROLLBACK");
@@ -889,7 +1096,7 @@ router.put("/workspace", async (request, response, next) => {
   } finally { client.release(); }
 });
 
-router.post("/vehicles", async (request, response, next) => {
+router.post("/vehicles", requireFleetEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const body = request.body || {};
@@ -915,7 +1122,7 @@ router.post("/vehicles", async (request, response, next) => {
   } finally { client.release(); }
 });
 
-router.post("/customers", async (request, response, next) => {
+router.post("/customers", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const body = request.body || {};
@@ -946,7 +1153,7 @@ router.post("/customers", async (request, response, next) => {
   } finally { client.release(); }
 });
 
-router.post("/bookings", async (request, response, next) => {
+router.post("/bookings", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const body = request.body || {};
@@ -1021,7 +1228,7 @@ router.post("/bookings", async (request, response, next) => {
   } finally { client.release(); }
 });
 
-router.patch("/vehicles/:vehicleId", async (request, response, next) => {
+router.patch("/vehicles/:vehicleId", requireFleetEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);
@@ -1070,7 +1277,7 @@ router.patch("/vehicles/:vehicleId", async (request, response, next) => {
   } finally { client.release(); }
 });
 
-router.delete("/vehicles/:vehicleId", async (request, response, next) => {
+router.delete("/vehicles/:vehicleId", requireFleetEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);
@@ -1114,7 +1321,7 @@ router.delete("/vehicles/:vehicleId", async (request, response, next) => {
   } finally { client.release(); }
 });
 
-router.patch("/customers/:customerId", async (request, response, next) => {
+router.patch("/customers/:customerId", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);
@@ -1280,7 +1487,7 @@ router.post("/bookings/quote", async (request, response, next) => {
   }
 });
 
-router.post("/bookings/:bookingId/extensions", async (request, response, next) => {
+router.post("/bookings/:bookingId/extensions", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);
@@ -1385,7 +1592,7 @@ router.post("/bookings/:bookingId/extensions", async (request, response, next) =
   }
 });
 
-router.post("/bookings/:bookingId/reopen", async (request, response, next) => {
+router.post("/bookings/:bookingId/reopen", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);
@@ -1497,7 +1704,7 @@ router.post("/bookings/:bookingId/reopen", async (request, response, next) => {
   }
 });
 
-router.post("/bookings/:bookingId/return-link", async (request, response, next) => {
+router.post("/bookings/:bookingId/return-link", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);
@@ -1672,7 +1879,7 @@ router.post("/bookings/:bookingId/return-link", async (request, response, next) 
   }
 });
 
-router.patch("/bookings/:bookingId", async (request, response, next) => {
+router.patch("/bookings/:bookingId", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const org = organization(request);

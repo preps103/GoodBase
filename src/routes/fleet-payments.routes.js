@@ -57,7 +57,7 @@ function requirePaymentEmployee(request, response, next) {
     (String(app?.id || "").toLowerCase() === "goodfleet" ||
       String(app?.domain || "").toLowerCase() === "fleet.goodos.app")
   )?.role;
-  if (!new Set(["owner", "admin", "manager", "staff"]).has(
+  if (!new Set(["owner", "admin", "manager"]).has(
     ["owner", "admin", "manager"].includes(organizationRole)
       ? organizationRole
       : String(appRole || organizationRole).toLowerCase()
