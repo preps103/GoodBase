@@ -24,6 +24,18 @@ const PUBLIC_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MUTATING_ROLES = new Set(["owner", "admin", "manager", "editor", "member"]);
 const DESTRUCTIVE_ROLES = new Set(["owner", "admin", "manager"]);
+const FUNNEL_STEP_TYPES = new Set([
+  "landing", "form", "nurture", "booking", "offer", "thank-you",
+]);
+const LEAD_STAGES = new Set(["new", "qualified", "nurturing", "won", "lost"]);
+const LEAD_FORM_FIELDS = new Map([
+  ["firstName", "text"],
+  ["lastName", "text"],
+  ["email", "email"],
+  ["phone", "tel"],
+  ["company", "text"],
+  ["message", "textarea"],
+]);
 
 function serviceError(message, statusCode = 400, code = "GOODADS_REQUEST_INVALID") {
   const error = new Error(message);
@@ -72,6 +84,174 @@ function requirePublicSlug(value) {
 
 function boundedText(value, maximum) {
   return String(value || "").trim().slice(0, maximum);
+}
+
+function optionalUuid(value, label) {
+  const text = boundedText(value, 80);
+  if (!text) return null;
+  if (!UUID_PATTERN.test(text)) {
+    throw serviceError(`${label} must reference a valid GoodAds record.`, 400, "GOODADS_RELATION_INVALID");
+  }
+  return text;
+}
+
+function colorValue(value, fallback) {
+  const color = boundedText(value, 20);
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
+}
+
+function normalizeGrowthResource(type, value, { forPublish = false } = {}) {
+  const data = normalizePayload(value);
+  if (type === "funnels") {
+    const steps = Array.isArray(data.steps)
+      ? data.steps.slice(0, 30).map((step, index) => {
+        if (!step || typeof step !== "object") {
+          throw serviceError(`Funnel stage ${index + 1} is invalid.`, 400, "GOODADS_FUNNEL_STAGE_INVALID");
+        }
+        const stageType = boundedText(step.type, 40).toLowerCase();
+        if (!FUNNEL_STEP_TYPES.has(stageType)) {
+          throw serviceError(`Funnel stage ${index + 1} has an unsupported type.`, 400, "GOODADS_FUNNEL_STAGE_INVALID");
+        }
+        return {
+          id: optionalUuid(step.id, `Funnel stage ${index + 1}`) || crypto.randomUUID(),
+          name: boundedText(step.name, 160),
+          type: stageType,
+          description: boundedText(step.description, 1000),
+        };
+      })
+      : [];
+    const normalized = {
+      ...data,
+      name: boundedText(data.name, 240),
+      description: boundedText(data.description, 2000),
+      objective: boundedText(data.objective, 500),
+      audience: boundedText(data.audience, 2000),
+      source: boundedText(data.source, 240),
+      steps,
+    };
+    if (forPublish && (!normalized.name || !normalized.objective || !normalized.audience)) {
+      throw serviceError(
+        "A funnel name, objective, and audience are required before publishing.",
+        400,
+        "GOODADS_FUNNEL_DETAILS_REQUIRED"
+      );
+    }
+    if (forPublish && (steps.length < 2 || steps.some((step) => !step.name))) {
+      throw serviceError(
+        "At least two named funnel stages are required before publishing.",
+        400,
+        "GOODADS_FUNNEL_STAGES_REQUIRED"
+      );
+    }
+    return normalized;
+  }
+
+  if (type === "lead_forms") {
+    const seenFields = new Set();
+    const fields = Array.isArray(data.fields)
+      ? data.fields.slice(0, LEAD_FORM_FIELDS.size).map((field) => {
+        const id = boundedText(field?.id, 40);
+        if (!LEAD_FORM_FIELDS.has(id) || seenFields.has(id)) {
+          throw serviceError("Lead forms may only contain each supported field once.", 400, "GOODADS_FORM_FIELD_INVALID");
+        }
+        seenFields.add(id);
+        return {
+          id,
+          label: boundedText(field.label, 80) || id,
+          type: LEAD_FORM_FIELDS.get(id),
+          required: field.required === true,
+        };
+      })
+      : [];
+    const normalized = {
+      ...data,
+      name: boundedText(data.name, 240),
+      publicSlug: data.publicSlug ? requirePublicSlug(data.publicSlug) : "",
+      headline: boundedText(data.headline, 180),
+      description: boundedText(data.description, 800),
+      buttonLabel: boundedText(data.buttonLabel, 80) || "Get started",
+      successMessage: boundedText(data.successMessage, 500)
+        || "Thank you. We received your information.",
+      fields,
+      requireConsent: data.requireConsent === true,
+      consentText: boundedText(data.consentText, 500),
+      funnelId: optionalUuid(data.funnelId, "Connected funnel"),
+      paymentOfferSlug: data.paymentOfferSlug
+        ? requirePublicSlug(data.paymentOfferSlug)
+        : null,
+      viewCount: Math.max(0, Number(data.viewCount) || 0),
+      submissionCount: Math.max(0, Number(data.submissionCount) || 0),
+      theme: {
+        backgroundColor: colorValue(data.theme?.backgroundColor, "#f8fafc"),
+        cardColor: colorValue(data.theme?.cardColor, "#ffffff"),
+        accentColor: colorValue(data.theme?.accentColor, "#4f46e5"),
+      },
+    };
+    if (forPublish && (!normalized.name || !normalized.publicSlug || !normalized.headline)) {
+      throw serviceError(
+        "A form name, public address, and headline are required before publishing.",
+        400,
+        "GOODADS_FORM_DETAILS_REQUIRED"
+      );
+    }
+    if (forPublish && !fields.some((field) => field.id === "email" || field.id === "phone")) {
+      throw serviceError(
+        "Add an email or phone field before publishing.",
+        400,
+        "GOODADS_FORM_CONTACT_FIELD_REQUIRED"
+      );
+    }
+    if (forPublish && normalized.requireConsent && !normalized.consentText) {
+      throw serviceError(
+        "Consent text is required before publishing this form.",
+        400,
+        "GOODADS_FORM_CONSENT_TEXT_REQUIRED"
+      );
+    }
+    return normalized;
+  }
+
+  if (type === "leads") {
+    const email = boundedText(data.email, 320).toLowerCase();
+    const phone = boundedText(data.phone, 40);
+    if (!email && !phone) {
+      throw serviceError("An email address or phone number is required.", 400, "GOODADS_LEAD_CONTACT_REQUIRED");
+    }
+    if (email && !EMAIL_PATTERN.test(email)) {
+      throw serviceError("Enter a valid email address.", 400, "GOODADS_LEAD_EMAIL_INVALID");
+    }
+    const stage = boundedText(data.stage || "new", 40).toLowerCase();
+    if (!LEAD_STAGES.has(stage)) {
+      throw serviceError("Select a valid lead pipeline stage.", 400, "GOODADS_LEAD_STAGE_INVALID");
+    }
+    const score = Number(data.score);
+    if (!Number.isFinite(score) || score < 0 || score > 100) {
+      throw serviceError("Lead score must be between 0 and 100.", 400, "GOODADS_LEAD_SCORE_INVALID");
+    }
+    return {
+      ...data,
+      name: boundedText(data.name, 240),
+      firstName: boundedText(data.firstName, 100),
+      lastName: boundedText(data.lastName, 100),
+      email,
+      phone,
+      company: boundedText(data.company, 160),
+      message: boundedText(data.message, 4000),
+      source: boundedText(data.source || "Manual entry", 120),
+      stage,
+      score: Math.round(score),
+      tags: Array.isArray(data.tags)
+        ? [...new Set(data.tags.map((tag) => boundedText(tag, 80)).filter(Boolean))].slice(0, 30)
+        : [],
+      notes: boundedText(data.notes, 8000),
+      funnelId: optionalUuid(data.funnelId, "Connected funnel"),
+      formId: optionalUuid(data.formId, "Capture form"),
+      consent: data.consent === true,
+      submissionCount: Math.max(1, Number(data.submissionCount) || 1),
+    };
+  }
+
+  return data;
 }
 
 function requireHttpsUrl(value, label = "URL") {
@@ -520,13 +700,71 @@ async function getResource({ type, id, context }) {
   return rowToResource(result.rows[0]);
 }
 
+async function requireRelatedResource({ id, type, context, label }) {
+  if (!id) return;
+  const result = await query(
+    `SELECT id FROM goodads_resources
+     WHERE id = $1::uuid AND organization_id = $2 AND resource_type = $3
+       AND archived_at IS NULL
+     LIMIT 1`,
+    [id, context.organizationId, type]
+  );
+  if (!result.rows[0]) {
+    throw serviceError(
+      `${label} is not available in this workspace.`,
+      409,
+      "GOODADS_RELATION_NOT_FOUND"
+    );
+  }
+}
+
+async function validateGrowthRelations(type, data, context) {
+  if (type === "lead_forms" || type === "leads") {
+    await requireRelatedResource({
+      id: data.funnelId,
+      type: "funnels",
+      context,
+      label: "The connected funnel",
+    });
+  }
+  if (type === "leads") {
+    await requireRelatedResource({
+      id: data.formId,
+      type: "lead_forms",
+      context,
+      label: "The capture form",
+    });
+  }
+  if (type === "lead_forms" && data.status === "active" && data.paymentOfferSlug) {
+    const offer = await query(
+      `SELECT id FROM goodads_payment_offers
+       WHERE organization_id = $1 AND public_slug = $2
+         AND status = 'active' AND archived_at IS NULL
+       LIMIT 1`,
+      [context.organizationId, data.paymentOfferSlug]
+    );
+    if (!offer.rows[0]) {
+      throw serviceError(
+        "The connected payment offer must be active in this workspace.",
+        409,
+        "GOODADS_PAYMENT_OFFER_NOT_FOUND"
+      );
+    }
+  }
+}
+
 async function upsertResource({ type, id, payload, context, userId }) {
   requireMutationRole(context);
   requireResourceType(type);
-  const data = normalizePayload(payload);
+  const original = normalizePayload(payload);
+  const requestedStatus = requireResourceStatus(original.status || "draft");
+  const data = normalizeGrowthResource(type, original, {
+    forPublish: requestedStatus === "active",
+  });
   const resourceId = id ? requireUuid(id) : (data.id && UUID_PATTERN.test(String(data.id)) ? String(data.id) : null);
   const name = String(data.name || data.title || "").trim().slice(0, 240);
-  const status = requireResourceStatus(data.status || "draft");
+  const status = requestedStatus;
+  data.status = status;
   if (["lead_forms", "link_hubs"].includes(type) && data.publicSlug) {
     data.publicSlug = requirePublicSlug(data.publicSlug);
   }
@@ -574,24 +812,51 @@ async function upsertResource({ type, id, payload, context, userId }) {
   if (type === "rss_feeds") {
     data.feedUrl = requireHttpsUrl(data.feedUrl, "Feed URL").toString();
   }
-  const result = await query(
-    `INSERT INTO goodads_resources (
-       id, resource_type, organization_id, project_id, environment_id,
-       owner_user_id, name, status, data
-     ) VALUES (
-       COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6::uuid, $7, $8, $9::jsonb
-     )
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name,
-       status = EXCLUDED.status,
-       data = EXCLUDED.data,
-       version = goodads_resources.version + 1,
-       updated_at = NOW()
-     WHERE goodads_resources.organization_id = EXCLUDED.organization_id
-       AND goodads_resources.resource_type = EXCLUDED.resource_type
-     RETURNING *`,
-    [resourceId, type, context.organizationId, context.projectId, context.environmentId, userId, name, status, JSON.stringify(data)]
-  );
+  await validateGrowthRelations(type, data, context);
+  let result;
+  try {
+    result = await query(
+      `INSERT INTO goodads_resources (
+         id, resource_type, organization_id, project_id, environment_id,
+         owner_user_id, name, status, data
+       ) VALUES (
+         COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6::uuid, $7, $8, $9::jsonb
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         status = EXCLUDED.status,
+         data = CASE
+           WHEN EXCLUDED.resource_type = 'lead_forms' THEN
+             EXCLUDED.data || jsonb_build_object(
+               'viewCount', COALESCE(goodads_resources.data->'viewCount', EXCLUDED.data->'viewCount', '0'::jsonb),
+               'submissionCount', COALESCE(goodads_resources.data->'submissionCount', EXCLUDED.data->'submissionCount', '0'::jsonb)
+             )
+           WHEN EXCLUDED.resource_type = 'leads' THEN
+             EXCLUDED.data || jsonb_build_object(
+               'submissionCount', COALESCE(goodads_resources.data->'submissionCount', EXCLUDED.data->'submissionCount', '1'::jsonb),
+               'firstSubmittedAt', COALESCE(goodads_resources.data->'firstSubmittedAt', EXCLUDED.data->'firstSubmittedAt', 'null'::jsonb),
+               'lastSubmittedAt', COALESCE(goodads_resources.data->'lastSubmittedAt', EXCLUDED.data->'lastSubmittedAt', 'null'::jsonb)
+             )
+           ELSE EXCLUDED.data
+         END,
+         version = goodads_resources.version + 1,
+         updated_at = NOW()
+       WHERE goodads_resources.organization_id = EXCLUDED.organization_id
+         AND goodads_resources.resource_type = EXCLUDED.resource_type
+         AND goodads_resources.archived_at IS NULL
+       RETURNING *`,
+      [resourceId, type, context.organizationId, context.projectId, context.environmentId, userId, name, status, JSON.stringify(data)]
+    );
+  } catch (requestError) {
+    if (requestError.code === "23505" && type === "lead_forms") {
+      throw serviceError(
+        "That public form address is already in use. Choose another address.",
+        409,
+        "GOODADS_FORM_SLUG_CONFLICT"
+      );
+    }
+    throw requestError;
+  }
   if (!result.rows[0]) throw serviceError("The resource belongs to another tenant.", 409, "GOODADS_TENANT_CONFLICT");
   await recordEvent({
     resourceId: result.rows[0].id,
@@ -810,6 +1075,21 @@ async function archiveResource({ type, id, context, userId }) {
   requireDestructiveRole(context);
   requireResourceType(type);
   const current = await getResource({ type, id, context });
+  if (type === "funnels") {
+    const linkedForms = await query(
+      `SELECT COUNT(*)::integer AS count FROM goodads_resources
+       WHERE organization_id = $1 AND resource_type = 'lead_forms'
+         AND archived_at IS NULL AND data->>'funnelId' = $2`,
+      [context.organizationId, current.id]
+    );
+    if ((linkedForms.rows[0]?.count || 0) > 0) {
+      throw serviceError(
+        "Archive or reconnect the funnel's capture forms first.",
+        409,
+        "GOODADS_FUNNEL_HAS_FORMS"
+      );
+    }
+  }
   const result = await query(
     `UPDATE goodads_resources
      SET status = 'archived', archived_at = NOW(), updated_at = NOW(), version = version + 1
@@ -827,6 +1107,13 @@ async function transitionResource({ type, id, nextStatus, context, userId, event
   requireResourceType(type);
   const normalizedNextStatus = requireResourceStatus(nextStatus);
   const current = await getResource({ type, id, context });
+  const validated = normalizeGrowthResource(type, {
+    ...current,
+    status: normalizedNextStatus,
+  }, {
+    forPublish: normalizedNextStatus === "active",
+  });
+  await validateGrowthRelations(type, validated, context);
   const result = await query(
     `UPDATE goodads_resources
      SET status = $1, updated_at = NOW(), version = version + 1,
@@ -968,9 +1255,7 @@ function publicFormFromRow(row) {
       .map((field) => ({
         id: String(field.id),
         label: boundedText(field.label, 80) || String(field.id),
-        type: ["text", "email", "tel", "textarea"].includes(String(field.type))
-          ? String(field.type)
-          : "text",
+        type: LEAD_FORM_FIELDS.get(String(field.id)),
         required: field.required === true,
       }))
     : [];
@@ -989,12 +1274,36 @@ function publicFormFromRow(row) {
     funnelId: UUID_PATTERN.test(String(data.funnelId || ""))
       ? String(data.funnelId)
       : null,
+    paymentOfferSlug: data.paymentOfferSlug
+      ? requirePublicSlug(data.paymentOfferSlug)
+      : null,
     theme: {
       backgroundColor: boundedText(data.theme?.backgroundColor, 20) || "#f8fafc",
       cardColor: boundedText(data.theme?.cardColor, 20) || "#ffffff",
       accentColor: boundedText(data.theme?.accentColor, 20) || "#4f46e5",
     },
   };
+}
+
+function validateLeadFormSubmission(formData, submission) {
+  const fields = Array.isArray(formData?.fields) ? formData.fields : [];
+  for (const field of fields) {
+    const id = boundedText(field?.id, 40);
+    if (field?.required === true && LEAD_FORM_FIELDS.has(id) && !boundedText(submission[id], 4000)) {
+      throw serviceError(
+        `${boundedText(field.label, 80) || id} is required.`,
+        400,
+        "GOODADS_LEAD_FIELD_REQUIRED"
+      );
+    }
+  }
+  if (formData?.requireConsent === true && !submission.consent) {
+    throw serviceError(
+      "Consent is required before submitting this form.",
+      400,
+      "GOODADS_LEAD_CONSENT_REQUIRED"
+    );
+  }
 }
 
 async function getPublicLeadForm(slug) {
@@ -1061,13 +1370,7 @@ async function captureLead({ slug, payload, idempotencyKey, userAgent = "" }) {
     if (!form) {
       throw serviceError("This lead form is not available.", 404, "GOODADS_FORM_NOT_FOUND");
     }
-    if (form.data?.requireConsent === true && !submission.consent) {
-      throw serviceError(
-        "Consent is required before submitting this form.",
-        400,
-        "GOODADS_LEAD_CONSENT_REQUIRED"
-      );
-    }
+    validateLeadFormSubmission(form.data, submission);
     organizationId = form.organization_id;
 
     const duplicateRequest = await client.query(
@@ -1223,6 +1526,8 @@ module.exports = {
   requireUuid,
   requirePublicSlug,
   normalizeLeadSubmission,
+  normalizeGrowthResource,
+  validateLeadFormSubmission,
   normalizeGenerationInput,
   requireHttpsUrl,
   blockedIp,
@@ -1235,6 +1540,7 @@ module.exports = {
   upsertResource,
   archiveResource,
   transitionResource,
+  publicFormFromRow,
   getPublicLeadForm,
   recordLeadFormView,
   captureLead,

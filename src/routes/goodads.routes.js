@@ -853,4 +853,13 @@ router.post("/lead-forms/:id/publish", (req, res) => handle(res, "lead-form.publ
   eventType: "lead_forms.published",
 })));
 
+router.post("/lead-forms/:id/pause", (req, res) => handle(res, "lead-form.pause", service.transitionResource({
+  type: "lead_forms",
+  id: req.params.id,
+  nextStatus: "paused",
+  context: req.tenantContext,
+  userId: req.user.id,
+  eventType: "lead_forms.paused",
+})));
+
 module.exports = router;
