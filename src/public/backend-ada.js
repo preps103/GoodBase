@@ -1,6 +1,7 @@
 (function initializeBackendAda() {
   "use strict";
 
+  var WIDGET_VERSION = "3.0.0";
   var STORAGE_KEY = "goodos-accessibility-settings-v1";
   var DEFAULT_SETTINGS = {
     textScale: 100,
@@ -43,6 +44,14 @@
   var trigger;
   var panel;
 
+  function productName() {
+    return (
+      document.documentElement.getAttribute("data-goodos-app-name") ||
+      document.body.getAttribute("data-goodos-app-name") ||
+      "this application"
+    );
+  }
+
   function changedCount() {
     return Object.keys(DEFAULT_SETTINGS).filter(function (key) {
       return settings[key] !== DEFAULT_SETTINGS[key];
@@ -76,13 +85,15 @@
   function build() {
     root = document.createElement("div");
     root.className = "backend-ada-root";
+    root.setAttribute("data-goodos-ada-widget", "");
+    root.setAttribute("data-goodos-ada-widget-version", WIDGET_VERSION);
     root.innerHTML =
       '<button type="button" class="backend-ada-trigger" title="Accessibility options" aria-label="Open accessibility options" aria-haspopup="dialog" aria-controls="backend-ada-panel" aria-expanded="false">' +
         ICONS.accessibility + '<span class="backend-ada-trigger-label">ADA</span><span class="backend-ada-active-count" hidden></span>' +
       '</button>' +
       '<section id="backend-ada-panel" class="backend-ada-panel" role="dialog" aria-modal="false" aria-labelledby="backend-ada-title" aria-describedby="backend-ada-description" hidden>' +
         '<header class="backend-ada-panel-header"><div class="backend-ada-panel-heading"><span class="backend-ada-heading-icon">' + ICONS.accessibility + '</span><span>' +
-          '<span id="backend-ada-title" class="backend-ada-title">Accessibility</span><span id="backend-ada-description" class="backend-ada-subtitle">Adjust Goodbase to your needs</span>' +
+          '<span id="backend-ada-title" class="backend-ada-title">Accessibility</span><span id="backend-ada-description" class="backend-ada-subtitle"></span>' +
         '</span></div><button type="button" class="backend-ada-close" aria-label="Close accessibility options">' + ICONS.close + '</button></header>' +
         '<div class="backend-ada-panel-content"><section class="backend-ada-section"><div class="backend-ada-section-heading"><span>Text size</span><strong data-ada-scale-label>100%</strong></div>' +
           '<div class="backend-ada-text-sizes" role="group" aria-label="Text size"><button type="button" data-ada-scale="100">Default</button><button type="button" data-ada-scale="112">Large</button><button type="button" data-ada-scale="125">Larger</button></div></section>' +
@@ -98,6 +109,8 @@
     document.body.appendChild(root);
     trigger = root.querySelector(".backend-ada-trigger");
     panel = root.querySelector(".backend-ada-panel");
+    root.querySelector(".backend-ada-subtitle").textContent =
+      "Adjust " + productName() + " to your needs";
   }
 
   function renderState() {
@@ -164,6 +177,15 @@
         applySettings(false);
       }
     });
+    window.addEventListener("goodos:accessibility:open", function () {
+      setOpen(true, false);
+    });
+    window.addEventListener("goodos:accessibility:close", function () {
+      setOpen(false, false);
+    });
+    window.addEventListener("goodos:accessibility:toggle", function () {
+      setOpen(panel.hidden, false);
+    });
   }
 
   function start() {
@@ -171,6 +193,11 @@
     build();
     wire();
     applySettings(false);
+    window.dispatchEvent(
+      new CustomEvent("goodos:accessibility:ready", {
+        detail: { version: WIDGET_VERSION, productName: productName() },
+      }),
+    );
   }
 
   if (document.readyState === "loading") {

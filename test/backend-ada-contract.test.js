@@ -43,6 +43,12 @@ test("ADA control preserves the GoodOS accessibility contract", () => {
   assert.match(client, /aria-haspopup="dialog"/);
   assert.match(client, /setOpen\(panel\.hidden, false\)/);
   assert.match(client, /event\.key === "Escape"/);
+  assert.match(client, /data-goodos-app-name/);
+  assert.match(client, /data-goodos-ada-widget-version/);
+  assert.match(client, /goodos:accessibility:open/);
+  assert.match(client, /goodos:accessibility:close/);
+  assert.match(client, /goodos:accessibility:toggle/);
+  assert.match(client, /goodos:accessibility:ready/);
   assert.match(styles, /html\.ada-reduce-motion/);
   assert.match(styles, /html\.ada-focus-indicators/);
   assert.match(styles, /button\[aria-label="Accessibility Options"\]:not\(\.backend-ada-trigger\)/);
@@ -57,8 +63,10 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
   const panelRule = styles.match(/\.backend-ada-panel\s*\{([\s\S]*?)\}/)?.[1] || "";
 
   for (const requiredRule of [
-    "right: 24px",
-    "bottom: 24px",
+    "--backend-ada-trigger-right: 24px",
+    "--backend-ada-trigger-bottom: 24px",
+    "--backend-ada-panel-right: 24px",
+    "--backend-ada-panel-bottom: 96px",
     "z-index: 50",
     "width: 90px",
     "min-width: 90px",
@@ -73,7 +81,6 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
     "line-height: 16px",
     "letter-spacing: 0.05em",
     "border-radius: 9999px",
-    "bottom: 96px",
     "z-index: 100",
     "box-sizing: border-box",
     "width: 400px",
@@ -85,8 +92,8 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
   }
 
   for (const requiredTriggerRule of [
-    "right: 24px",
-    "bottom: 24px",
+    "right: var(--backend-ada-trigger-right)",
+    "bottom: var(--backend-ada-trigger-bottom)",
     "z-index: 50",
     "width: 90px",
     "height: 46px",
@@ -110,8 +117,8 @@ test("ADA launcher and panel use the universal GoodOS dimensions", () => {
   assert.match(triggerIconRule, /height:\s*20px/);
 
   for (const requiredPanelRule of [
-    "right: 24px",
-    "bottom: 96px",
+    "right: var(--backend-ada-panel-right)",
+    "bottom: var(--backend-ada-panel-bottom)",
     "z-index: 100",
     "box-sizing: border-box",
     "width: 400px",
