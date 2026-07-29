@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS goodads_creative_jobs (
   progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
   prompt TEXT NOT NULL DEFAULT '',
   input JSONB NOT NULL DEFAULT '{}'::jsonb,
-  asset_file_id TEXT REFERENCES backend_storage_files(id) ON DELETE SET NULL,
+  asset_file_id TEXT,
   asset_url TEXT,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
