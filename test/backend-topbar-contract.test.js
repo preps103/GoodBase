@@ -59,14 +59,14 @@ test("master top bar preserves the GoodBase desktop dimensions", () => {
 
 test("top-bar widget owns viewport placement and preserves application notification slots", () => {
   const styles = read("src/public/backend-topbar.css");
-  const widget = read("packages/goodos-topbar-widget/GoodOSTopBarWidget.tsx");
   const contract = read("docs/goodos-topbar-integration.md");
 
   assert.match(styles, /\[data-goodos-topbar\]\s*\{[\s\S]*position:\s*fixed\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar\]\s*\{[\s\S]*inset:\s*0 0 auto 0\s*!important\s*;/);
   assert.match(styles, /\.goodos-topbar-widget__spacer[\s\S]*height:\s*var\(--goodos-topbar-height\)\s*!important\s*;/);
-  assert.match(widget, /createPortal\(children,\s*document\.body\)/);
-  assert.match(widget, /data-goodos-topbar-spacer/);
+  assert.match(contract, /@goodos\/topbar-widget/);
+  assert.match(contract, /preps103\/GoodOSUIWidgets/);
+  assert.match(contract, /must not keep a\s+local `GoodOSTopBarWidget\.tsx` copy/);
   assert.match(contract, /this application's own notification center/);
   assert.match(contract, /Notification data remains application-scoped/);
   assert.match(contract, /GoodOS alone mounts the\s+aggregated master notification center/);
@@ -101,6 +101,19 @@ test("master top bar stylesheet is delivered as a cross-origin shared asset", ()
   assert.match(routes, /Cross-Origin-Resource-Policy/);
   assert.match(routes, /res\.type\("text\/css"\)/);
   assert.match(routes, /public\/backend-topbar\.css/);
+});
+
+test("versioned top-bar widget package is delivered as an immutable shared asset", () => {
+  const routes = read("src/routes/index.js");
+  const packagePath = path.join(
+    root,
+    "src/public/packages/goodos-topbar-widget-3.0.0.tgz",
+  );
+
+  assert.ok(fs.statSync(packagePath).size > 0);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-3\.0\.0\.tgz"/);
+  assert.match(routes, /max-age=31536000, immutable/);
+  assert.match(routes, /application\/gzip/);
 });
 
 test("notification integration keeps product state scoped and reserves master mode for GoodOS", () => {
