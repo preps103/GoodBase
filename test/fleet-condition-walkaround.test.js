@@ -48,3 +48,37 @@ test("Booking transitions fail closed until departure and return evidence is sub
   assert.match(routes, /COUNT\(DISTINCT photo\.slot\)/);
   assert.match(routes, /\)=7/);
 });
+
+test("Management may override missing return photos only after a confirmed physical inspection", () => {
+  const routes = read("src/routes/fleet.routes.js");
+
+  assert.match(routes, /MANAGEMENT_RETURN_OVERRIDE_ROLES/);
+  assert.match(routes, /MANAGEMENT_RETURN_OVERRIDE_REQUIRED/);
+  assert.match(routes, /RETURN_OVERRIDE_CONFIRMATION_REQUIRED/);
+  assert.match(routes, /physicalInspectionConfirmed/);
+  assert.match(routes, /reason\.length < 10/);
+  assert.match(routes, /booking\.return_photo_override/);
+  assert.match(routes, /usedByRole/);
+});
+
+test("Return links use the encrypted SMS queue and a customer-authenticated deep link", () => {
+  const routes = read("src/routes/fleet.routes.js");
+  const migration = read("migrations/20260729_goodfleet_return_override_sms_v1.sql");
+  const applyScript = read("scripts/apply-goodfleet-return-override-sms-migration.js");
+  const growth = read("src/services/goodbase-growth.service.js");
+
+  assert.match(routes, /\/bookings\/:bookingId\/return-link/);
+  assert.match(routes, /CUSTOMER_PHONE_REQUIRED/);
+  assert.match(routes, /goodbase_sms_deliveries/);
+  assert.match(routes, /encryptValue/);
+  assert.match(routes, /purpose,expires_at,fleet_notification_id/);
+  assert.match(routes, /'fleet_return'/);
+  assert.match(routes, /\/account\/return\?booking=/);
+  assert.match(routes, /Do not forward this link/);
+  assert.match(routes, /booking\.return_link_sent/);
+  assert.match(migration, /fleet_return/);
+  assert.match(applyScript, /pg_advisory_lock/);
+  assert.match(applyScript, /fleetReturnSms/);
+  assert.match(growth, /fleet_customer_notifications notification/);
+  assert.match(growth, /delivery\.status<>'delivered'/);
+});

@@ -7,8 +7,10 @@ const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
 const notificationService = require("../services/notification.service");
 const teamsService = require("../services/teams.service");
+const { encryptValue } = require("../services/secret.service");
 
 const router = express.Router();
+const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
 
 const ACTIVE_BOOKING_STATUSES = [
   "pending_payment", "confirmed", "assigned", "checked_in",
@@ -24,6 +26,7 @@ const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings", "ownerSett
 const MAX_WORKSPACE_BYTES = 2 * 1024 * 1024;
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff", "mechanic"]);
 const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
+const MANAGEMENT_RETURN_OVERRIDE_ROLES = new Set(["owner", "admin", "manager"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
   "inspection", "maintenance", "out_of_service", "retired", "blocked", "recalled"
@@ -95,6 +98,20 @@ function fail(response, status, code, message, details) {
 
 function text(value, max = 500) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(String(value)).digest("hex");
+}
+
+function normalizePhone(value) {
+  const raw = text(value, 30);
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (raw.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return null;
 }
 
 function money(value, field) {
@@ -1367,6 +1384,181 @@ router.post("/bookings/:bookingId/extensions", async (request, response, next) =
   }
 });
 
+router.post("/bookings/:bookingId/return-link", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const clientRequestId = text(
+      request.body?.clientRequestId || request.get("Idempotency-Key"),
+      200
+    );
+    if (!clientRequestId) {
+      return fail(response, 400, "IDEMPOTENCY_KEY_REQUIRED", "A client request ID is required.");
+    }
+    await client.query("BEGIN");
+    const existingNotification = await client.query(
+      `SELECT notification.id,delivery.status,delivery.error_code
+         FROM fleet_customer_notifications notification
+         LEFT JOIN fleet_customer_notification_deliveries delivery
+           ON delivery.notification_id=notification.id AND delivery.channel='sms'
+        WHERE notification.organization_id=$1
+          AND notification.created_by=$2
+          AND notification.client_request_id=$3
+        LIMIT 1`,
+      [org, actor(request), clientRequestId]
+    );
+    if (existingNotification.rowCount) {
+      await client.query("COMMIT");
+      const existing = existingNotification.rows[0];
+      return response.json({
+        success: true,
+        data: {
+          notificationId: existing.id,
+          sms: existing.status === "pending"
+            ? "queued"
+            : existing.status === "delivered"
+              ? "delivered"
+              : "provider_unavailable",
+        }
+      });
+    }
+    const result = await client.query(
+      `SELECT booking.id,booking.reservation_number,booking.status,
+              customer.id AS customer_id,customer.full_name,customer.email,customer.phone,
+              users.id AS recipient_user_id
+         FROM fleet_bookings booking
+         JOIN fleet_customers customer
+           ON customer.organization_id=booking.organization_id
+          AND customer.id=booking.customer_id
+         LEFT JOIN users
+           ON lower(users.email)=lower(customer.email) AND users.status='active'
+        WHERE booking.organization_id=$1
+          AND booking.id=$2
+          AND booking.archived_at IS NULL
+        LIMIT 1`,
+      [org, request.params.bookingId]
+    );
+    if (!result.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    }
+    const booking = result.rows[0];
+    if (!["checked_out", "extended", "overdue"].includes(booking.status)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "RETURN_LINK_NOT_AVAILABLE", "The secure return link is available after the vehicle is checked out.");
+    }
+    const phone = normalizePhone(booking.phone);
+    if (!phone) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CUSTOMER_PHONE_REQUIRED", "Add a valid customer mobile number before sending the secure return link.");
+    }
+    const providerResult = await client.query(
+      `SELECT id,organization_id,project_id,environment_id
+         FROM goodbase_consumer_auth_providers
+        WHERE organization_id=$1
+          AND provider_type IN ('phone_otp','sms_mfa')
+          AND status='enabled'
+          AND controller_url IS NOT NULL
+          AND secret_ref IS NOT NULL
+        ORDER BY updated_at DESC
+        LIMIT 1`,
+      [org]
+    );
+    const provider = providerResult.rows[0] || null;
+    const actionUrl = `/account/return?booking=${encodeURIComponent(booking.id)}`;
+    const secureUrl = `${PUBLIC_APP_URL}${actionUrl}`;
+    const title = `Return photos needed: ${booking.reservation_number}`;
+    const body = "Complete the guided seven-photo vehicle return from your secure GoodFleet account.";
+    const smsBody = `GoodFleet ${booking.reservation_number}: complete your guided vehicle return here: ${secureUrl} Sign in to your account. Do not forward this link.`;
+    const inserted = await client.query(
+      `INSERT INTO fleet_customer_notifications (
+         organization_id,customer_id,recipient_user_id,recipient_email,recipient_phone,title,body,
+         category,channels,status,action_url,client_request_id,created_by
+       )
+       VALUES ($1,$2,$3,lower($4),$5,$6,$7,'trip',ARRAY['in_app','sms']::text[],
+               'partially_delivered',$8,$9,$10)
+       RETURNING id`,
+      [
+        org,
+        booking.customer_id,
+        booking.recipient_user_id || null,
+        booking.email,
+        phone,
+        title,
+        body,
+        actionUrl,
+        clientRequestId,
+        actor(request),
+      ]
+    );
+    const notificationId = inserted.rows[0].id;
+    await client.query(
+      `INSERT INTO fleet_customer_notification_deliveries
+        (notification_id,channel,status,attempted_at,delivered_at,error_code)
+       VALUES
+         ($1,'in_app','delivered',NOW(),NOW(),NULL),
+         ($1,'sms',$2,NULL,NULL,$3)`,
+      [
+        notificationId,
+        provider ? "pending" : "failed",
+        provider ? null : "SMS_PROVIDER_UNAVAILABLE",
+      ]
+    );
+    if (provider) {
+      await client.query(
+        `INSERT INTO goodbase_sms_deliveries (
+           organization_id,project_id,environment_id,user_id,destination_hash,
+           encrypted_payload,provider_id,purpose,expires_at,fleet_notification_id
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'fleet_return',NOW()+INTERVAL '7 days',$8)`,
+        [
+          provider.organization_id,
+          provider.project_id,
+          provider.environment_id,
+          booking.recipient_user_id || null,
+          sha256(phone),
+          encryptValue(JSON.stringify({
+            phone,
+            message: smsBody,
+            actionUrl: secureUrl,
+            notificationId,
+          })),
+          provider.id,
+          notificationId,
+        ]
+      );
+    }
+    await audit(
+      client,
+      request,
+      "booking.return_link_sent",
+      "booking",
+      booking.id,
+      null,
+      {
+        details: `Secure return link ${provider ? "queued by SMS" : "saved with SMS provider unavailable"} for ${booking.reservation_number}.`,
+        notificationId,
+        phoneLast4: phone.slice(-4),
+        smsStatus: provider ? "queued" : "provider_unavailable",
+      }
+    );
+    await client.query("COMMIT");
+    response.status(202).json({
+      success: true,
+      data: {
+        notificationId,
+        sms: provider ? "queued" : "provider_unavailable",
+        phoneLast4: phone.slice(-4),
+      }
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.patch("/bookings/:bookingId", async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -1394,6 +1586,37 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
     }
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
     const returnCompleted = before.status !== "completed" && merged.status === "completed";
+    let returnPhotoOverride = null;
+    if (Object.prototype.hasOwnProperty.call(request.body || {}, "returnPhotoOverride")) {
+      if (!returnCompleted) {
+        await client.query("ROLLBACK");
+        return fail(response, 409, "RETURN_OVERRIDE_NOT_APPLICABLE", "The management return override can only be used while completing an active return.");
+      }
+      const accessRole = goodFleetAccessRole(request);
+      if (!MANAGEMENT_RETURN_OVERRIDE_ROLES.has(accessRole)) {
+        await client.query("ROLLBACK");
+        return fail(response, 403, "MANAGEMENT_RETURN_OVERRIDE_REQUIRED", "Only an owner, administrator, or manager can bypass customer return photos.");
+      }
+      const overrideInput = request.body?.returnPhotoOverride;
+      const reason = text(overrideInput?.reason, 1000);
+      if (
+        overrideInput?.confirmed !== true ||
+        overrideInput?.physicalInspectionConfirmed !== true ||
+        reason.length < 10
+      ) {
+        await client.query("ROLLBACK");
+        return fail(response, 400, "RETURN_OVERRIDE_CONFIRMATION_REQUIRED", "Confirm the physical inspection and enter a reason of at least 10 characters.");
+      }
+      returnPhotoOverride = {
+        confirmed: true,
+        physicalInspectionConfirmed: true,
+        reason,
+        usedAt: new Date().toISOString(),
+        usedBy: actor(request),
+        usedByRole: accessRole,
+      };
+      merged.returnPhotoOverride = returnPhotoOverride;
+    }
     if (returnCompleted) {
       merged.returnInspectionStatus = "required";
       merged.returnInspectionRequiredAt = new Date().toISOString();
@@ -1496,7 +1719,7 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
           LIMIT 1`,
         [org, request.params.bookingId]
       );
-      if (!returnCondition.rowCount) {
+      if (!returnCondition.rowCount && !returnPhotoOverride) {
         await client.query("ROLLBACK");
         return fail(
           response,
@@ -1504,6 +1727,10 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
           "RETURN_WALKAROUND_REQUIRED",
           "Complete the guided return photos and condition acknowledgement before finishing vehicle check-in."
         );
+      }
+      if (returnCondition.rowCount && returnPhotoOverride) {
+        delete merged.returnPhotoOverride;
+        returnPhotoOverride = null;
       }
     }
     if (merged.carId && ACTIVE_BOOKING_STATUSES.includes(merged.status)) {
@@ -1559,6 +1786,22 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         money(paidAmount, "paidAmount"), JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
+    if (returnPhotoOverride) {
+      await audit(
+        client,
+        request,
+        "booking.return_photo_override",
+        "booking",
+        booking.id,
+        null,
+        {
+          details: `Management completed ${booking.reservationNumber} after a physical inspection without customer return photos.`,
+          reason: returnPhotoOverride.reason,
+          physicalInspectionConfirmed: true,
+          usedByRole: returnPhotoOverride.usedByRole,
+        }
+      );
+    }
     if (booking.status === "checked_out" && booking.carId && before.status !== "checked_out") {
       const vehicleBefore = await client.query(
         `SELECT * FROM fleet_vehicles
