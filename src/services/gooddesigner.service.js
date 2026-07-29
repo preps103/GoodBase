@@ -47,6 +47,15 @@ function assertDesignerPayload(payload) {
   }
 }
 
+function assertGoodAdsPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw serviceError("A JSON request body is required.");
+  }
+  if (payload.appId && !["goodads", "ads"].includes(String(payload.appId).toLowerCase())) {
+    throw serviceError("The request is not scoped to GoodAds.", 403, "GOODADS_CREATIVE_APP_SCOPE_INVALID");
+  }
+}
+
 function imageSizeForAspectRatio(aspectRatio) {
   if (aspectRatio === "16:9") return "1536x1024";
   if (aspectRatio === "9:16") return "1024x1536";
@@ -419,6 +428,114 @@ async function generateCampaign(payload) {
   return { campaignName, imageUrls };
 }
 
+function adImageSize(value) {
+  if (value === "landscape_16_9" || value === "display_landscape") return "1536x1024";
+  if (value === "vertical_9_16" || value === "story" || value === "reel") return "1024x1536";
+  return "1024x1024";
+}
+
+async function generateAdCreative(payload) {
+  assertGoodAdsPayload(payload);
+  const references = Array.isArray(payload.referenceImages)
+    ? payload.referenceImages.slice(0, 4)
+    : [];
+  const format = boundedString(payload.format, "Format", 80, false) || "square_1_1";
+  const platform = boundedString(payload.platform, "Platform", 80, false) || "multi-channel";
+  const businessName = boundedString(payload.businessName, "Business name", 160);
+  const objective = boundedString(payload.objective, "Campaign objective", 500);
+  const audience = boundedString(payload.audience, "Audience", 1000);
+  const creativeDirection = boundedString(payload.creativeDirection, "Creative direction", 3000);
+  const headline = boundedString(payload.headline, "Headline", 180, false);
+  const supportingText = boundedString(payload.supportingText, "Supporting text", 500, false);
+  const callToAction = boundedString(payload.callToAction, "Call to action", 120, false);
+  const palette = cleanList(payload.colorPalette, 8, 32).join(", ") || "a modern, accessible advertising palette";
+
+  const imageUrl = await generateImage({
+    prompt: [
+      "Create one original, production-ready advertising visual for GoodAds.",
+      `Brand or business: ${businessName}.`,
+      `Advertising objective: ${objective}.`,
+      `Target audience: ${audience}.`,
+      `Platform and placement: ${platform}, ${format}.`,
+      `Creative direction: ${creativeDirection}.`,
+      `Color palette: ${palette}.`,
+      headline ? `The approved headline is "${headline}". Reserve clear hierarchy and safe space for it.` : "",
+      supportingText ? `Supporting message: "${supportingText}".` : "",
+      callToAction ? `Call to action: "${callToAction}". Reserve a clear CTA area.` : "",
+      references.length
+        ? "Use the supplied reference assets for brand and product continuity without copying unrelated visual elements."
+        : "",
+      "Use strong focal hierarchy, readable contrast, safe margins, and commercial art direction.",
+      "Do not invent prices, statistics, testimonials, awards, guarantees, regulated claims, logos, or legal language.",
+      "Do not add watermarks, interface chrome, mock social-media controls, or unapproved text.",
+    ].filter(Boolean).join("\n"),
+    images: references,
+    size: adImageSize(format),
+    quality: String(payload.quality || "").toLowerCase().includes("high") ? "high" : "medium",
+    background: "opaque",
+  });
+  return { imageUrl };
+}
+
+async function generateAdVariation(payload) {
+  assertGoodAdsPayload(payload);
+  const source = await loadImageAsset(payload.imageUrl);
+  const instruction = boundedString(payload.instruction, "Variation instruction", 3000);
+  const format = boundedString(payload.format, "Format", 80, false) || "square_1_1";
+  const imageUrl = await generateImage({
+    prompt: [
+      "Create a controlled advertising variation from the supplied approved creative.",
+      `Revision instruction: ${instruction}.`,
+      "Preserve the brand identity, product truth, offer truth, legal meaning, and core campaign concept.",
+      "Keep text hierarchy readable and preserve safe margins for the requested placement.",
+      "Do not add unsupported claims, prices, logos, testimonials, watermarks, or interface chrome.",
+    ].join("\n"),
+    images: [`data:${source.mimeType};base64,${source.buffer.toString("base64")}`],
+    size: adImageSize(format),
+    quality: "high",
+    background: "opaque",
+  });
+  return { imageUrl };
+}
+
+function adVideoSize(format) {
+  return ["landscape_16_9", "youtube", "connected_tv"].includes(String(format))
+    ? "1280x720"
+    : "720x1280";
+}
+
+async function generateAdVideo(payload) {
+  assertGoodAdsPayload(payload);
+  const source = await loadImageAsset(payload.imageUrl);
+  const imageUrl = `data:${source.mimeType};base64,${source.buffer.toString("base64")}`;
+  const creativeDirection = boundedString(payload.prompt, "Video direction", 3000);
+  const format = boundedString(payload.format, "Format", 80, false) || "vertical_9_16";
+  const seconds = [4, 8, 12].includes(Number(payload.seconds)) ? String(Number(payload.seconds)) : "8";
+  const description = await generateText(
+    "Describe this approved advertising creative precisely for a video-generation model. Cover the product, composition, colors, typography zones, lighting, and brand cues in under 220 words. Do not add unsupported details.",
+    imageUrl
+  );
+  const form = new FormData();
+  form.set("model", process.env.OPENAI_VIDEO_MODEL || "sora-2");
+  form.set("prompt", [
+    creativeDirection,
+    `Approved creative continuity reference: ${description}`,
+    "Create one coherent advertising shot with controlled camera motion and product continuity.",
+    "Preserve all factual product and offer details. Do not add prices, claims, logos, captions, watermarks, cuts, or scene changes.",
+  ].join("\n"));
+  form.set("seconds", seconds);
+  form.set("size", adVideoSize(format));
+  const job = await openAiRequest("/videos", {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(60_000),
+  });
+  return {
+    jobId: validVideoJobId(job.id),
+    status: job.status || "queued",
+  };
+}
+
 function validVideoJobId(value) {
   const jobId = String(value || "");
   if (!/^[a-zA-Z0-9_-]{1,180}$/.test(jobId)) throw serviceError("The animation job ID is invalid.");
@@ -492,6 +609,9 @@ module.exports = {
   generateMockup,
   generatePhotoshoot,
   generateCampaign,
+  generateAdCreative,
+  generateAdVariation,
+  generateAdVideo,
   generateAnimation,
   animationStatus,
   animationContent,

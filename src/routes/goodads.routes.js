@@ -2,6 +2,7 @@
 
 const express = require("express");
 const rateLimit = require("express-rate-limit");
+const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { success, error } = require("../utils/response");
@@ -13,6 +14,7 @@ const workflows = require("../services/goodads-workflows.service");
 const ads = require("../services/goodads-ads.service");
 const analytics = require("../services/goodads-analytics.service");
 const competitorIntelligence = require("../services/goodads-competitor-intelligence.service");
+const creative = require("../services/goodads-creative.service");
 
 const router = express.Router();
 const publicFormReadLimiter = rateLimit({
@@ -69,6 +71,24 @@ const paymentWebhookLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const creativeAssetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 100 * 1024 * 1024, fields: 10 },
+});
+
+function uploadCreativeAsset(req, res, next) {
+  creativeAssetUpload.single("file")(req, res, (uploadError) => {
+    if (!uploadError) return next();
+    const tooLarge = uploadError.code === "LIMIT_FILE_SIZE";
+    return res.status(tooLarge ? 413 : 400).json({
+      success: false,
+      code: tooLarge ? "GOODADS_CREATIVE_FILE_TOO_LARGE" : "GOODADS_CREATIVE_UPLOAD_FAILED",
+      message: tooLarge
+        ? "Creative assets must be 100 MB or smaller."
+        : uploadError.message || "The creative asset could not be uploaded.",
+    });
+  });
+}
 
 router.get("/oauth/:platform/callback", (req, res) => {
   if (req.query.error) {
@@ -189,6 +209,54 @@ router.post("/public/payment-webhooks/:provider/:connectionId", paymentWebhookLi
 ));
 
 router.use(authRequired, tenantContext, requireGoodAdsAccess);
+
+router.post("/creative-assets", uploadCreativeAsset, (req, res) => handle(
+  res,
+  "creative.asset.upload",
+  creative.uploadAsset({
+    file: req.file,
+    purpose: req.body?.purpose,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.post("/creative/generate-image", generationLimiter, (req, res) => handle(
+  res,
+  "creative.image.generate",
+  creative.generateImage({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.post("/creative/generate-variation", generationLimiter, (req, res) => handle(
+  res,
+  "creative.variation.generate",
+  creative.generateVariation({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
+router.post("/creative/video-jobs", generationLimiter, (req, res) => handle(
+  res,
+  "creative.video.generate",
+  creative.startVideo({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+  })
+));
+router.get("/creative/video-jobs/:id", (req, res) => handle(
+  res,
+  "creative.video.status",
+  creative.videoStatus({
+    id: req.params.id,
+    context: req.tenantContext,
+    userId: req.user.id,
+  })
+));
 
 router.get("/chat/channels", (req, res) => handle(res, "chat.channels", chatService.listChannels({
   context: req.tenantContext,
@@ -570,7 +638,6 @@ function registerResource(path, type) {
   ["campaigns", "campaigns"],
   ["content", "content"],
   ["calendar", "calendar"],
-  ["analytics", "analytics"],
   ["media", "media"],
   ["link-hubs", "link_hubs"],
   ["notifications", "notifications"],
@@ -746,6 +813,7 @@ router.post("/analytics/provider-sync", publishingLimiter, (req, res) => handle(
     to: req.body?.to,
   })
 ));
+registerResource("analytics", "analytics");
 router.get("/ads/accounts", (req, res) => handle(res, "ads.accounts.list", ads.listAdAccounts({
   context: req.tenantContext,
 })));

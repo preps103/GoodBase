@@ -237,3 +237,25 @@ test("GoodAds exposes publish and pause lifecycle routes for funnels and forms",
   }
   assert.match(routes, /lead_forms\.paused/);
 });
+
+test("GoodAds analytics overview routes precede generic analytics record routes", () => {
+  const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  const overview = routes.indexOf('router.get("/analytics/overview"');
+  const generic = routes.indexOf('registerResource("analytics", "analytics")');
+  assert.ok(overview >= 0);
+  assert.ok(generic > overview);
+});
+
+test("GoodAds exposes authenticated durable creative studio operations", () => {
+  const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  for (const route of [
+    "/creative-assets",
+    "/creative/generate-image",
+    "/creative/generate-variation",
+    "/creative/video-jobs",
+    "/creative/video-jobs/:id",
+  ]) {
+    assert.match(routes, new RegExp(route.replace(/[/:]/g, "\\$&")));
+  }
+  assert.ok(routes.indexOf("router.use(authRequired") < routes.indexOf('router.post("/creative-assets"'));
+});
