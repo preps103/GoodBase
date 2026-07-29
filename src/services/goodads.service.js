@@ -1,5 +1,9 @@
 "use strict";
 
+const crypto = require("node:crypto");
+const dns = require("node:dns").promises;
+const https = require("node:https");
+const net = require("node:net");
 const { pool, query } = require("../config/database");
 
 const RESOURCE_TYPES = new Set([
@@ -7,7 +11,7 @@ const RESOURCE_TYPES = new Set([
   "publishing_jobs", "analytics", "media", "link_hubs", "automations",
   "notifications", "email_campaigns", "designs", "flyers",
   "business_cards", "qr_codes", "videos", "brand", "audit_events",
-  "funnels", "lead_forms", "leads",
+  "funnels", "lead_forms", "leads", "rss_feeds",
 ]);
 const RESOURCE_STATUSES = new Set([
   "draft", "ready", "pending", "approved", "rejected", "scheduled",
@@ -68,6 +72,249 @@ function requirePublicSlug(value) {
 
 function boundedText(value, maximum) {
   return String(value || "").trim().slice(0, maximum);
+}
+
+function requireHttpsUrl(value, label = "URL") {
+  const text = boundedText(value, 2048);
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw serviceError(`${label} must be a complete HTTPS address.`);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) {
+    throw serviceError(`${label} must use HTTPS without embedded credentials or a custom port.`);
+  }
+  return url;
+}
+
+function blockedIpv4(address) {
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  const [a, b, c] = parts;
+  return (
+    a === 0
+    || a === 10
+    || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 0)
+    || (a === 192 && b === 168)
+    || (a === 192 && b === 0 && c === 2)
+    || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && c === 100)
+    || (a === 203 && b === 0 && c === 113)
+    || a >= 224
+  );
+}
+
+function blockedIp(address) {
+  const family = net.isIP(address);
+  if (family === 4) return blockedIpv4(address);
+  if (family !== 6) return true;
+  const normalized = address.toLowerCase().split("%")[0];
+  if (normalized.startsWith("::ffff:")) return blockedIpv4(normalized.slice(7));
+  return normalized === "::"
+    || normalized === "::1"
+    || normalized.startsWith("fc")
+    || normalized.startsWith("fd")
+    || /^fe[89ab]/.test(normalized)
+    || normalized.startsWith("ff")
+    || normalized.startsWith("2001:db8");
+}
+
+async function requirePublicFeedUrl(value) {
+  const url = requireHttpsUrl(value, "Feed URL");
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (
+    hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname.endsWith(".local")
+    || hostname.endsWith(".internal")
+    || hostname === "metadata.google.internal"
+  ) {
+    throw serviceError("Feed URL must use a public internet host.", 400, "GOODADS_FEED_HOST_BLOCKED");
+  }
+  const directIp = net.isIP(hostname);
+  const addresses = directIp
+    ? [{ address: hostname, family: directIp }]
+    : await dns.lookup(hostname, { all: true, verbatim: true }).catch(() => []);
+  if (!addresses.length || addresses.some((entry) => blockedIp(entry.address))) {
+    throw serviceError("Feed URL must resolve only to public internet addresses.", 400, "GOODADS_FEED_HOST_BLOCKED");
+  }
+  return { url, addresses };
+}
+
+function pinnedLookup(addresses) {
+  return (_hostname, options, callback) => {
+    const requestedFamily = Number(options?.family || 0);
+    const eligible = requestedFamily
+      ? addresses.filter((entry) => entry.family === requestedFamily)
+      : addresses;
+    const selected = eligible[0] || addresses[0];
+    if (!selected) return callback(new Error("No validated feed address is available."));
+    if (options?.all) return callback(null, eligible.length ? eligible : addresses);
+    return callback(null, selected.address, selected.family);
+  };
+}
+
+function requestPinnedFeed(resolved, maximumBytes = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const request = https.request({
+      protocol: "https:",
+      hostname: resolved.url.hostname,
+      port: 443,
+      method: "GET",
+      path: `${resolved.url.pathname}${resolved.url.search}`,
+      servername: resolved.url.hostname,
+      lookup: pinnedLookup(resolved.addresses),
+      headers: {
+        Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+        "User-Agent": "GoodAds-FeedFetcher/1.0",
+      },
+    }, (response) => {
+      const declaredLength = Number(response.headers["content-length"] || 0);
+      if (declaredLength > maximumBytes) {
+        response.destroy();
+        reject(serviceError("RSS response exceeds 2 MB.", 413, "GOODADS_FEED_TOO_LARGE"));
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > maximumBytes) {
+          response.destroy(serviceError("RSS response exceeds 2 MB.", 413, "GOODADS_FEED_TOO_LARGE"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => resolve({
+        status: Number(response.statusCode || 0),
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      }));
+      response.on("error", reject);
+    });
+    request.setTimeout(15000, () => request.destroy(
+      serviceError("The RSS provider timed out.", 502, "GOODADS_FEED_UNAVAILABLE")
+    ));
+    request.on("error", (error) => reject(
+      Number.isInteger(error.statusCode)
+        ? error
+        : serviceError("The RSS provider could not be reached.", 502, "GOODADS_FEED_UNAVAILABLE")
+    ));
+    request.end();
+  });
+}
+
+async function fetchPublicFeed(value) {
+  let resolved = await requirePublicFeedUrl(value);
+  for (let redirect = 0; redirect <= 3; redirect += 1) {
+    const response = await requestPinnedFeed(resolved);
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.location;
+      if (!location || redirect === 3) {
+        throw serviceError("RSS feed redirected too many times.", 502, "GOODADS_FEED_REDIRECT_INVALID");
+      }
+      resolved = await requirePublicFeedUrl(new URL(location, resolved.url).toString());
+      continue;
+    }
+    if (response.status < 200 || response.status >= 300) {
+      throw serviceError(`RSS provider returned HTTP ${response.status}.`, 502, "GOODADS_FEED_PROVIDER_REJECTED");
+    }
+    const contentType = String(response.headers["content-type"] || "").toLowerCase();
+    if (contentType && !/(?:xml|rss|atom|text\/plain)/.test(contentType)) {
+      throw serviceError("RSS provider returned an unsupported content type.", 422, "GOODADS_FEED_CONTENT_INVALID");
+    }
+    return { xml: response.body, sourceUrl: resolved.url.toString() };
+  }
+  throw serviceError("RSS feed could not be loaded.", 502, "GOODADS_FEED_UNAVAILABLE");
+}
+
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Math.min(Number(code) || 0, 0x10ffff)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Math.min(Number.parseInt(code, 16) || 0, 0x10ffff)))
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&");
+}
+
+function textFromXml(value, maximum = 4000) {
+  return boundedText(decodeXml(value).replace(/<[^>]*>/g, " ").replace(/\s+/g, " "), maximum);
+}
+
+function tagValue(block, names) {
+  for (const name of names) {
+    const match = block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`, "i"));
+    if (match) return match[1];
+  }
+  return "";
+}
+
+function parseFeedXml(xml) {
+  if (!/<(?:rss|feed|rdf:RDF)\b/i.test(xml)) {
+    throw serviceError("The response is not a valid RSS or Atom feed.", 422, "GOODADS_FEED_CONTENT_INVALID");
+  }
+  const title = textFromXml(tagValue(xml, ["title"]), 240) || "RSS feed";
+  const blocks = xml.match(/<(?:item|entry)\b[\s\S]*?<\/(?:item|entry)>/gi) || [];
+  const items = blocks.slice(0, 50).map((block, index) => {
+    const atomHref = block.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/i)?.[1];
+    const linkValue = decodeXml(atomHref || textFromXml(tagValue(block, ["link"]), 2048));
+    let link = null;
+    try {
+      link = requireHttpsUrl(linkValue, "Feed item link").toString();
+    } catch {
+      link = null;
+    }
+    const externalId = textFromXml(tagValue(block, ["guid", "id"]), 500)
+      || link
+      || crypto.createHash("sha256").update(block).digest("hex");
+    const publishedValue = textFromXml(tagValue(block, ["pubDate", "published", "updated", "dc:date"]), 120);
+    const publishedDate = publishedValue ? new Date(publishedValue) : null;
+    return {
+      id: crypto.createHash("sha256").update(externalId).digest("hex").slice(0, 32),
+      externalId,
+      title: textFromXml(tagValue(block, ["title"]), 500) || `Feed item ${index + 1}`,
+      summary: textFromXml(tagValue(block, ["description", "summary", "content", "content:encoded"]), 4000),
+      url: link,
+      publishedAt: publishedDate && !Number.isNaN(publishedDate.getTime())
+        ? publishedDate.toISOString()
+        : null,
+    };
+  });
+  return { title, items };
+}
+
+function normalizeHubLinks(value, primaryDestination = "", skipInvalid = false) {
+  const links = [];
+  const values = Array.isArray(value) ? value.slice(0, 25) : [];
+  if (!values.length && primaryDestination) {
+    values.push({ id: "primary", label: "Visit now", url: primaryDestination });
+  }
+  for (let index = 0; index < values.length; index += 1) {
+    const item = values[index];
+    if (!item || typeof item !== "object") continue;
+    let url;
+    try {
+      url = requireHttpsUrl(item.url || item.destinationUrl, `Link ${index + 1}`).toString();
+    } catch (error) {
+      if (skipInvalid) continue;
+      throw error;
+    }
+    links.push({
+      id: boundedText(item.id, 80) || crypto.randomUUID(),
+      label: boundedText(item.label || item.title, 120) || `Link ${index + 1}`,
+      url,
+      description: boundedText(item.description, 300),
+    });
+  }
+  return links;
 }
 
 function normalizeGenerationInput(value) {
@@ -280,7 +527,7 @@ async function upsertResource({ type, id, payload, context, userId }) {
   const resourceId = id ? requireUuid(id) : (data.id && UUID_PATTERN.test(String(data.id)) ? String(data.id) : null);
   const name = String(data.name || data.title || "").trim().slice(0, 240);
   const status = requireResourceStatus(data.status || "draft");
-  if (type === "lead_forms" && data.publicSlug) {
+  if (["lead_forms", "link_hubs"].includes(type) && data.publicSlug) {
     data.publicSlug = requirePublicSlug(data.publicSlug);
   }
   if (type === "lead_forms" && status === "active" && !data.publicSlug) {
@@ -289,6 +536,43 @@ async function upsertResource({ type, id, payload, context, userId }) {
       400,
       "GOODADS_FORM_SLUG_REQUIRED"
     );
+  }
+  if (type === "link_hubs") {
+    if (status === "active" && !data.publicSlug) {
+      throw serviceError(
+        "A public link-hub address is required before publishing.",
+        400,
+        "GOODADS_LINK_HUB_SLUG_REQUIRED"
+      );
+    }
+    if (data.destinationUrl) {
+      data.destinationUrl = requireHttpsUrl(data.destinationUrl, "Primary destination").toString();
+    }
+    const formLinks = [
+      data.destinationUrl && {
+        id: "primary",
+        label: data.destinationLabel || "Visit now",
+        description: data.destinationDescription,
+        url: data.destinationUrl,
+      },
+      ...[1, 2, 3, 4].map((index) => data[`linkUrl${index}`] && ({
+        id: `link-${index}`,
+        label: data[`linkLabel${index}`] || `Link ${index + 1}`,
+        description: data[`linkDescription${index}`],
+        url: data[`linkUrl${index}`],
+      })),
+    ].filter(Boolean);
+    data.links = normalizeHubLinks(formLinks.length ? formLinks : data.links, data.destinationUrl);
+    if (status === "active" && !data.links.length) {
+      throw serviceError(
+        "Add at least one HTTPS destination before publishing.",
+        400,
+        "GOODADS_LINK_HUB_DESTINATION_REQUIRED"
+      );
+    }
+  }
+  if (type === "rss_feeds") {
+    data.feedUrl = requireHttpsUrl(data.feedUrl, "Feed URL").toString();
   }
   const result = await query(
     `INSERT INTO goodads_resources (
@@ -317,6 +601,209 @@ async function upsertResource({ type, id, payload, context, userId }) {
     nextStatus: result.rows[0].status,
   });
   return rowToResource(result.rows[0]);
+}
+
+function publicLinkHubFromRow(row) {
+  const data = row.data || {};
+  return {
+    id: row.id,
+    name: row.name,
+    publicSlug: boundedText(data.publicSlug, 64),
+    description: boundedText(data.description, 1000),
+    audience: boundedText(data.audience, 240),
+    campaignName: boundedText(data.campaignName, 240),
+    avatarUrl: (() => {
+      try {
+        return data.avatarUrl ? requireHttpsUrl(data.avatarUrl, "Avatar").toString() : null;
+      } catch {
+        return null;
+      }
+    })(),
+    links: normalizeHubLinks(data.links, data.destinationUrl, true),
+    theme: {
+      backgroundColor: /^#[0-9a-f]{6}$/i.test(String(data.backgroundColor || data.theme?.backgroundColor || ""))
+        ? (data.backgroundColor || data.theme.backgroundColor)
+        : "#171125",
+      cardColor: /^#[0-9a-f]{6}$/i.test(String(data.cardColor || data.theme?.cardColor || ""))
+        ? (data.cardColor || data.theme.cardColor)
+        : "#ffffff",
+      accentColor: /^#[0-9a-f]{6}$/i.test(String(data.accentColor || data.theme?.accentColor || ""))
+        ? (data.accentColor || data.theme.accentColor)
+        : "#7c3aed",
+    },
+  };
+}
+
+async function getPublicLinkHub(slug) {
+  const result = await query(
+    `SELECT * FROM goodads_resources
+     WHERE resource_type = 'link_hubs' AND status = 'active'
+       AND archived_at IS NULL AND data->>'publicSlug' = $1
+     LIMIT 1`,
+    [requirePublicSlug(slug)]
+  );
+  if (!result.rows[0]) {
+    throw serviceError("This link hub is not available.", 404, "GOODADS_LINK_HUB_NOT_FOUND");
+  }
+  return publicLinkHubFromRow(result.rows[0]);
+}
+
+async function recordLinkHubClick({ slug, linkId, userAgent = "", referrer = "" }) {
+  const normalizedSlug = requirePublicSlug(slug);
+  const normalizedLinkId = boundedText(linkId, 80);
+  if (!normalizedLinkId) throw serviceError("Select a valid link.", 400, "GOODADS_LINK_ID_REQUIRED");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const selected = await client.query(
+      `SELECT * FROM goodads_resources
+       WHERE resource_type = 'link_hubs' AND status = 'active'
+         AND archived_at IS NULL AND data->>'publicSlug' = $1
+       LIMIT 1 FOR UPDATE`,
+      [normalizedSlug]
+    );
+    const hub = selected.rows[0];
+    if (!hub) throw serviceError("This link hub is not available.", 404, "GOODADS_LINK_HUB_NOT_FOUND");
+    const publicHub = publicLinkHubFromRow(hub);
+    const link = publicHub.links.find((item) => item.id === normalizedLinkId);
+    if (!link) throw serviceError("This link is not available.", 404, "GOODADS_LINK_NOT_FOUND");
+    await client.query(
+      `UPDATE goodads_resources
+       SET data = jsonb_set(
+             data,
+             '{clickCount}',
+             to_jsonb(CASE WHEN COALESCE(data->>'clickCount', '') ~ '^[0-9]+$'
+               THEN (data->>'clickCount')::integer + 1 ELSE 1 END),
+             true
+           ),
+           version = version + 1,
+           updated_at = NOW()
+       WHERE id = $1::uuid`,
+      [hub.id]
+    );
+    await client.query(
+      `INSERT INTO goodads_resource_events (
+         resource_id, organization_id, actor_user_id, event_type, metadata
+       ) VALUES ($1::uuid, $2, NULL, 'link_hubs.clicked', $3::jsonb)`,
+      [
+        hub.id,
+        hub.organization_id,
+        JSON.stringify({
+          linkId: link.id,
+          userAgent: boundedText(userAgent, 400),
+          referrer: boundedText(referrer, 2048),
+        }),
+      ]
+    );
+    await client.query("COMMIT");
+    return { url: link.url };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function syncRssFeed({ id, context, userId }) {
+  requireMutationRole(context);
+  const feed = await getResource({ type: "rss_feeds", id, context });
+  try {
+    const loaded = await fetchPublicFeed(feed.feedUrl);
+    const parsed = parseFeedXml(loaded.xml);
+    const syncedAt = new Date().toISOString();
+    const result = await query(
+      `UPDATE goodads_resources SET
+         data = data || $1::jsonb,
+         version = version + 1,
+         updated_at = NOW()
+       WHERE id = $2::uuid AND organization_id = $3 AND resource_type = 'rss_feeds'
+         AND archived_at IS NULL
+       RETURNING *`,
+      [
+        JSON.stringify({
+          feedTitle: parsed.title,
+          sourceUrl: loaded.sourceUrl,
+          items: parsed.items,
+          itemCount: parsed.items.length,
+          lastSyncAt: syncedAt,
+          syncStatus: "completed",
+          lastError: null,
+        }),
+        requireUuid(id),
+        context.organizationId,
+      ]
+    );
+    await recordEvent({
+      resourceId: id,
+      context,
+      userId,
+      eventType: "rss_feeds.synced",
+      metadata: { itemCount: parsed.items.length, sourceUrl: loaded.sourceUrl },
+    });
+    return rowToResource(result.rows[0]);
+  } catch (error) {
+    await query(
+      `UPDATE goodads_resources SET
+         data = data || $1::jsonb,
+         version = version + 1,
+         updated_at = NOW()
+       WHERE id = $2::uuid AND organization_id = $3 AND resource_type = 'rss_feeds'
+         AND archived_at IS NULL`,
+      [
+        JSON.stringify({
+          syncStatus: "failed",
+          lastError: boundedText(error.message || "RSS sync failed.", 500),
+          lastSyncAt: new Date().toISOString(),
+        }),
+        requireUuid(id),
+        context.organizationId,
+      ]
+    ).catch(() => {});
+    throw error;
+  }
+}
+
+async function repurposeRssItem({ id, itemId, payload, context, userId }) {
+  requireMutationRole(context);
+  const feed = await getResource({ type: "rss_feeds", id, context });
+  const item = (Array.isArray(feed.items) ? feed.items : [])
+    .find((candidate) => candidate && candidate.id === boundedText(itemId, 80));
+  if (!item) throw serviceError("RSS item was not found.", 404, "GOODADS_FEED_ITEM_NOT_FOUND");
+  const generated = await generateContent({
+    payload: {
+      ...normalizePayload(payload),
+      type: payload?.type || "social_post",
+      additionalInfo: [
+        boundedText(payload?.additionalInfo, 2000),
+        `Source title: ${boundedText(item.title, 500)}`,
+        `Source summary: ${boundedText(item.summary, 4000)}`,
+        item.url ? `Source URL: ${item.url}` : "",
+        "Create original marketing copy. Do not copy sentences from the source.",
+      ].filter(Boolean).join("\n"),
+    },
+    context,
+  });
+  const now = new Date().toISOString();
+  const content = await upsertResource({
+    type: "content",
+    payload: {
+      name: `${boundedText(item.title, 180)} — repurposed`,
+      status: "draft",
+      content: generated.content,
+      sourceType: "rss",
+      sourceFeedId: feed.id,
+      sourceItemId: item.id,
+      sourceUrl: item.url,
+      provider: generated.provider,
+      model: generated.model,
+      createdAt: now,
+      updatedAt: now,
+    },
+    context,
+    userId,
+  });
+  return { content, generated };
 }
 
 async function archiveResource({ type, id, context, userId }) {
@@ -737,6 +1224,9 @@ module.exports = {
   requirePublicSlug,
   normalizeLeadSubmission,
   normalizeGenerationInput,
+  requireHttpsUrl,
+  blockedIp,
+  parseFeedXml,
   generateContent,
   dashboard,
   workspace,
@@ -748,4 +1238,8 @@ module.exports = {
   getPublicLeadForm,
   recordLeadFormView,
   captureLead,
+  getPublicLinkHub,
+  recordLinkHubClick,
+  syncRssFeed,
+  repurposeRssItem,
 };

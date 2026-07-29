@@ -433,6 +433,22 @@ async function capabilities({ context, userId }) {
         accountSpecificTargets: true,
         boundedRetries: true,
       },
+      bulkPublishing: {
+        available: true,
+        maxBatchSize: 25,
+        accountSpecificTargets: true,
+        boundedRetries: true,
+      },
+      rssIngestion: {
+        available: true,
+        protectedFetcher: true,
+        maxFeedBytes: 2097152,
+        maxRetainedItems: 50,
+      },
+      publicLinkHubs: {
+        available: true,
+        trackedClicks: true,
+      },
       mediaPublishing: {
         available: false,
         reason: "Provider media upload adapters are not installed.",
@@ -809,6 +825,51 @@ async function publish({ context, userId, idempotencyKey, providers, connectionI
   return getPublishJob({ context, userId, id: jobId });
 }
 
+async function publishBatch({
+  context,
+  userId,
+  idempotencyKey,
+  providers,
+  connectionIds,
+  items,
+  timezone,
+}) {
+  const batchKey = String(idempotencyKey || "");
+  if (!batchKey) throw socialError("Idempotency-Key header is required.", 400, "GOODADS_IDEMPOTENCY_REQUIRED");
+  if (batchKey.length > 150) throw socialError("Idempotency-Key is too long.");
+  if (!Array.isArray(items) || !items.length) {
+    throw socialError("Add at least one post to the bulk queue.");
+  }
+  if (items.length > 25) throw socialError("A bulk publishing request can contain no more than 25 posts.");
+  const prepared = items.map((item) => {
+    const value = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+    return {
+      content: normalizePublishContent(value.content || value),
+      schedule: normalizeSchedule(value.scheduledFor, value.timezone || timezone),
+    };
+  });
+  await resolvePublishConnections({ context, userId, connectionIds, providers });
+  const jobs = [];
+  for (let index = 0; index < prepared.length; index += 1) {
+    const item = prepared[index];
+    jobs.push(await publish({
+      context,
+      userId,
+      idempotencyKey: `${batchKey}:${String(index + 1).padStart(2, "0")}`,
+      providers,
+      connectionIds,
+      content: item.content,
+      scheduledFor: item.schedule.scheduledFor.toISOString(),
+      timezone: item.schedule.timezone,
+    }));
+  }
+  return {
+    batchId: crypto.createHash("sha256").update(`${context.organizationId}:${batchKey}`).digest("hex").slice(0, 32),
+    count: jobs.length,
+    jobs,
+  };
+}
+
 async function accessTokenForConnection(connection) {
   const expiresAt = connection.token_expires_at ? new Date(connection.token_expires_at).getTime() : null;
   if (!expiresAt || expiresAt > Date.now() + 5 * 60 * 1000) {
@@ -1102,4 +1163,5 @@ module.exports = {
   normalizeConnectionIds,
   rejectPaidCampaignLaunch,
   publish,
+  publishBatch,
 };

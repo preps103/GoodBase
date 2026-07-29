@@ -29,6 +29,24 @@ const generationLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const publishingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const bulkPublishingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const publicLinkClickLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 const chatMessageLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 240,
@@ -111,6 +129,17 @@ router.post("/public/forms/:slug/submissions", publicFormWriteLimiter, (req, res
     payload: req.body,
     idempotencyKey: req.get("Idempotency-Key"),
     userAgent: req.get("User-Agent"),
+  }))
+));
+router.get("/public/link-hubs/:slug", publicFormReadLimiter, (req, res) => (
+  handle(res, "link-hub.public", service.getPublicLinkHub(req.params.slug))
+));
+router.post("/public/link-hubs/:slug/clicks", publicLinkClickLimiter, (req, res) => (
+  handle(res, "link-hub.click", service.recordLinkHubClick({
+    slug: req.params.slug,
+    linkId: req.body?.linkId,
+    userAgent: req.get("User-Agent"),
+    referrer: req.get("Referer"),
   }))
 ));
 router.get("/public/payment-offers/:slug", publicFormReadLimiter, (req, res) => (
@@ -245,7 +274,7 @@ router.post("/generation/content", generationLimiter, (req, res) => handle(res, 
   payload: req.body,
   context: req.tenantContext,
 })));
-router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", social.publish({
+router.post("/publishing/jobs", publishingLimiter, (req, res) => handle(res, "publishing.create", social.publish({
   context: req.tenantContext,
   userId: req.user.id,
   idempotencyKey: req.get("Idempotency-Key"),
@@ -253,6 +282,15 @@ router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", s
   connectionIds: req.body?.connectionIds,
   content: req.body?.content,
   scheduledFor: req.body?.scheduledFor,
+  timezone: req.body?.timezone,
+})));
+router.post("/publishing/batches", bulkPublishingLimiter, (req, res) => handle(res, "publishing.batch.create", social.publishBatch({
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+  providers: req.body?.providers,
+  connectionIds: req.body?.connectionIds,
+  items: req.body?.items,
   timezone: req.body?.timezone,
 })));
 router.get("/publishing/jobs", (req, res) => handle(res, "publishing.list", social.listPublishJobs({
@@ -384,8 +422,25 @@ function registerResource(path, type) {
   ["funnels", "funnels"],
   ["lead-forms", "lead_forms"],
   ["leads", "leads"],
+  ["rss-feeds", "rss_feeds"],
   ["brand", "brand"],
 ].forEach(([path, type]) => registerResource(path, type));
+
+router.post("/rss-feeds/:id/sync", (req, res) => handle(res, "rss-feed.sync", service.syncRssFeed({
+  id: req.params.id,
+  context: req.tenantContext,
+  userId: req.user.id,
+})));
+
+router.post("/rss-feeds/:id/items/:itemId/repurpose", generationLimiter, (req, res) => (
+  handle(res, "rss-feed.repurpose", service.repurposeRssItem({
+    id: req.params.id,
+    itemId: req.params.itemId,
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+  }))
+));
 
 router.post("/campaigns/:id/launch", (_req, res) => (
   handle(res, "campaign.launch", Promise.resolve().then(() => social.rejectPaidCampaignLaunch()))
