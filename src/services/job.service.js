@@ -8,6 +8,7 @@ const goodAdsSocial = require("./goodads-social.service");
 const goodAdsWorkflows = require("./goodads-workflows.service");
 const goodAdsAds = require("./goodads-ads.service");
 const goodAdsAnalytics = require("./goodads-analytics.service");
+const goodAdsCompetitorIntelligence = require("./goodads-competitor-intelligence.service");
 const {
   dispatchControllerOperations,
   runProductionVerification
@@ -764,6 +765,8 @@ async function runHandler(handlerKey) {
       return goodAdsAds.processDueOperations(10, workerIdFromEnv());
     case "goodads.analytics.sync":
       return goodAdsAnalytics.syncAllProviderMetrics();
+    case "goodads.competitors.sync":
+      return goodAdsCompetitorIntelligence.syncDueCompetitors(10);
     default:
       return {
         skipped: true,
