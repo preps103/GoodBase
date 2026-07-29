@@ -236,6 +236,11 @@ router.delete("/connections/provider/:platform", (req, res) => handle(res, "conn
   userId: req.user.id,
   provider: req.params.platform,
 })));
+router.delete("/connections/account/:id", (req, res) => handle(res, "connections.account.disconnect", social.disconnectConnection({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
+})));
 router.post("/generation/content", generationLimiter, (req, res) => handle(res, "generation.content", service.generateContent({
   payload: req.body,
   context: req.tenantContext,
@@ -245,7 +250,10 @@ router.post("/publishing/jobs", (req, res) => handle(res, "publishing.create", s
   userId: req.user.id,
   idempotencyKey: req.get("Idempotency-Key"),
   providers: req.body?.providers,
+  connectionIds: req.body?.connectionIds,
   content: req.body?.content,
+  scheduledFor: req.body?.scheduledFor,
+  timezone: req.body?.timezone,
 })));
 router.get("/publishing/jobs", (req, res) => handle(res, "publishing.list", social.listPublishJobs({
   context: req.tenantContext,
@@ -255,6 +263,16 @@ router.get("/publishing/jobs", (req, res) => handle(res, "publishing.list", soci
   status: req.query.status,
 })));
 router.get("/publishing/jobs/:id", (req, res) => handle(res, "publishing.get", social.getPublishJob({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
+})));
+router.post("/publishing/jobs/:id/cancel", (req, res) => handle(res, "publishing.cancel", social.cancelPublishJob({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
+})));
+router.post("/publishing/jobs/:id/retry", (req, res) => handle(res, "publishing.retry", social.retryPublishJob({
   context: req.tenantContext,
   userId: req.user.id,
   id: req.params.id,

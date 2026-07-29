@@ -15,7 +15,7 @@
   "packageManager": "npm@10.9.8",
   "scripts": {
     "start": "node src/server.js",
-    "build": "node scripts/apply-goodads-growth-migration.js && node scripts/apply-goodads-payments-migration.js && node scripts/apply-goodads-chat-migration.js && node scripts/apply-manager-testers-access-migration.js && node scripts/apply-goodcustom-chat-migration.js && node scripts/apply-goodcustom-quotes-migration.js && node scripts/apply-goodfleet-marketplace-migration.js && node scripts/apply-goodswapz-marketplace-migration.js",
+    "build": "node scripts/apply-goodads-growth-migration.js && node scripts/apply-goodads-publishing-migration.js && node scripts/apply-goodads-payments-migration.js && node scripts/apply-goodads-chat-migration.js && node scripts/apply-manager-testers-access-migration.js && node scripts/apply-goodcustom-chat-migration.js && node scripts/apply-goodcustom-quotes-migration.js && node scripts/apply-goodfleet-marketplace-migration.js && node scripts/apply-goodswapz-marketplace-migration.js",
     "dev": "nodemon src/server.js",
     "provision:goodspeech": "bash scripts/provision-goodspeech.sh",
     "worker": "node src/workers/goodapp-worker-v3.js",
