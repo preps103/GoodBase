@@ -1437,6 +1437,62 @@ router.patch("/bookings/:bookingId", async (request, response, next) => {
         await client.query("ROLLBACK");
         return fail(response, 409, "ID_VERIFICATION_REQUIRED", "Verify a valid government-issued driver license before vehicle checkout.");
       }
+      if (before.status !== "checked_out") {
+        const departureCondition = await client.query(
+          `SELECT report.id
+             FROM fleet_condition_reports report
+            WHERE report.organization_id=$1
+              AND report.booking_id=$2
+              AND report.phase='departure'
+              AND report.status='submitted'
+              AND COALESCE((report.acknowledgement_json->>'confirmed')::boolean,false)=true
+              AND (
+                SELECT COUNT(DISTINCT photo.slot)
+                  FROM fleet_condition_photos photo
+                 WHERE photo.organization_id=report.organization_id
+                   AND photo.report_id=report.id
+              )=9
+            LIMIT 1`,
+          [org, request.params.bookingId]
+        );
+        if (!departureCondition.rowCount) {
+          await client.query("ROLLBACK");
+          return fail(
+            response,
+            409,
+            "DEPARTURE_WALKAROUND_REQUIRED",
+            "Complete the joint vehicle walkaround, required departure photos, and customer acknowledgement before vehicle release."
+          );
+        }
+      }
+    }
+    if (merged.status === "completed" && before.status !== "completed") {
+      const returnCondition = await client.query(
+        `SELECT report.id
+           FROM fleet_condition_reports report
+          WHERE report.organization_id=$1
+            AND report.booking_id=$2
+            AND report.phase='return'
+            AND report.status='submitted'
+            AND COALESCE((report.acknowledgement_json->>'confirmed')::boolean,false)=true
+            AND (
+              SELECT COUNT(DISTINCT photo.slot)
+                FROM fleet_condition_photos photo
+               WHERE photo.organization_id=report.organization_id
+                 AND photo.report_id=report.id
+            )=9
+          LIMIT 1`,
+        [org, request.params.bookingId]
+      );
+      if (!returnCondition.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "RETURN_WALKAROUND_REQUIRED",
+          "Complete the guided return photos and condition acknowledgement before finishing vehicle check-in."
+        );
+      }
     }
     if (merged.carId && ACTIVE_BOOKING_STATUSES.includes(merged.status)) {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${org}:${merged.carId}`]);
