@@ -135,7 +135,7 @@ function normalizeCreativePayload(payload = {}) {
   if (sourceProvider === "similarweb" && provenance !== "licensed_api") {
     throw intelligenceError("Similarweb records must be attributed to licensed API data.");
   }
-  return {
+  const normalized = {
     sourceProvider,
     provenance,
     sourceAdId: boundedText(payload.sourceAdId, 500) || null,
@@ -157,6 +157,27 @@ function normalizeCreativePayload(payload = {}) {
     isFavorite: payload.isFavorite === true,
     notes: boundedText(payload.notes, 5000),
   };
+  if (sourceProvider !== "manual" && sourceProvider !== "similarweb" && !normalized.sourceUrl) {
+    throw intelligenceError("A complete HTTPS source page is required for public-library observations.");
+  }
+  if (![
+    normalized.sourceAdId,
+    normalized.headline,
+    normalized.body,
+    normalized.callToAction,
+    normalized.creativeUrl,
+    normalized.previewImageUrl,
+  ].some(Boolean)) {
+    throw intelligenceError("Add an observed headline, ad copy, call to action, provider ad ID, or creative asset.");
+  }
+  if (
+    normalized.firstSeenAt
+    && normalized.lastSeenAt
+    && new Date(normalized.firstSeenAt).getTime() > new Date(normalized.lastSeenAt).getTime()
+  ) {
+    throw intelligenceError("Last observed cannot be earlier than first observed.");
+  }
+  return normalized;
 }
 
 function rowToCompetitor(row) {
@@ -219,7 +240,7 @@ function researchLinks(domain) {
       id: "meta_library",
       name: "Meta Ad Library",
       coverage: "Facebook, Instagram, Messenger, and Audience Network",
-      url: "https://www.facebook.com/ads/library/",
+      url: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&q=${encodeURIComponent(safeDomain)}&search_type=keyword_unordered`,
     },
     {
       id: "tiktok_creative_center",

@@ -29,6 +29,37 @@ test("creative capture requires explicit provenance and bounded values", () => {
   assert.equal(creative.provenance, "public_library");
   assert.throws(
     () => intelligence._test.normalizeCreativePayload({
+      sourceProvider: "meta_library",
+      provenance: "public_library",
+      channel: "social",
+      adFormat: "image",
+      headline: "Observed creative",
+    }),
+    /source page is required/
+  );
+  assert.throws(
+    () => intelligence._test.normalizeCreativePayload({
+      sourceProvider: "manual",
+      provenance: "user_observed",
+      channel: "social",
+      adFormat: "image",
+    }),
+    /Add an observed headline/
+  );
+  assert.throws(
+    () => intelligence._test.normalizeCreativePayload({
+      sourceProvider: "manual",
+      provenance: "user_observed",
+      channel: "social",
+      adFormat: "image",
+      headline: "Observed creative",
+      firstSeenAt: "2026-07-29",
+      lastSeenAt: "2026-07-01",
+    }),
+    /cannot be earlier/
+  );
+  assert.throws(
+    () => intelligence._test.normalizeCreativePayload({
       sourceProvider: "similarweb",
       provenance: "public_library",
       channel: "search",
@@ -36,6 +67,15 @@ test("creative capture requires explicit provenance and bounded values", () => {
     }),
     /licensed API data/
   );
+});
+
+test("research links open official libraries with competitor context where supported", () => {
+  const links = intelligence._test.researchLinks("https://www.example.com");
+  const google = links.find((link) => link.id === "google_transparency");
+  const meta = links.find((link) => link.id === "meta_library");
+  assert.match(google.url, /domain=example\.com/);
+  assert.match(meta.url, /facebook\.com\/ads\/library/);
+  assert.match(meta.url, /q=example\.com/);
 });
 
 test("licensed provider metrics are normalized and marked as estimates", () => {
