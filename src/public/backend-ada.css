@@ -8,6 +8,10 @@
   --backend-ada-trigger-background: linear-gradient(145deg, #7768ff, #5145cd 60%, #3069bd);
   --backend-ada-trigger-shadow: 0 18px 44px rgba(38, 30, 112, 0.42), inset 0 1px rgba(255, 255, 255, 0.24);
   --backend-ada-trigger-hover-shadow: 0 23px 52px rgba(38, 30, 112, 0.52), inset 0 1px rgba(255, 255, 255, 0.28);
+  --backend-ada-trigger-right: 24px;
+  --backend-ada-trigger-bottom: 24px;
+  --backend-ada-panel-right: 24px;
+  --backend-ada-panel-bottom: 96px;
 }
 
 .backend-ada-root {
@@ -23,8 +27,8 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
 
 .backend-ada-trigger {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  right: var(--backend-ada-trigger-right);
+  bottom: var(--backend-ada-trigger-bottom);
   z-index: 50;
   display: inline-flex;
   align-items: center;
@@ -105,8 +109,8 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
 
 .backend-ada-panel {
   position: fixed;
-  right: 24px;
-  bottom: 96px;
+  right: var(--backend-ada-panel-right);
+  bottom: var(--backend-ada-panel-bottom);
   z-index: 100;
   display: flex;
   overflow: hidden;

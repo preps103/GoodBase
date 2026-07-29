@@ -184,12 +184,15 @@ include `appId` and `unreadCount`; GoodOS master mode may additionally include
 ## React widget
 
 Authenticated React applications mount the shared shell through
-`GoodOSTopBarWidget`. The widget portals the application-owned top-bar content
+`GoodOSTopBarWidget` from the private `@goodos/topbar-widget` package. The
+widget portals the application-owned top-bar content
 to `document.body`, so sidebars, transforms, overflow containers, and stacking
 contexts can never shift or clip it. A responsive spacer remains in the
 application layout to reserve 77px on desktop and 116px on mobile.
 
 ```tsx
+import { GoodOSTopBarWidget } from "@goodos/topbar-widget";
+
 <GoodOSTopBarWidget>
   <header className="goodos-topbar" data-goodos-topbar>
     <div data-goodos-topbar-identity>{/* application branding */}</div>
@@ -204,6 +207,17 @@ application layout to reserve 77px on desktop and 116px on mobile.
   </header>
 </GoodOSTopBarWidget>
 ```
+
+The package source is versioned in the private
+`preps103/GoodOSUIWidgets` repository. GoodBase publishes an immutable package
+artifact at:
+
+```text
+https://base.goodos.app/packages/goodos-topbar-widget-3.0.0.tgz
+```
+
+Product repositories must depend on that exact version and must not keep a
+local `GoodOSTopBarWidget.tsx` copy.
 
 Notification data remains application-scoped. Each product must mount its own
 notification center with its fixed application ID. GoodOS alone mounts the
