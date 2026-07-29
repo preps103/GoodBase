@@ -349,7 +349,8 @@ test("GoodSpeech collaboration ships durable projects, tasks, chat, read state, 
   ]) {
     assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   }
-  assert.match(migration, /REFERENCES backend_teams\(id\)/);
+  assert.match(migration, /team_id TEXT NOT NULL/);
+  assert.doesNotMatch(migration, /REFERENCES (backend_organizations|backend_teams|users)/);
   assert.match(migration, /last_read_at TIMESTAMPTZ/);
   assert.match(migration, /client_message_key/);
   assert.match(routes, /tenantContext/);
