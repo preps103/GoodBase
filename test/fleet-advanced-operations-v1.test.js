@@ -35,6 +35,12 @@ test("advanced operations routes enforce permissions and fail closed", () => {
   assert.match(routes, /REMOTE_LOCK_SAFETY_BLOCK/);
   assert.match(routes, /TELEMATICS_PROVIDER_NOT_CONFIGURED/);
   assert.match(routes, /ROADSIDE_PROVIDER_NOT_CONFIGURED/);
+  assert.match(routes, /\/integrations\/readiness/);
+  assert.match(routes, /marketplaceVehicleReadiness/);
+  assert.match(routes, /registration_expiry_missing/);
+  assert.match(routes, /insurance_expiry_missing/);
+  assert.match(routes, /external_activation_required/);
+  assert.match(routes, /ready_manual/);
   assert.match(routes, /host-team\/invitations/);
   assert.match(marketplaceRoutes, /NOT EXISTS \(\s*SELECT 1\s*FROM fleet_host_team_vehicle_access scoped/);
   assert.match(marketplaceRoutes, /scoped\.vehicle_id=booking\.vehicle_id/);
