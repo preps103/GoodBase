@@ -254,16 +254,41 @@ function requireGuestMember(request, response, next) {
   return next();
 }
 
-function requireHost(request, response, next) {
-  if (fleetRole(request) !== "host") {
+async function requireHost(request, response, next) {
+  if (fleetRole(request) === "host") return next();
+  try {
+    const delegated = await query(
+      `UPDATE fleet_host_team_members
+          SET user_id=COALESCE(user_id,$2),
+              status=CASE WHEN status='invited' THEN 'active' ELSE status END,
+              accepted_at=CASE
+                WHEN status='invited' THEN COALESCE(accepted_at,NOW())
+                ELSE accepted_at
+              END,
+              updated_at=CASE WHEN status='invited' THEN NOW() ELSE updated_at END
+        WHERE organization_id=$1
+          AND status IN ('invited','active')
+          AND (
+            user_id=$2 OR
+            (user_id IS NULL AND lower(invited_email)=lower($3))
+          )
+        RETURNING id`,
+      [
+        PUBLIC_ORGANIZATION_ID,
+        request.user.id,
+        clean(request.user.email, 320),
+      ],
+    );
+    if (delegated.rowCount) return next();
     return fail(
       response,
       403,
       "HOST_ACCESS_REQUIRED",
-      "An active GoodFleet host account is required.",
+      "An active GoodFleet host or delegated host-team account is required.",
     );
+  } catch (error) {
+    return next(error);
   }
-  return next();
 }
 
 function requireEmployee(request, response, next) {
@@ -656,6 +681,83 @@ async function ensureHostProfile(client, request, input = {}) {
   return created.rows[0];
 }
 
+async function hostProfileForRequest(client, request) {
+  const owned = await client.query(
+    `SELECT host.*,true AS is_owner,NULL::uuid AS team_member_id,
+            '[]'::jsonb AS team_permissions
+       FROM fleet_host_profiles host
+      WHERE host.organization_id=$1 AND host.user_id=$2
+      LIMIT 1`,
+    [PUBLIC_ORGANIZATION_ID, request.user.id],
+  );
+  if (owned.rowCount) return owned.rows[0];
+  const delegated = await client.query(
+    `SELECT host.*,false AS is_owner,member.id AS team_member_id,
+            member.permissions_json AS team_permissions,
+            member.role AS team_role
+       FROM fleet_host_team_members member
+       JOIN fleet_host_profiles host
+         ON host.organization_id=member.organization_id
+        AND host.id=member.host_profile_id
+      WHERE member.organization_id=$1
+        AND member.status='active'
+        AND (
+          member.user_id=$2 OR
+          lower(member.invited_email)=lower($3)
+        )
+      ORDER BY member.accepted_at DESC NULLS LAST
+      LIMIT 1`,
+    [
+      PUBLIC_ORGANIZATION_ID,
+      request.user.id,
+      clean(request.user.email, 320),
+    ],
+  );
+  return delegated.rows[0] || null;
+}
+
+async function delegatedHostAccess(
+  request,
+  hostProfileId,
+  vehicleId,
+  requiredPermissions,
+) {
+  if (!hostProfileId) return false;
+  const result = await query(
+    `SELECT 1
+       FROM fleet_host_team_members member
+      WHERE member.organization_id=$1
+        AND member.host_profile_id=$2
+        AND member.status='active'
+        AND (member.user_id=$3 OR lower(member.invited_email)=lower($5))
+        AND member.permissions_json ?| $6::text[]
+        AND (
+          NOT EXISTS (
+            SELECT 1
+              FROM fleet_host_team_vehicle_access scoped
+             WHERE scoped.organization_id=member.organization_id
+               AND scoped.team_member_id=member.id
+          ) OR EXISTS (
+            SELECT 1
+              FROM fleet_host_team_vehicle_access scoped
+             WHERE scoped.organization_id=member.organization_id
+               AND scoped.team_member_id=member.id
+               AND scoped.vehicle_id=$4
+          )
+        )
+      LIMIT 1`,
+    [
+      PUBLIC_ORGANIZATION_ID,
+      hostProfileId,
+      request.user.id,
+      vehicleId || null,
+      clean(request.user.email, 320),
+      requiredPermissions,
+    ],
+  );
+  return Boolean(result.rowCount);
+}
+
 async function priceQuote(client, listing, input, pickupAt, returnAt) {
   const days = rentalDays(pickupAt, returnAt);
   if (
@@ -873,7 +975,8 @@ async function notifyBookingParty({
 async function conversationAccess(request, conversationId) {
   const role = fleetRole(request);
   const result = await query(
-    `SELECT conversation.*,booking.reservation_number,
+    `SELECT conversation.*,booking.reservation_number,booking.vehicle_id,
+            listing.host_profile_id,
             customer.full_name AS guest_name,
             host.display_name AS host_name
        FROM fleet_trip_conversations conversation
@@ -883,6 +986,9 @@ async function conversationAccess(request, conversationId) {
        JOIN fleet_customers customer
          ON customer.organization_id=booking.organization_id
         AND customer.id=booking.customer_id
+       LEFT JOIN fleet_vehicle_listings listing
+         ON listing.organization_id=booking.organization_id
+        AND listing.id=booking.listing_id
        LEFT JOIN fleet_host_profiles host
          ON host.organization_id=conversation.organization_id
         AND host.user_id=conversation.host_user_id
@@ -895,7 +1001,13 @@ async function conversationAccess(request, conversationId) {
   const allowed =
     conversation.guest_user_id === request.user.id ||
     conversation.host_user_id === request.user.id ||
-    EMPLOYEE_ROLES.has(role);
+    EMPLOYEE_ROLES.has(role) ||
+    (await delegatedHostAccess(
+      request,
+      conversation.host_profile_id,
+      conversation.vehicle_id,
+      ["messaging"],
+    ));
   return allowed ? conversation : null;
 }
 
@@ -934,7 +1046,13 @@ async function bookingAccess(request, bookingId, { forUpdate = false } = {}) {
   const allowed =
     booking.guest_user_id === request.user.id ||
     booking.host_user_id === request.user.id ||
-    EMPLOYEE_ROLES.has(role);
+    EMPLOYEE_ROLES.has(role) ||
+    (await delegatedHostAccess(
+      request,
+      booking.host_profile_id,
+      booking.vehicle_id,
+      ["trips_view", "trips_manage"],
+    ));
   return allowed ? booking : null;
 }
 
@@ -1602,9 +1720,36 @@ router.get("/host/change-requests", requireHost, async (request, response, next)
          JOIN fleet_customers customer
            ON customer.organization_id=booking.organization_id
           AND customer.id=booking.customer_id
-        WHERE change.organization_id=$1 AND host.user_id=$2
+        WHERE change.organization_id=$1
+          AND (
+            host.user_id=$2 OR EXISTS (
+              SELECT 1
+                FROM fleet_host_team_members member
+               WHERE member.organization_id=host.organization_id
+                 AND member.host_profile_id=host.id
+                 AND member.status='active'
+                 AND (member.user_id=$2 OR lower(member.invited_email)=lower($3))
+                 AND member.permissions_json ?| ARRAY['trips_view','trips_manage']
+                 AND (
+                   NOT EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                   ) OR EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                        AND scoped.vehicle_id=booking.vehicle_id
+                   )
+                 )
+            )
+          )
         ORDER BY (change.status='pending') DESC,change.created_at DESC`,
-      [PUBLIC_ORGANIZATION_ID, request.user.id],
+      [
+        PUBLIC_ORGANIZATION_ID,
+        request.user.id,
+        clean(request.user.email, 320),
+      ],
     );
     response.json({
       success: true,
@@ -1658,12 +1803,35 @@ router.post(
             AND host.id=listing.host_profile_id
           WHERE change.organization_id=$1
             AND change.id=$2
-            AND host.user_id=$3
+            AND (
+              host.user_id=$3 OR EXISTS (
+                SELECT 1
+                  FROM fleet_host_team_members member
+                 WHERE member.organization_id=host.organization_id
+                   AND member.host_profile_id=host.id
+                   AND member.status='active'
+                   AND (member.user_id=$3 OR lower(member.invited_email)=lower($4))
+                   AND member.permissions_json ? 'trips_manage'
+                   AND (
+                     NOT EXISTS (
+                       SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                        WHERE scoped.organization_id=member.organization_id
+                          AND scoped.team_member_id=member.id
+                     ) OR EXISTS (
+                       SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                        WHERE scoped.organization_id=member.organization_id
+                          AND scoped.team_member_id=member.id
+                          AND scoped.vehicle_id=booking.vehicle_id
+                     )
+                   )
+              )
+            )
           FOR UPDATE OF change,booking`,
         [
           PUBLIC_ORGANIZATION_ID,
           request.params.changeRequestId,
           request.user.id,
+          clean(request.user.email, 320),
         ],
       );
       if (!recordResult.rowCount) {
@@ -2315,6 +2483,9 @@ router.get("/conversations", async (request, response, next) => {
          JOIN fleet_customers customer
            ON customer.organization_id=booking.organization_id
           AND customer.id=booking.customer_id
+         LEFT JOIN fleet_vehicle_listings listing
+           ON listing.organization_id=booking.organization_id
+          AND listing.id=booking.listing_id
          LEFT JOIN fleet_host_profiles host
            ON host.organization_id=conversation.organization_id
           AND host.user_id=conversation.host_user_id
@@ -2323,12 +2494,34 @@ router.get("/conversations", async (request, response, next) => {
             conversation.guest_user_id=$2
             OR conversation.host_user_id=$2
             OR $3::boolean
+            OR EXISTS (
+              SELECT 1
+                FROM fleet_host_team_members member
+               WHERE member.organization_id=conversation.organization_id
+                 AND member.host_profile_id=listing.host_profile_id
+                 AND member.status='active'
+                 AND (member.user_id=$2 OR lower(member.invited_email)=lower($4))
+                 AND member.permissions_json ? 'messaging'
+                 AND (
+                   NOT EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                   ) OR EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                        AND scoped.vehicle_id=booking.vehicle_id
+                   )
+                 )
+            )
           )
         ORDER BY COALESCE(conversation.last_message_at,conversation.created_at) DESC`,
       [
         PUBLIC_ORGANIZATION_ID,
         request.user.id,
         EMPLOYEE_ROLES.has(role),
+        clean(request.user.email, 320),
       ],
     );
     response.json({
@@ -2457,9 +2650,9 @@ router.post(
       const senderRole =
         conversation.guest_user_id === request.user.id
           ? "guest"
-          : conversation.host_user_id === request.user.id
-            ? "host"
-            : "staff";
+          : EMPLOYEE_ROLES.has(role)
+            ? "staff"
+            : "host";
       const scheduledAt = request.body?.scheduledAt
         ? new Date(request.body.scheduledAt)
         : null;
@@ -3730,7 +3923,9 @@ router.get("/host/profile", requireHost, async (request, response, next) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const profile = await ensureHostProfile(client, request);
+    const profile =
+      (await hostProfileForRequest(client, request)) ||
+      (await ensureHostProfile(client, request));
     await client.query("COMMIT");
     response.json({ success: true, data: profile });
   } catch (error) {
@@ -3789,11 +3984,33 @@ router.get("/host/listings", requireHost, async (request, response, next) => {
            ON vehicle.organization_id=listing.organization_id
           AND vehicle.id=listing.vehicle_id
         WHERE host.organization_id=$1
-          AND host.user_id=$2
+          AND (
+            host.user_id=$2 OR EXISTS (
+              SELECT 1
+                FROM fleet_host_team_members member
+               WHERE member.organization_id=host.organization_id
+                 AND member.host_profile_id=host.id
+                 AND member.status='active'
+                 AND (member.user_id=$2 OR lower(member.invited_email)=lower($3))
+                 AND member.permissions_json ?| ARRAY['listing_view','listing_manage']
+                 AND (
+                   NOT EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                   ) OR EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                        AND scoped.vehicle_id=listing.vehicle_id
+                   )
+                 )
+            )
+          )
           AND listing.archived_at IS NULL
           AND vehicle.archived_at IS NULL
         ORDER BY listing.updated_at DESC`,
-      [PUBLIC_ORGANIZATION_ID, request.user.id],
+      [PUBLIC_ORGANIZATION_ID, request.user.id, clean(request.user.email, 320)],
     );
     response.json({
       success: true,
@@ -3834,7 +4051,21 @@ router.post("/host/listings", requireHost, async (request, response, next) => {
       );
     }
     await client.query("BEGIN");
-    const host = await ensureHostProfile(client, request);
+    const host =
+      (await hostProfileForRequest(client, request)) ||
+      (await ensureHostProfile(client, request));
+    if (
+      host.team_member_id &&
+      !(host.team_permissions || []).includes("listing_manage")
+    ) {
+      await client.query("ROLLBACK");
+      return fail(
+        response,
+        403,
+        "HOST_LISTING_MANAGE_REQUIRED",
+        "Your host-team assignment does not allow adding vehicles.",
+      );
+    }
     const vehicle = await client.query(
       `INSERT INTO fleet_vehicles
         (organization_id,vin,license_plate,make,model,model_year,status,
@@ -3974,13 +4205,36 @@ router.patch(
             AND vehicle.id=listing.vehicle_id
           WHERE listing.organization_id=$1
             AND listing.id=$2
-            AND host.user_id=$3
+            AND (
+              host.user_id=$3 OR EXISTS (
+                SELECT 1
+                  FROM fleet_host_team_members member
+                 WHERE member.organization_id=host.organization_id
+                   AND member.host_profile_id=host.id
+                   AND member.status='active'
+                   AND (member.user_id=$3 OR lower(member.invited_email)=lower($4))
+                   AND member.permissions_json ? 'listing_manage'
+                   AND (
+                     NOT EXISTS (
+                       SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                        WHERE scoped.organization_id=member.organization_id
+                          AND scoped.team_member_id=member.id
+                     ) OR EXISTS (
+                       SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                        WHERE scoped.organization_id=member.organization_id
+                          AND scoped.team_member_id=member.id
+                          AND scoped.vehicle_id=listing.vehicle_id
+                     )
+                   )
+              )
+            )
             AND listing.archived_at IS NULL
           FOR UPDATE OF listing`,
         [
           PUBLIC_ORGANIZATION_ID,
           request.params.listingId,
           request.user.id,
+          clean(request.user.email, 320),
         ],
       );
       if (!existing.rowCount) {
@@ -4192,10 +4446,32 @@ router.get("/host/trips", requireHost, async (request, response, next) => {
            ON customer.organization_id=booking.organization_id
           AND customer.id=booking.customer_id
         WHERE host.organization_id=$1
-          AND host.user_id=$2
+          AND (
+            host.user_id=$2 OR EXISTS (
+              SELECT 1
+                FROM fleet_host_team_members member
+               WHERE member.organization_id=host.organization_id
+                 AND member.host_profile_id=host.id
+                 AND member.status='active'
+                 AND (member.user_id=$2 OR lower(member.invited_email)=lower($3))
+                 AND member.permissions_json ?| ARRAY['trips_view','trips_manage']
+                 AND (
+                   NOT EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                   ) OR EXISTS (
+                     SELECT 1 FROM fleet_host_team_vehicle_access scoped
+                      WHERE scoped.organization_id=member.organization_id
+                        AND scoped.team_member_id=member.id
+                        AND scoped.vehicle_id=listing.vehicle_id
+                   )
+                 )
+            )
+          )
           AND booking.archived_at IS NULL
         ORDER BY booking.pickup_at DESC`,
-      [PUBLIC_ORGANIZATION_ID, request.user.id],
+      [PUBLIC_ORGANIZATION_ID, request.user.id, clean(request.user.email, 320)],
     );
     response.json({
       success: true,

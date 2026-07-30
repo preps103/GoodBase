@@ -18,7 +18,10 @@ const configuredOrigins = String(
   .filter(Boolean);
 
 const exactOrigins = new Set(
-  configuredOrigins
+  [
+    ...configuredOrigins,
+    "https://localhost",
+  ]
 );
 
 function isAllowedOrigin(origin) {
