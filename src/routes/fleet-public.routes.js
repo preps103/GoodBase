@@ -1,10 +1,16 @@
 "use strict";
 
 const express = require("express");
+const fs = require("node:fs");
+const path = require("node:path");
 const { query } = require("../config/database");
 
 const router = express.Router();
 const PUBLIC_ORGANIZATION_ID = process.env.GOODFLEET_PUBLIC_ORGANIZATION_ID || "org_goodos";
+const MANAGED_ASSET_ROOT = path.resolve(
+  process.env.GOODFLEET_MANAGED_ASSET_DIR ||
+    "/var/lib/goodbase/goodfleet-managed-assets",
+);
 
 function fail(response, status, code, message) {
   return response.status(status).json({ success: false, code, message });
@@ -18,6 +24,15 @@ function rentalTimestamp(value, fallbackTime) {
 
 function clean(value, max = 500) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+function safeManagedAssetPath(fileName) {
+  const normalized = path.basename(String(fileName || ""));
+  if (!normalized || normalized !== fileName) return null;
+  const resolved = path.resolve(MANAGED_ASSET_ROOT, normalized);
+  return resolved.startsWith(`${MANAGED_ASSET_ROOT}${path.sep}`)
+    ? resolved
+    : null;
 }
 
 function publicLocation(branch) {
@@ -125,6 +140,8 @@ router.get("/availability", async (request, response, next) => {
          AND vehicle.insurance_expiry IS NOT NULL
          AND vehicle.insurance_expiry >= $3::date
          AND COALESCE(vehicle.payload->>'recallStatus','clear') IN ('clear','resolved')
+         AND jsonb_typeof(listing.photos_json)='array'
+         AND jsonb_array_length(listing.photos_json)>=6
          AND (
            listing.operator_managed OR (
              host.status='active'
@@ -273,6 +290,8 @@ router.get("/listings/:listingId", async (request, response, next) => {
           AND vehicle.registration_expiry>=CURRENT_DATE
           AND vehicle.insurance_expiry IS NOT NULL
           AND vehicle.insurance_expiry>=CURRENT_DATE
+          AND jsonb_typeof(listing.photos_json)='array'
+          AND jsonb_array_length(listing.photos_json)>=6
           AND (listing.operator_managed OR host.status='active')
         LIMIT 1`,
       [PUBLIC_ORGANIZATION_ID, request.params.listingId],
@@ -358,6 +377,50 @@ router.get("/listings/:listingId", async (request, response, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/listing-media/:assetId", async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT asset.stored_name,asset.original_name,asset.content_type,
+              asset.size_bytes,asset.checksum_sha256
+         FROM fleet_managed_assets asset
+         JOIN fleet_vehicle_listings listing
+           ON listing.organization_id=asset.organization_id
+          AND listing.vehicle_id=asset.entity_id
+          AND listing.status='active'
+          AND listing.archived_at IS NULL
+        WHERE asset.organization_id=$1
+          AND asset.id=$2
+          AND asset.category='vehicle_image'
+          AND asset.entity_type='vehicle'
+        LIMIT 1`,
+      [PUBLIC_ORGANIZATION_ID, request.params.assetId],
+    );
+    const asset = result.rows[0];
+    if (!asset) {
+      return fail(response, 404, "LISTING_MEDIA_NOT_FOUND", "Listing image not found.");
+    }
+    const assetPath = safeManagedAssetPath(asset.stored_name);
+    if (!assetPath) {
+      return fail(response, 404, "LISTING_MEDIA_NOT_FOUND", "Listing image not found.");
+    }
+    await fs.promises.access(assetPath, fs.constants.R_OK);
+    response.setHeader("Content-Type", asset.content_type);
+    response.setHeader("Content-Length", String(asset.size_bytes));
+    response.setHeader("ETag", `"${asset.checksum_sha256}"`);
+    response.setHeader("Cache-Control", "public, max-age=86400, immutable");
+    response.setHeader(
+      "Content-Disposition",
+      `inline; filename="${String(asset.original_name).replace(/["\r\n]/g, "_")}"`,
+    );
+    return response.sendFile(assetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return fail(response, 404, "LISTING_MEDIA_NOT_FOUND", "Listing image not found.");
+    }
+    return next(error);
   }
 });
 

@@ -8,6 +8,7 @@ const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const { pool, query } = require("../config/database");
 const notificationService = require("../services/notification.service");
+const { publicBackendUrl } = require("../utils/managedAssetUrl");
 
 const router = express.Router();
 const PUBLIC_ORGANIZATION_ID =
@@ -88,6 +89,14 @@ const claimEvidenceUpload = multer({
   storage: multer.memoryStorage(),
   limits: { files: 1, fileSize: MAX_CLAIM_EVIDENCE_BYTES, fields: 10 },
 });
+const LISTING_MEDIA_ROOT = path.resolve(
+  process.env.GOODFLEET_MANAGED_ASSET_DIR ||
+    "/var/lib/goodbase/goodfleet-managed-assets",
+);
+const listingMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 10 * 1024 * 1024, fields: 4 },
+});
 
 router.use(authRequired);
 
@@ -111,6 +120,26 @@ function receiveClaimEvidence(request, response, next) {
       400,
       "CLAIM_EVIDENCE_UPLOAD_FAILED",
       error.message || "Claim evidence upload failed.",
+    );
+  });
+}
+
+function receiveListingMedia(request, response, next) {
+  listingMediaUpload.single("photo")(request, response, error => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return fail(
+        response,
+        413,
+        "LISTING_PHOTO_TOO_LARGE",
+        "Listing photos must be 10 MB or smaller.",
+      );
+    }
+    return fail(
+      response,
+      400,
+      "LISTING_PHOTO_UPLOAD_FAILED",
+      error.message || "Listing photo upload failed.",
     );
   });
 }
@@ -153,6 +182,15 @@ function safeClaimEvidencePath(fileName) {
   if (!normalized || normalized !== fileName) return null;
   const resolved = path.resolve(CLAIM_EVIDENCE_ROOT, normalized);
   return resolved.startsWith(`${CLAIM_EVIDENCE_ROOT}${path.sep}`)
+    ? resolved
+    : null;
+}
+
+function safeListingMediaPath(fileName) {
+  const normalized = path.basename(String(fileName || ""));
+  if (!normalized || normalized !== fileName) return null;
+  const resolved = path.resolve(LISTING_MEDIA_ROOT, normalized);
+  return resolved.startsWith(`${LISTING_MEDIA_ROOT}${path.sep}`)
     ? resolved
     : null;
 }
@@ -4419,6 +4457,180 @@ router.patch(
     } catch (error) {
       await client.query("ROLLBACK");
       next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+router.post(
+  "/host/listings/:listingId/photos",
+  requireHost,
+  receiveListingMedia,
+  async (request, response, next) => {
+    const client = await pool.connect();
+    let finalPath = null;
+    try {
+      if (!request.file?.buffer) {
+        return fail(
+          response,
+          400,
+          "LISTING_PHOTO_REQUIRED",
+          "Choose a JPEG, PNG, or WebP vehicle photo.",
+        );
+      }
+      const detected = claimEvidenceFileType(request.file);
+      if (!detected || detected.evidenceType !== "photo") {
+        return fail(
+          response,
+          415,
+          "LISTING_PHOTO_INVALID",
+          "Use a JPEG, PNG, or WebP vehicle photo.",
+        );
+      }
+      await client.query("BEGIN");
+      const existing = await client.query(
+        `SELECT listing.id,listing.vehicle_id,listing.photos_json,
+                host.user_id
+           FROM fleet_vehicle_listings listing
+           JOIN fleet_host_profiles host
+             ON host.organization_id=listing.organization_id
+            AND host.id=listing.host_profile_id
+          WHERE listing.organization_id=$1
+            AND listing.id=$2
+            AND listing.archived_at IS NULL
+            AND (
+              host.user_id=$3 OR EXISTS (
+                SELECT 1
+                  FROM fleet_host_team_members member
+                 WHERE member.organization_id=host.organization_id
+                   AND member.host_profile_id=host.id
+                   AND member.status='active'
+                   AND (member.user_id=$3 OR lower(member.invited_email)=lower($4))
+                   AND member.permissions_json ? 'listing_manage'
+                   AND (
+                     NOT EXISTS (
+                       SELECT 1
+                         FROM fleet_host_team_vehicle_access scoped
+                        WHERE scoped.organization_id=member.organization_id
+                          AND scoped.team_member_id=member.id
+                     ) OR EXISTS (
+                       SELECT 1
+                         FROM fleet_host_team_vehicle_access scoped
+                        WHERE scoped.organization_id=member.organization_id
+                          AND scoped.team_member_id=member.id
+                          AND scoped.vehicle_id=listing.vehicle_id
+                     )
+                   )
+              )
+            )
+          FOR UPDATE OF listing`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          request.params.listingId,
+          request.user.id,
+          clean(request.user.email, 320),
+        ],
+      );
+      if (!existing.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          404,
+          "LISTING_NOT_FOUND",
+          "Host listing not found.",
+        );
+      }
+      const current = existing.rows[0];
+      const currentPhotos = listingPhotos(current.photos_json);
+      if (currentPhotos.length >= 20) {
+        await client.query("ROLLBACK");
+        return fail(
+          response,
+          409,
+          "LISTING_PHOTO_LIMIT",
+          "A listing can store up to 20 photos.",
+        );
+      }
+
+      await fs.promises.mkdir(LISTING_MEDIA_ROOT, {
+        recursive: true,
+        mode: 0o750,
+      });
+      const storedName =
+        `${PUBLIC_ORGANIZATION_ID}-${crypto.randomUUID()}.${detected.extension}`;
+      finalPath = safeListingMediaPath(storedName);
+      const temporaryPath = `${finalPath}.uploading`;
+      await fs.promises.writeFile(temporaryPath, request.file.buffer, {
+        mode: 0o640,
+        flag: "wx",
+      });
+      await fs.promises.rename(temporaryPath, finalPath);
+      const checksum = crypto
+        .createHash("sha256")
+        .update(request.file.buffer)
+        .digest("hex");
+      const asset = await client.query(
+        `INSERT INTO fleet_managed_assets
+          (organization_id,category,entity_type,entity_id,original_name,
+           stored_name,content_type,size_bytes,checksum_sha256,uploaded_by)
+         VALUES ($1,'vehicle_image','vehicle',$2,$3,$4,$5,$6,$7,$8)
+         RETURNING *`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          current.vehicle_id,
+          clean(request.file.originalname, 255) || `vehicle.${detected.extension}`,
+          storedName,
+          detected.mimeType,
+          request.file.buffer.length,
+          checksum,
+          request.user.id,
+        ],
+      );
+      const publicUrl =
+        `${publicBackendUrl()}/api/fleet/v1/public/listing-media/` +
+        encodeURIComponent(asset.rows[0].id);
+      const photos = [...currentPhotos, publicUrl];
+      await client.query(
+        `UPDATE fleet_vehicle_listings
+            SET photos_json=$3::jsonb,updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2`,
+        [PUBLIC_ORGANIZATION_ID, current.id, JSON.stringify(photos)],
+      );
+      await client.query(
+        `UPDATE fleet_vehicles
+            SET payload=payload||$3::jsonb,updated_by=$4,updated_at=NOW()
+          WHERE organization_id=$1 AND id=$2`,
+        [
+          PUBLIC_ORGANIZATION_ID,
+          current.vehicle_id,
+          JSON.stringify({ imageUrl: photos[0] || null }),
+          request.user.id,
+        ],
+      );
+      await audit(
+        client,
+        request,
+        PUBLIC_ORGANIZATION_ID,
+        "marketplace.host.listing_photo_uploaded",
+        "vehicle_listing",
+        current.id,
+        {
+          assetId: asset.rows[0].id,
+          checksumSha256: checksum,
+          photoCount: photos.length,
+        },
+      );
+      const hydrated = await marketplaceListing(client, current.id);
+      await client.query("COMMIT");
+      return response.status(201).json({
+        success: true,
+        data: listingPayload(hydrated),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      if (finalPath) await fs.promises.unlink(finalPath).catch(() => {});
+      return next(error);
     } finally {
       client.release();
     }

@@ -456,7 +456,7 @@ function marketplaceVehicleReadiness(row) {
   if (row.listing_id && !row.operator_managed && !row.host_ready) {
     blockers.push("host_verification_required");
   }
-  if (Number(row.photo_count || 0) < 3) warnings.push("listing_photos_incomplete");
+  if (Number(row.photo_count || 0) < 6) blockers.push("listing_photos_incomplete");
 
   return {
     vehicleId: row.vehicle_id,
