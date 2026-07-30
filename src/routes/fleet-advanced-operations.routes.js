@@ -415,6 +415,231 @@ async function providerRequest(configuration, path, input) {
   }
 }
 
+async function providerReadiness(kind) {
+  try {
+    const configuration = await providerConfiguration(kind);
+    return {
+      configured: Boolean(configuration),
+      state: configuration ? "ready" : "external_activation_required",
+      mode:
+        kind === "roadside"
+          ? configuration ? "live" : "intake_only"
+          : configuration ? "live" : "disabled",
+      configurationValid: true,
+    };
+  } catch (error) {
+    return {
+      configured: false,
+      state: "misconfigured",
+      mode: kind === "roadside" ? "intake_only" : "disabled",
+      configurationValid: false,
+      errorCode: clean(error?.code, 120) || "PROVIDER_CONFIGURATION_INVALID",
+    };
+  }
+}
+
+function marketplaceVehicleReadiness(row) {
+  const blockers = [];
+  const warnings = [];
+  if (!row.listing_id) blockers.push("listing_missing");
+  else if (row.listing_status !== "active" || row.listing_archived) blockers.push("listing_not_active");
+  if (!["available", "reserved"].includes(row.vehicle_status)) blockers.push("vehicle_not_available");
+  if (!row.registration_current) {
+    blockers.push(row.registration_expiry ? "registration_expired" : "registration_expiry_missing");
+  }
+  if (!row.insurance_current) {
+    blockers.push(row.insurance_expiry ? "insurance_expired" : "insurance_expiry_missing");
+  }
+  if (!["clear", "resolved"].includes(clean(row.recall_status, 40).toLowerCase() || "clear")) {
+    blockers.push("recall_not_cleared");
+  }
+  if (row.listing_id && !row.operator_managed && !row.host_ready) {
+    blockers.push("host_verification_required");
+  }
+  if (Number(row.photo_count || 0) < 3) warnings.push("listing_photos_incomplete");
+
+  return {
+    vehicleId: row.vehicle_id,
+    vehicleName: [row.model_year, row.make, row.model].filter(Boolean).join(" "),
+    listingId: row.listing_id || null,
+    vehicleStatus: row.vehicle_status,
+    listingStatus: row.listing_status || "missing",
+    registrationExpiry: row.registration_expiry || null,
+    insuranceExpiry: row.insurance_expiry || null,
+    photoCount: Number(row.photo_count || 0),
+    bookable: blockers.length === 0,
+    blockers,
+    warnings,
+  };
+}
+
+router.get("/integrations/readiness", requireManagement, async (_request, response, next) => {
+  try {
+    const [
+      roadside,
+      telematics,
+      inventoryResult,
+      socialResult,
+      smsResult,
+      connectionResult,
+    ] = await Promise.all([
+      providerReadiness("roadside"),
+      providerReadiness("telematics"),
+      query(
+        `SELECT vehicle.id AS vehicle_id,vehicle.make,vehicle.model,vehicle.model_year,
+                vehicle.status AS vehicle_status,vehicle.registration_expiry,
+                vehicle.insurance_expiry,
+                COALESCE(vehicle.payload->>'recallStatus','clear') AS recall_status,
+                vehicle.registration_expiry IS NOT NULL
+                  AND vehicle.registration_expiry>=CURRENT_DATE AS registration_current,
+                vehicle.insurance_expiry IS NOT NULL
+                  AND vehicle.insurance_expiry>=CURRENT_DATE AS insurance_current,
+                listing.id AS listing_id,listing.status AS listing_status,
+                listing.archived_at IS NOT NULL AS listing_archived,
+                COALESCE(listing.operator_managed,false) AS operator_managed,
+                COALESCE(
+                  CASE
+                    WHEN jsonb_typeof(listing.photos_json)='array'
+                    THEN jsonb_array_length(listing.photos_json)
+                    ELSE 0
+                  END,
+                  0
+                )::integer AS photo_count,
+                COALESCE(
+                  host.status='active' AND host.identity_verification_status='verified',
+                  false
+                ) AS host_ready
+           FROM fleet_vehicles vehicle
+           LEFT JOIN fleet_vehicle_listings listing
+             ON listing.organization_id=vehicle.organization_id
+            AND listing.vehicle_id=vehicle.id
+            AND listing.archived_at IS NULL
+           LEFT JOIN fleet_host_profiles host
+             ON host.organization_id=listing.organization_id
+            AND host.id=listing.host_profile_id
+          WHERE vehicle.organization_id=$1
+            AND vehicle.archived_at IS NULL
+          ORDER BY vehicle.make,vehicle.model`,
+        [ORGANIZATION_ID],
+      ),
+      query(
+        `SELECT id,provider_type,display_name,status,
+                controller_url IS NOT NULL AS controller_configured,
+                secret_ref IS NOT NULL AS secret_configured,
+                updated_at
+           FROM goodbase_consumer_auth_providers
+          WHERE organization_id=$1
+            AND provider_type IN ('google','apple','microsoft')
+          ORDER BY display_name`,
+        [ORGANIZATION_ID],
+      ),
+      query(
+        `SELECT EXISTS (
+           SELECT 1
+             FROM goodbase_consumer_auth_providers provider
+            WHERE provider.organization_id=$1
+              AND provider.provider_type IN ('phone_otp','sms_mfa')
+              AND provider.status='enabled'
+              AND provider.controller_url IS NOT NULL
+              AND provider.secret_ref IS NOT NULL
+         ) AS provider_configured`,
+        [ORGANIZATION_ID],
+      ),
+      query(
+        `SELECT COUNT(*)::integer AS total,
+                COUNT(*) FILTER (WHERE status='connected')::integer AS connected
+           FROM fleet_telematics_connections
+          WHERE organization_id=$1`,
+        [ORGANIZATION_ID],
+      ),
+    ]);
+
+    const vehicles = inventoryResult.rows.map(marketplaceVehicleReadiness);
+    const bookableVehicles = vehicles.filter(vehicle => vehicle.bookable).length;
+    const smsConfigured = Boolean(smsResult.rows[0]?.provider_configured);
+    const socialProviders = socialResult.rows.map(provider => ({
+      id: provider.id,
+      providerType: provider.provider_type,
+      displayName: provider.display_name,
+      status: provider.status,
+      available:
+        provider.status === "enabled" &&
+        provider.controller_configured &&
+        provider.secret_configured,
+      controllerConfigured: provider.controller_configured,
+      secretConfigured: provider.secret_configured,
+      updatedAt: provider.updated_at,
+    }));
+
+    response.json({
+      success: true,
+      data: {
+        generatedAt: new Date().toISOString(),
+        marketplace: {
+          state: bookableVehicles > 0 ? "ready" : "action_required",
+          totalVehicles: vehicles.length,
+          bookableVehicles,
+          blockedVehicles: vehicles.length - bookableVehicles,
+          vehicles,
+        },
+        customerSms: {
+          state: smsConfigured ? "ready" : "external_activation_required",
+          softwareReady: true,
+          providerConfigured: smsConfigured,
+          requiredConfiguration: [
+            "Enabled phone or SMS provider",
+            "Verified HTTPS controller",
+            "Encrypted provider secret",
+          ],
+        },
+        roadside: {
+          ...roadside,
+          softwareReady: true,
+          requiredSecrets: [
+            "GOODFLEET_ROADSIDE_PROVIDER_URL",
+            "GOODFLEET_ROADSIDE_PROVIDER_TOKEN",
+          ],
+        },
+        telematics: {
+          ...telematics,
+          softwareReady: true,
+          connections: connectionResult.rows[0] || { total: 0, connected: 0 },
+          requiredSecrets: [
+            "GOODFLEET_TELEMATICS_PROVIDER_URL",
+            "GOODFLEET_TELEMATICS_PROVIDER_TOKEN",
+          ],
+        },
+        socialSignIn: {
+          state: socialProviders.some(provider => provider.available)
+            ? "ready"
+            : "external_activation_required",
+          providers: socialProviders,
+        },
+        identityVerification: {
+          state: "ready_manual",
+          softwareReady: true,
+          mode: "management_review",
+          externalAutomationConfigured: false,
+        },
+        insuranceVerification: {
+          state: "ready_manual",
+          softwareReady: true,
+          mode: "document_review",
+          externalAutomationConfigured: false,
+        },
+        claims: {
+          state: "ready_internal",
+          softwareReady: true,
+          mode: "internal_case_management",
+          externalInsurerConfigured: false,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/host-team", requireHost, async (request, response, next) => {
   const client = await pool.connect();
   try {
