@@ -29,6 +29,7 @@ const allowedOrigins = [
   "https://swapz.goodos.app",
   "https://trust.goodos.app",
   "https://goodfleet.us",
+  "https://localhost",
   "https://thirddegreeclothing.com",
   "https://ghostcreationz.com",
   "http://localhost:5173",

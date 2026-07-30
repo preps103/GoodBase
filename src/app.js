@@ -345,6 +345,7 @@ const allowedOrigins = [
   "https://speech.goodos.app",
   "https://swapz.goodos.app",
   "https://trust.goodos.app",
+  "https://localhost",
 ];
 
 function isAllowedOrigin(origin) {
