@@ -101,6 +101,12 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /router\.patch\("\/vehicles\/:vehicleId"/);
   assert.match(routes, /router\.patch\("\/customers\/:customerId"/);
   assert.match(routes, /router\.patch\("\/bookings\/:bookingId"/);
+  assert.match(routes, /router\.delete\("\/bookings\/:bookingId", requireBookingManager/);
+  assert.match(routes, /BOOKING_DELETE_ACCESS_REQUIRED/);
+  assert.match(routes, /ACTIVE_RENTAL_CANNOT_BE_DELETED/);
+  assert.match(routes, /SET status='cancelled',archived_at=NOW\(\)/);
+  assert.match(routes, /booking\.deleted/);
+  assert.match(routes, /vehicle\.reservation_released/);
   assert.match(routes, /router\.post\("\/bookings\/quote"/);
   assert.match(routes, /router\.post\("\/bookings\/:bookingId\/extensions"/);
   assert.match(routes, /calculateBookingPrice/);

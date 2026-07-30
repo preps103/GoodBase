@@ -49,6 +49,7 @@ const LICENSE_VERIFIER_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const OWNER_ROLES = new Set(["owner", "admin"]);
 const FLEET_EDITOR_ROLES = new Set(["owner", "admin", "manager"]);
 const BOOKING_EDITOR_ROLES = new Set(["owner", "admin", "manager", "staff"]);
+const BOOKING_DELETE_ROLES = new Set(["owner", "admin", "manager"]);
 const MANAGEMENT_RETURN_OVERRIDE_ROLES = new Set(["owner", "admin", "manager"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
@@ -132,6 +133,13 @@ function requireFleetEditor(request, response, next) {
 function requireBookingEditor(request, response, next) {
   if (!BOOKING_EDITOR_ROLES.has(goodFleetAccessRole(request))) {
     return fail(response, 403, "BOOKING_EDIT_ACCESS_REQUIRED", "Reservation desk access is required.");
+  }
+  return next();
+}
+
+function requireBookingManager(request, response, next) {
+  if (!BOOKING_DELETE_ROLES.has(goodFleetAccessRole(request))) {
+    return fail(response, 403, "BOOKING_DELETE_ACCESS_REQUIRED", "Management access is required to delete a reservation.");
   }
   return next();
 }
@@ -2292,6 +2300,133 @@ router.patch("/bookings/:bookingId", requireBookingEditor, async (request, respo
     if (error.code === "23505") return fail(response, 409, "RESERVATION_ALREADY_EXISTS", "Reservation number already exists.");
     next(error);
   } finally { client.release(); }
+});
+
+router.delete("/bookings/:bookingId", requireBookingManager, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM fleet_bookings
+       WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+       FOR UPDATE`,
+      [org, request.params.bookingId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    }
+
+    const before = bookingPayload(existing.rows[0]);
+    if (["checked_out", "extended", "overdue"].includes(before.status)) {
+      await client.query("ROLLBACK");
+      return fail(
+        response,
+        409,
+        "ACTIVE_RENTAL_CANNOT_BE_DELETED",
+        "Complete the vehicle return before deleting this active rental."
+      );
+    }
+
+    const deletedAt = new Date().toISOString();
+    const deletionReason = text(request.body?.reason, 500) || "Deleted by management";
+    const deletionRecord = {
+      deleted: true,
+      archived: true,
+      deletedAt,
+      deletedBy: actor(request),
+      deletedByRole: goodFleetAccessRole(request),
+      deletionReason,
+      previousStatus: before.status
+    };
+    const storedPayload = cleanPayload({
+      ...(existing.rows[0].payload || {}),
+      ...deletionRecord
+    });
+
+    await client.query(
+      `UPDATE fleet_bookings
+       SET status='cancelled',archived_at=NOW(),payload=$3::jsonb,
+           version=version+1,updated_by=$4,updated_at=NOW()
+       WHERE organization_id=$1 AND id=$2`,
+      [org, request.params.bookingId, JSON.stringify(storedPayload), actor(request)]
+    );
+
+    let releasedVehicleId = null;
+    if (before.carId) {
+      const vehicle = await client.query(
+        `SELECT * FROM fleet_vehicles
+         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+         FOR UPDATE`,
+        [org, before.carId]
+      );
+      if (vehicle.rowCount && vehicle.rows[0].status === "reserved") {
+        const otherReservation = await client.query(
+          `SELECT id FROM fleet_bookings
+           WHERE organization_id=$1 AND vehicle_id=$2 AND id<>$3
+             AND archived_at IS NULL AND status=ANY($4::text[])
+           LIMIT 1`,
+          [org, before.carId, request.params.bookingId, ACTIVE_BOOKING_STATUSES]
+        );
+        if (!otherReservation.rowCount) {
+          const vehicleBefore = vehiclePayload(vehicle.rows[0]);
+          await client.query(
+            `UPDATE fleet_vehicles
+             SET status='available',version=version+1,updated_by=$3,updated_at=NOW()
+             WHERE organization_id=$1 AND id=$2`,
+            [org, before.carId, actor(request)]
+          );
+          releasedVehicleId = before.carId;
+          await audit(
+            client,
+            request,
+            "vehicle.reservation_released",
+            "vehicle",
+            before.carId,
+            vehicleBefore,
+            {
+              id: before.carId,
+              status: "available",
+              bookingId: before.id,
+              details: `Vehicle released after deleting reservation ${before.reservationNumber}`
+            }
+          );
+        }
+      }
+    }
+
+    await audit(
+      client,
+      request,
+      "booking.deleted",
+      "booking",
+      before.id,
+      before,
+      {
+        id: before.id,
+        reservationNumber: before.reservationNumber,
+        ...deletionRecord,
+        details: `Reservation ${before.reservationNumber} removed from active booking records`
+      }
+    );
+    await client.query("COMMIT");
+    return response.json({
+      success: true,
+      data: {
+        id: before.id,
+        reservationNumber: before.reservationNumber,
+        deleted: true,
+        archived: true,
+        releasedVehicleId
+      }
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
 });
 
 module.exports = router;
