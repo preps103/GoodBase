@@ -53,6 +53,7 @@ const REQUIRED_TABLES = [
   "fleet_trip_reviews",
   "fleet_vehicle_listings",
   "fleet_vehicles",
+  "fleet_workspace_revisions",
   "fleet_workspace_state",
 ];
 
@@ -196,6 +197,96 @@ async function integrity(client) {
   );
 }
 
+async function operationalIntegrity(client) {
+  const result = await client.query(
+    `SELECT
+       (SELECT COUNT(*)::integer
+          FROM fleet_workspace_state workspace
+          LEFT JOIN fleet_workspace_revisions revision
+            ON revision.organization_id=workspace.organization_id
+           AND revision.workspace_version=workspace.version
+           AND revision.state_json=workspace.state_json
+         WHERE workspace.organization_id=$1
+           AND revision.id IS NULL) AS current_workspace_without_revision,
+       (SELECT COUNT(*)::integer
+          FROM fleet_bookings booking
+         WHERE booking.organization_id=$1
+           AND booking.archived_at IS NULL
+           AND (
+             booking.paid_amount > booking.total_amount
+             OR (booking.payment_status='paid' AND booking.paid_amount < booking.total_amount)
+             OR (booking.payment_status='unpaid' AND booking.paid_amount > 0)
+           )) AS booking_financial_mismatches,
+       (SELECT COUNT(*)::integer
+          FROM fleet_bookings booking
+          JOIN fleet_vehicles vehicle
+            ON vehicle.organization_id=booking.organization_id
+           AND vehicle.id=booking.vehicle_id
+         WHERE booking.organization_id=$1
+           AND booking.archived_at IS NULL
+           AND booking.status IN ('checked_out','extended','overdue')
+           AND vehicle.status NOT IN ('checked_out','in_transit')) AS active_rental_vehicle_mismatches,
+       (SELECT COUNT(*)::integer
+          FROM fleet_contract_envelopes envelope
+         WHERE envelope.organization_id=$1
+           AND envelope.status='completed'
+           AND (
+             envelope.completed_at IS NULL
+             OR envelope.completed_record_hash IS NULL
+             OR NOT EXISTS (
+               SELECT 1
+                 FROM fleet_contract_recipients recipient
+                WHERE recipient.organization_id=envelope.organization_id
+                  AND recipient.envelope_id=envelope.id
+                  AND recipient.status='signed'
+                  AND recipient.signed_at IS NOT NULL
+                  AND recipient.signature_hash IS NOT NULL
+             )
+           )) AS incomplete_completed_contracts,
+       (SELECT COUNT(*)::integer
+          FROM fleet_condition_reports report
+         WHERE report.organization_id=$1
+           AND report.status IN ('submitted','reviewed')
+           AND (
+             report.submitted_at IS NULL
+             OR report.mileage IS NULL
+             OR report.fuel_level IS NULL
+             OR (
+               SELECT COUNT(DISTINCT photo.slot)
+                 FROM fleet_condition_photos photo
+                WHERE photo.organization_id=report.organization_id
+                  AND photo.report_id=report.id
+                  AND photo.slot IN (
+                    'front','rear','driver_side','passenger_side','dashboard',
+                    'front_interior','rear_interior'
+                  )
+             ) < 7
+           )) AS incomplete_submitted_condition_reports,
+       (SELECT COUNT(*)::integer
+          FROM fleet_customer_notifications notification
+          CROSS JOIN LATERAL unnest(notification.channels) requested_channel
+          LEFT JOIN fleet_customer_notification_deliveries delivery
+            ON delivery.notification_id=notification.id
+           AND delivery.channel=requested_channel
+         WHERE notification.organization_id=$1
+           AND delivery.id IS NULL) AS notification_channels_without_delivery,
+       (SELECT COUNT(*)::integer
+          FROM fleet_bookings booking
+         WHERE booking.organization_id=$1
+           AND booking.archived_at IS NULL
+           AND booking.status='completed'
+           AND COALESCE(
+             NULLIF(booking.payload->>'actualReturnAt',''),
+             NULLIF(booking.payload->>'returnInspectionCompletedAt',''),
+             NULLIF(booking.payload->>'returnInspectionRequiredAt','')
+           ) IS NULL) AS completed_bookings_without_return_record`,
+    [ORGANIZATION_ID],
+  );
+  return Object.fromEntries(
+    Object.entries(result.rows[0] || {}).map(([key, value]) => [key, Number(value)]),
+  );
+}
+
 async function inventory(client) {
   const result = await client.query(
     `SELECT vehicle.id AS vehicle_id,
@@ -325,11 +416,14 @@ async function main() {
     const tables = await tableInventory(client);
     const schemaConstraints = await constraints(client);
     const dataIntegrity = await integrity(client);
+    const operations = await operationalIntegrity(client);
     const vehicles = await inventory(client);
     const providers = await providerState(client);
     await client.query("COMMIT");
 
     const integrityFailures = Object.values(dataIntegrity)
+      .reduce((sum, value) => sum + Number(value), 0);
+    const operationalFailures = Object.values(operations)
       .reduce((sum, value) => sum + Number(value), 0);
     const report = {
       audit: "GoodFleet production readiness",
@@ -339,10 +433,12 @@ async function main() {
         tables,
         constraints: schemaConstraints,
         integrity: dataIntegrity,
+        operations,
         healthy:
           tables.missing.length === 0 &&
           schemaConstraints.invalid === 0 &&
-          integrityFailures === 0,
+          integrityFailures === 0 &&
+          operationalFailures === 0,
       },
       inventory: {
         total: vehicles.length,
@@ -353,7 +449,8 @@ async function main() {
       paymentExcludedReadiness:
         tables.missing.length === 0 &&
         schemaConstraints.invalid === 0 &&
-        integrityFailures === 0,
+        integrityFailures === 0 &&
+        operationalFailures === 0,
     };
 
     console.log(JSON.stringify(report, null, 2));
