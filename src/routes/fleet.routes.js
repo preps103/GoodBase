@@ -478,16 +478,16 @@ async function recordWorkspaceRevision(client, {
        created_at
      )
      SELECT
-       $1,
-       $2,
+       $1::text,
+       $2::integer,
        $3::jsonb,
        $4::jsonb,
-       $5,
-       $6,
+       $5::text,
+       $6::uuid,
        prior.revision_hash,
        encode(
          digest(
-           $1 || '|' || $2::text || '|' ||
+           $1::text || '|' || $2::integer::text || '|' ||
            COALESCE(prior.revision_hash, '') || '|' ||
            $3::jsonb::text,
            'sha256'
