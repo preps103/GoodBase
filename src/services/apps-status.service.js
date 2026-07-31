@@ -40,6 +40,14 @@ let cachedResult = null;
 let cacheExpiresAt = 0;
 let inFlight = null;
 
+function isReachableHttpStatus(status) {
+  return (
+    (status >= 200 && status < 400) ||
+    status === 401 ||
+    status === 403
+  );
+}
+
 function approvedHealthUrl(value) {
   if (!value) return null;
 
@@ -242,8 +250,9 @@ async function checkHealth(value) {
     return {
       url: healthUrl,
       ok:
-        response.status >= 200 &&
-        response.status < 400,
+        isReachableHttpStatus(
+          response.status
+        ),
       httpStatus:
         response.status,
       responseMs,
@@ -368,6 +377,13 @@ function statusReason(
   health
 ) {
   if (status === "online") {
+    if (
+      health.httpStatus === 401 ||
+      health.httpStatus === 403
+    ) {
+      return `HTTP ${health.httpStatus}; access-controlled service reachable.`;
+    }
+
     return runtime
       ? `HTTP ${health.httpStatus}; PM2 online.`
       : `HTTP ${health.httpStatus}; public service reachable.`;
@@ -720,4 +736,5 @@ async function getLiveAppsStatus({
 
 module.exports = {
   getLiveAppsStatus,
+  isReachableHttpStatus,
 };
