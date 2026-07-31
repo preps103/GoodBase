@@ -54,6 +54,8 @@ test("GoodFleet retains immutable workspace recovery points and owner restore co
   assert.match(routes, /router\.get\("\/workspace\/revisions"/);
   assert.match(routes, /router\.post\("\/workspace\/revisions\/:revisionId\/restore"/);
   assert.match(routes, /async function recordWorkspaceRevision/);
+  assert.match(routes, /\$2::integer/);
+  assert.match(routes, /\$6::uuid/);
   assert.match(routes, /source: "save"/);
   assert.match(routes, /source: "branch_delete"/);
   assert.match(routes, /source: "restore"/);
