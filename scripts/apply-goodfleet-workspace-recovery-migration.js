@@ -16,12 +16,6 @@ async function schemaState(client) {
        EXISTS (
          SELECT 1
            FROM pg_trigger
-          WHERE tgname='fleet_workspace_revision_capture'
-            AND NOT tgisinternal
-       ) AS capture_trigger,
-       EXISTS (
-         SELECT 1
-           FROM pg_trigger
           WHERE tgname='fleet_workspace_revision_append_only'
             AND NOT tgisinternal
        ) AS append_only_trigger,
@@ -42,7 +36,6 @@ async function schemaState(client) {
 
 function ready(state) {
   return state.revisions === true &&
-    state.capture_trigger === true &&
     state.append_only_trigger === true &&
     state.current_workspace_captured === true;
 }

@@ -449,6 +449,67 @@ function workspaceRevisionPayload(row, includeState = false) {
   };
 }
 
+async function recordWorkspaceRevision(client, {
+  organizationId,
+  version,
+  state,
+  changedSections,
+  source,
+  actorId,
+  createdAt
+}) {
+  await client.query(
+    `WITH prior AS (
+       SELECT revision_hash
+         FROM fleet_workspace_revisions
+        WHERE organization_id=$1
+        ORDER BY workspace_version DESC
+        LIMIT 1
+     )
+     INSERT INTO fleet_workspace_revisions (
+       organization_id,
+       workspace_version,
+       state_json,
+       changed_sections,
+       change_source,
+       actor_id,
+       previous_revision_hash,
+       revision_hash,
+       created_at
+     )
+     SELECT
+       $1,
+       $2,
+       $3::jsonb,
+       $4::jsonb,
+       $5,
+       $6,
+       prior.revision_hash,
+       encode(
+         digest(
+           $1 || '|' || $2::text || '|' ||
+           COALESCE(prior.revision_hash, '') || '|' ||
+           $3::jsonb::text,
+           'sha256'
+         ),
+         'hex'
+       ),
+       COALESCE($7::timestamptz, NOW())
+     FROM (SELECT 1) seed
+     LEFT JOIN prior ON true
+     ON CONFLICT (organization_id, workspace_version) DO NOTHING`,
+    [
+      organizationId,
+      version,
+      JSON.stringify(state || {}),
+      JSON.stringify(changedSections || []),
+      source,
+      actorId,
+      createdAt || null
+    ]
+  );
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (value && typeof value === "object") {
@@ -1181,9 +1242,6 @@ router.post("/workspace/revisions/:revisionId/restore", requireOwner, async (req
 
     const previousState = current.rows[0].state_json || {};
     const restoredState = sanitizeWorkspace(revision.rows[0].state_json || {});
-    await client.query(
-      `SELECT set_config('goodfleet.workspace_change_source','restore',true)`
-    );
     const saved = await client.query(
       `UPDATE fleet_workspace_state
           SET state_json=$2::jsonb,version=version+1,updated_by=$3,updated_at=NOW()
@@ -1198,6 +1256,15 @@ router.post("/workspace/revisions/:revisionId/restore", requireOwner, async (req
       previousState,
       result.state_json
     );
+    await recordWorkspaceRevision(client, {
+      organizationId: org,
+      version: result.version,
+      state: result.state_json,
+      changedSections,
+      source: "restore",
+      actorId: actor(request),
+      createdAt: result.updated_at
+    });
     await audit(client, request, "workspace.restored", "workspace", org, {
       version: currentVersion
     }, {
@@ -1265,9 +1332,6 @@ router.put("/workspace", async (request, response, next) => {
         }
       }
     }
-    await client.query(
-      `SELECT set_config('goodfleet.workspace_change_source','save',true)`
-    );
     const saved = current.rowCount
       ? await client.query(
         `UPDATE fleet_workspace_state
@@ -1288,6 +1352,15 @@ router.put("/workspace", async (request, response, next) => {
       previousState,
       result.state_json
     );
+    await recordWorkspaceRevision(client, {
+      organizationId: org,
+      version: result.version,
+      state: result.state_json,
+      changedSections,
+      source: "save",
+      actorId: actor(request),
+      createdAt: result.updated_at
+    });
     await audit(client, request, "workspace.updated", "workspace", org, null, {
       version: result.version,
       changedSections,
@@ -1387,9 +1460,6 @@ router.delete("/branches/:branchId", requireFleetEditor, async (request, respons
       ...previousState,
       branches: branches.filter(item => text(item?.id, 200) !== branchId)
     };
-    await client.query(
-      `SELECT set_config('goodfleet.workspace_change_source','branch_delete',true)`
-    );
     const saved = await client.query(
       `UPDATE fleet_workspace_state
        SET state_json=$2::jsonb,version=version+1,updated_by=$3,updated_at=NOW()
@@ -1403,6 +1473,15 @@ router.delete("/branches/:branchId", requireFleetEditor, async (request, respons
       previousState,
       result.state_json
     );
+    await recordWorkspaceRevision(client, {
+      organizationId: org,
+      version: result.version,
+      state: result.state_json,
+      changedSections,
+      source: "branch_delete",
+      actorId: actor(request),
+      createdAt: result.updated_at
+    });
     await audit(client, request, "workspace.updated", "workspace", org, null, {
       version: result.version,
       changedSections,
