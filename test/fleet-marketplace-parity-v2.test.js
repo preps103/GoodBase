@@ -61,6 +61,9 @@ test("customer notification delivery includes encrypted SMS queueing and diagnos
   assert.match(routes, /\/sms-readiness/);
   assert.match(routes, /providerConfigured/);
   assert.match(routes, /workerReady/);
+  assert.match(routes, /backend_worker_heartbeats/);
+  assert.match(routes, /goodbase\.auth\.sms\.dispatch/);
+  assert.match(routes, /canSend/);
 });
 
 test("production build applies and verifies the marketplace parity migration", () => {
