@@ -50,6 +50,7 @@ const OWNER_ROLES = new Set(["owner", "admin"]);
 const FLEET_EDITOR_ROLES = new Set(["owner", "admin", "manager"]);
 const BOOKING_EDITOR_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const BOOKING_DELETE_ROLES = new Set(["owner", "admin", "manager"]);
+const CUSTOMER_DELETE_ROLES = new Set(["owner", "admin", "manager"]);
 const MANAGEMENT_RETURN_OVERRIDE_ROLES = new Set(["owner", "admin", "manager"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
@@ -140,6 +141,13 @@ function requireBookingEditor(request, response, next) {
 function requireBookingManager(request, response, next) {
   if (!BOOKING_DELETE_ROLES.has(goodFleetAccessRole(request))) {
     return fail(response, 403, "BOOKING_DELETE_ACCESS_REQUIRED", "Management access is required to delete a reservation.");
+  }
+  return next();
+}
+
+function requireCustomerManager(request, response, next) {
+  if (!CUSTOMER_DELETE_ROLES.has(goodFleetAccessRole(request))) {
+    return fail(response, 403, "CUSTOMER_DELETE_ACCESS_REQUIRED", "Management access is required to delete a customer profile.");
   }
   return next();
 }
@@ -1503,6 +1511,75 @@ router.patch("/customers/:customerId", requireBookingEditor, async (request, res
   } finally { client.release(); }
 });
 
+router.delete("/customers/:customerId", requireCustomerManager, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM fleet_customers
+       WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+       FOR UPDATE`,
+      [org, request.params.customerId]
+    );
+    if (!existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CUSTOMER_NOT_FOUND", "Customer not found.");
+    }
+
+    const activeBooking = await client.query(
+      `SELECT id,reservation_number,status
+       FROM fleet_bookings
+       WHERE organization_id=$1
+         AND customer_id=$2
+         AND archived_at IS NULL
+         AND status=ANY($3::text[])
+       ORDER BY pickup_at ASC
+       LIMIT 1`,
+      [
+        org,
+        request.params.customerId,
+        [...ACTIVE_BOOKING_STATUSES, "quote", "needs_attention"]
+      ]
+    );
+    if (activeBooking.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(
+        response,
+        409,
+        "CUSTOMER_HAS_ACTIVE_BOOKING",
+        "Cancel, complete, or reassign the customer's active reservation before deleting the profile.",
+        {
+          bookingId: activeBooking.rows[0].id,
+          reservationNumber: activeBooking.rows[0].reservation_number,
+          status: activeBooking.rows[0].status
+        }
+      );
+    }
+
+    const before = customerPayload(existing.rows[0]);
+    await client.query(
+      `UPDATE fleet_customers
+       SET status='suspended',archived_at=NOW(),version=version+1,
+           updated_by=$3,updated_at=NOW()
+       WHERE organization_id=$1 AND id=$2`,
+      [org, request.params.customerId, actor(request)]
+    );
+    await audit(client, request, "customer.archived", "customer", request.params.customerId, before, {
+      id: request.params.customerId,
+      archived: true,
+      details: `Customer profile ${before.name} archived`
+    });
+    await client.query("COMMIT");
+    response.json({ success: true, data: { id: request.params.customerId, archived: true } });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/customers/:customerId/license-verification", requireLicenseVerifier, async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -2077,8 +2154,10 @@ router.patch("/bookings/:bookingId", requireBookingEditor, async (request, respo
       merged.returnPhotoOverride = returnPhotoOverride;
     }
     if (returnCompleted) {
+      const actualReturnAt = new Date().toISOString();
+      merged.actualReturnAt = actualReturnAt;
       merged.returnInspectionStatus = "required";
-      merged.returnInspectionRequiredAt = new Date().toISOString();
+      merged.returnInspectionRequiredAt = actualReturnAt;
     }
     const pickupAt = timestamp(merged.startDate, merged.pickupTime, "pickupAt");
     const returnAt = timestamp(merged.endDate, merged.dropoffTime, "returnAt");
