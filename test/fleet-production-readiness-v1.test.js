@@ -41,7 +41,6 @@ test("GoodFleet retains immutable workspace recovery points and owner restore co
   const packageJson = read("package.json");
 
   assert.match(migration, /CREATE TABLE IF NOT EXISTS fleet_workspace_revisions/);
-  assert.match(migration, /CREATE TRIGGER fleet_workspace_revision_capture/);
   assert.match(migration, /CREATE TRIGGER fleet_workspace_revision_append_only/);
   assert.match(migration, /workspace recovery points are append-only/);
   assert.match(migration, /previous_revision_hash/);
@@ -52,6 +51,10 @@ test("GoodFleet retains immutable workspace recovery points and owner restore co
   assert.match(runner, /append_only_trigger/);
   assert.match(routes, /router\.get\("\/workspace\/revisions"/);
   assert.match(routes, /router\.post\("\/workspace\/revisions\/:revisionId\/restore"/);
+  assert.match(routes, /async function recordWorkspaceRevision/);
+  assert.match(routes, /source: "save"/);
+  assert.match(routes, /source: "branch_delete"/);
+  assert.match(routes, /source: "restore"/);
   assert.match(routes, /workspace\.restored/);
   assert.match(
     packageJson,
