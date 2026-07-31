@@ -7,9 +7,17 @@ const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const { pool, query } = require("../config/database");
 const { encryptValue } = require("../services/secret.service");
+const {
+  sha256,
+  contractEventHash,
+  completedContractRecordHash,
+  verifyContractEventChain,
+} = require("../services/fleet-contract-integrity.service");
 
 const router = express.Router();
 const EMPLOYEE_ROLES = new Set(["owner", "admin", "manager", "staff"]);
+const CONTRACT_MANAGER_ROLES = new Set(["owner", "admin", "manager"]);
+const CLOSED_BOOKING_STATUSES = new Set(["completed", "cancelled", "refunded", "no_show"]);
 const TEMPLATE_STATUSES = new Set(["draft", "active", "archived"]);
 const SIGNABLE_ENVELOPE_STATUSES = new Set(["sent", "viewed", "partially_signed"]);
 const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
@@ -29,10 +37,6 @@ function clean(value, max = 4000) {
 
 function fail(response, status, code, message, details) {
   return response.status(status).json({ success: false, code, message, ...(details ? { details } : {}) });
-}
-
-function sha256(value) {
-  return crypto.createHash("sha256").update(String(value)).digest("hex");
 }
 
 function randomToken() {
@@ -69,6 +73,23 @@ function requireEmployee(request, response, next) {
     return fail(response, 403, "CONTRACT_ACCESS_REQUIRED", "GoodFleet contract access is required.");
   }
   return next();
+}
+
+function requireContractManager(request, response, next) {
+  if (!CONTRACT_MANAGER_ROLES.has(membershipRole(request))) {
+    return fail(response, 403, "CONTRACT_MANAGER_REQUIRED", "Owner or manager access is required for this contract action.");
+  }
+  return next();
+}
+
+function branchLabel(workspaceState, branchId) {
+  const id = clean(branchId, 200);
+  const branch = (Array.isArray(workspaceState?.branches) ? workspaceState.branches : [])
+    .find(item => clean(item?.id, 200) === id);
+  if (!branch) return id || "Not assigned";
+  const name = clean(branch.name, 200) || id;
+  const address = clean(branch.address, 500);
+  return address ? `${name} — ${address}` : name;
 }
 
 function employeeScope(request, response, next) {
@@ -123,6 +144,9 @@ function eventPayload(row, includeNetworkEvidence = true) {
     sequence: row.sequence_number,
     type: row.event_type,
     data: row.event_data || {},
+    envelopeId: row.envelope_id,
+    recipientId: row.recipient_id || null,
+    actorUserId: row.actor_user_id || null,
     previousHash: row.previous_event_hash,
     hash: row.event_hash,
     ipAddress: includeNetworkEvidence && row.ip_address ? String(row.ip_address) : undefined,
@@ -138,6 +162,7 @@ async function loadEnvelope(client, envelopeId, org = null, includeEvidence = tr
             booking.reservation_number,booking.customer_id,booking.vehicle_id,
             booking.pickup_at,booking.return_at,booking.pickup_branch_id,booking.return_branch_id,
             booking.total_amount,booking.deposit_amount,
+            workspace.state_json AS workspace_state,
             customer.full_name AS customer_name,customer.email AS customer_email,
             vehicle.make AS vehicle_make,vehicle.model AS vehicle_model,
             vehicle.model_year AS vehicle_year,vehicle.license_plate
@@ -150,6 +175,8 @@ async function loadEnvelope(client, envelopeId, org = null, includeEvidence = tr
          ON customer.organization_id=booking.organization_id AND customer.id=booking.customer_id
        LEFT JOIN fleet_vehicles vehicle
          ON vehicle.organization_id=booking.organization_id AND vehicle.id=booking.vehicle_id
+       LEFT JOIN fleet_workspace_state workspace
+         ON workspace.organization_id=booking.organization_id
       WHERE envelope.id=$1
         AND ($2::text IS NULL OR envelope.organization_id=$2)
       LIMIT 1`,
@@ -157,6 +184,8 @@ async function loadEnvelope(client, envelopeId, org = null, includeEvidence = tr
   );
   if (!envelopeResult.rowCount) return null;
   const envelope = envelopeResult.rows[0];
+  const pickupLocationName = branchLabel(envelope.workspace_state, envelope.pickup_branch_id);
+  const returnLocationName = branchLabel(envelope.workspace_state, envelope.return_branch_id);
   const [recipients, events] = await Promise.all([
     client.query(
       `SELECT * FROM fleet_contract_recipients
@@ -204,6 +233,8 @@ async function loadEnvelope(client, envelopeId, org = null, includeEvidence = tr
       returnAt: envelope.return_at,
       pickupLocationId: envelope.pickup_branch_id,
       returnLocationId: envelope.return_branch_id,
+      pickupLocationName,
+      returnLocationName,
       totalAmount: Number(envelope.total_amount),
       depositAmount: Number(envelope.deposit_amount),
     },
@@ -252,7 +283,7 @@ async function recordEvent(client, {
     previousHash,
     createdAt,
   };
-  const eventHash = sha256(JSON.stringify(eventData));
+  const eventHash = contractEventHash(eventData);
   await client.query(
     `INSERT INTO fleet_contract_events (
        organization_id,envelope_id,recipient_id,actor_user_id,sequence_number,
@@ -274,6 +305,44 @@ async function recordEvent(client, {
     ]
   );
   return { sequence, eventHash, createdAt };
+}
+
+async function expireDueContracts(client, request, organizationId, envelopeId = null) {
+  const due = await client.query(
+    `SELECT id,expires_at
+       FROM fleet_contract_envelopes
+      WHERE organization_id=$1
+        AND ($2::uuid IS NULL OR id=$2)
+        AND status IN ('sent','viewed','partially_signed')
+        AND expires_at IS NOT NULL
+        AND expires_at<=NOW()
+      ORDER BY expires_at,id
+      FOR UPDATE`,
+    [organizationId, envelopeId]
+  );
+  for (const envelope of due.rows) {
+    await client.query(
+      `UPDATE fleet_contract_envelopes
+          SET status='expired',updated_by=$3,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2`,
+      [organizationId, envelope.id, request.user?.id || null]
+    );
+    await client.query(
+      `UPDATE fleet_contract_recipients
+          SET access_token_hash=NULL,access_token_expires_at=NULL,updated_at=NOW()
+        WHERE organization_id=$1 AND envelope_id=$2`,
+      [organizationId, envelope.id]
+    );
+    await recordEvent(client, {
+      request,
+      organizationId,
+      envelopeId: envelope.id,
+      actorUserId: request.user?.id || null,
+      eventType: "envelope.expired",
+      data: { expiresAt: envelope.expires_at },
+    });
+  }
+  return due.rowCount;
 }
 
 function renderTemplate(content, values) {
@@ -562,8 +631,10 @@ async function completeSignature(client, request, recipient, body, actorUserId =
         ORDER BY signing_order`,
       [recipient.organization_id, recipient.envelope_id]
     );
-    const completedRecordHash = sha256(
-      `${recipient.document_hash}|${allSignatures.rows.map(row => row.signature_hash).join("|")}|${completedAt}`
+    const completedRecordHash = completedContractRecordHash(
+      recipient.document_hash,
+      allSignatures.rows.map(row => row.signature_hash),
+      completedAt
     );
     await client.query(
       `UPDATE fleet_contract_envelopes
@@ -869,8 +940,9 @@ router.get("/mine", async (request, response, next) => {
   const client = await pool.connect();
   try {
     const email = clean(request.user?.email, 320).toLowerCase();
+    await client.query("BEGIN");
     const result = await client.query(
-      `SELECT envelope.id
+      `SELECT envelope.id,envelope.organization_id
          FROM fleet_contract_envelopes envelope
          JOIN fleet_contract_recipients recipient
            ON recipient.organization_id=envelope.organization_id
@@ -882,12 +954,15 @@ router.get("/mine", async (request, response, next) => {
     );
     const records = [];
     for (const row of result.rows) {
-      const envelope = await loadEnvelope(client, row.id, null, false);
+      await expireDueContracts(client, request, row.organization_id, row.id);
+      const envelope = await loadEnvelope(client, row.id, row.organization_id, false);
       if (envelope) records.push(envelope);
     }
+    await client.query("COMMIT");
     response.set("Cache-Control", "no-store");
     response.json({ success: true, data: records });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
   } finally {
     client.release();
@@ -927,6 +1002,10 @@ router.post("/mine/:envelopeId/view", async (request, response, next) => {
       id: result.rows[0].recipient_id,
       status: result.rows[0].recipient_status,
     };
+    if (await expireDueContracts(client, request, recipient.organization_id, recipient.envelope_id)) {
+      await client.query("COMMIT");
+      return fail(response, 409, "CONTRACT_EXPIRED", "This agreement has expired. Ask GoodFleet for a new agreement.");
+    }
     if (recipient.status === "sent") {
       await client.query(
         `UPDATE fleet_contract_recipients SET status='viewed',viewed_at=NOW(),updated_at=NOW()
@@ -992,6 +1071,10 @@ router.post("/mine/:envelopeId/complete", async (request, response, next) => {
       id: result.rows[0].recipient_id,
       status: result.rows[0].recipient_status,
     };
+    if (await expireDueContracts(client, request, recipient.organization_id, recipient.envelope_id)) {
+      await client.query("COMMIT");
+      return fail(response, 409, "CONTRACT_EXPIRED", "This agreement has expired. Ask GoodFleet for a new agreement.");
+    }
     await completeSignature(client, request, recipient, request.body || {}, request.user.id);
     await client.query("COMMIT");
     const envelope = await loadEnvelope(client, request.params.envelopeId, recipient.organization_id, false);
@@ -1022,7 +1105,7 @@ router.get("/templates", async (request, response, next) => {
   }
 });
 
-router.post("/templates", async (request, response, next) => {
+router.post("/templates", requireContractManager, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const name = clean(request.body?.name, 160);
@@ -1076,6 +1159,8 @@ router.post("/templates", async (request, response, next) => {
 router.get("/", async (request, response, next) => {
   const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+    await expireDueContracts(client, request, organization(request));
     const result = await client.query(
       `SELECT id FROM fleet_contract_envelopes
         WHERE organization_id=$1
@@ -1088,8 +1173,10 @@ router.get("/", async (request, response, next) => {
       const envelope = await loadEnvelope(client, row.id, organization(request), false);
       if (envelope) records.push(envelope);
     }
+    await client.query("COMMIT");
     response.json({ success: true, data: records });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
   } finally {
     client.release();
@@ -1113,7 +1200,8 @@ router.post("/", async (request, response, next) => {
               vehicle.make AS vehicle_make,vehicle.model AS vehicle_model,
               vehicle.model_year AS vehicle_year,
               template.name AS template_name,template.version AS template_version,
-              template.content_text,template.consumer_disclosure_text
+              template.content_text,template.consumer_disclosure_text,
+              workspace.state_json AS workspace_state
          FROM fleet_bookings booking
          JOIN fleet_customers customer
            ON customer.organization_id=booking.organization_id AND customer.id=booking.customer_id
@@ -1122,6 +1210,8 @@ router.post("/", async (request, response, next) => {
          JOIN fleet_contract_templates template
            ON template.organization_id=booking.organization_id AND template.id=$3
           AND template.status='active'
+         LEFT JOIN fleet_workspace_state workspace
+           ON workspace.organization_id=booking.organization_id
         WHERE booking.organization_id=$1 AND booking.id=$2 AND booking.archived_at IS NULL
         FOR UPDATE OF booking`,
       [organization(request), bookingId, templateId]
@@ -1131,6 +1221,23 @@ router.post("/", async (request, response, next) => {
       return fail(response, 404, "CONTRACT_SOURCE_NOT_FOUND", "Booking or active template not found.");
     }
     const row = source.rows[0];
+    if (CLOSED_BOOKING_STATUSES.has(clean(row.status, 40).toLowerCase())) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CONTRACT_BOOKING_CLOSED", "Create agreements only for active reservations.");
+    }
+    const existing = await client.query(
+      `SELECT id,contract_number,status
+         FROM fleet_contract_envelopes
+        WHERE organization_id=$1 AND booking_id=$2
+          AND status NOT IN ('declined','voided','expired')
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [organization(request), bookingId]
+    );
+    if (existing.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CONTRACT_ALREADY_EXISTS", `Agreement ${existing.rows[0].contract_number} already covers this reservation.`);
+    }
     const contractNumber = `GF-AGR-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
     const values = {
       contract_number: contractNumber,
@@ -1142,7 +1249,8 @@ router.post("/", async (request, response, next) => {
       vehicle_model: row.vehicle_model || "",
       pickup_at: new Date(row.pickup_at).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" }),
       return_at: new Date(row.return_at).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" }),
-      pickup_location: row.pickup_branch_id,
+      pickup_location: branchLabel(row.workspace_state, row.pickup_branch_id),
+      return_location: branchLabel(row.workspace_state, row.return_branch_id),
       total_amount: `$${Number(row.total_amount).toFixed(2)}`,
       deposit_amount: `$${Number(row.deposit_amount).toFixed(2)}`,
     };
@@ -1215,11 +1323,18 @@ router.post("/", async (request, response, next) => {
 router.get("/:envelopeId", async (request, response, next) => {
   const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+    await expireDueContracts(client, request, organization(request), request.params.envelopeId);
     const envelope = await loadEnvelope(client, request.params.envelopeId, organization(request), true);
-    if (!envelope) return fail(response, 404, "CONTRACT_NOT_FOUND", "Agreement not found.");
+    if (!envelope) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "CONTRACT_NOT_FOUND", "Agreement not found.");
+    }
+    await client.query("COMMIT");
     response.set("Cache-Control", "no-store");
     response.json({ success: true, data: envelope });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
   } finally {
     client.release();
@@ -1335,7 +1450,7 @@ router.post("/:envelopeId/send", (request, response, next) =>
 router.post("/:envelopeId/remind", (request, response, next) =>
   sendOrRemind(request, response, next, "reminder"));
 
-router.post("/:envelopeId/void", async (request, response, next) => {
+router.post("/:envelopeId/void", requireContractManager, async (request, response, next) => {
   const client = await pool.connect();
   try {
     const reason = clean(request.body?.reason, 1000);
@@ -1386,6 +1501,16 @@ router.get("/:envelopeId/certificate", async (request, response, next) => {
     if (envelope.status !== "completed") {
       return fail(response, 409, "CONTRACT_NOT_COMPLETED", "A completion record is available after every recipient signs.");
     }
+    const documentHash = sha256(`${envelope.content}|${envelope.consumerDisclosure}`);
+    const signatureHashes = envelope.recipients
+      .sort((left, right) => left.signingOrder - right.signingOrder)
+      .map(recipient => recipient.signatureHash || "");
+    const completedRecordHash = completedContractRecordHash(
+      envelope.documentHash,
+      signatureHashes,
+      new Date(envelope.completedAt).toISOString()
+    );
+    const auditChain = verifyContractEventChain(envelope.events);
     response.set("Cache-Control", "no-store");
     response.json({
       success: true,
@@ -1397,7 +1522,11 @@ router.get("/:envelopeId/certificate", async (request, response, next) => {
           documentHash: envelope.documentHash,
           completedRecordHash: envelope.completedRecordHash,
           auditEventCount: envelope.events.length,
-          auditChainHead: envelope.events.at(-1)?.hash || null,
+          auditChainHead: auditChain.head,
+          documentHashValid: documentHash === envelope.documentHash,
+          completedRecordHashValid: completedRecordHash === envelope.completedRecordHash,
+          auditChainValid: auditChain.valid,
+          auditChainFailures: auditChain.failures,
         },
       },
     });
