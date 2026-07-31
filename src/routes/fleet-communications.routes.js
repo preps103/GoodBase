@@ -832,6 +832,36 @@ router.get("/sms-readiness", employeeScope, requireCustomerSender, async (reques
               AND provider.controller_url IS NOT NULL
               AND provider.secret_ref IS NOT NULL
          ) AS provider_configured,
+         (
+           SELECT provider.provider_type
+             FROM goodbase_consumer_auth_providers provider
+            WHERE provider.organization_id=$1
+              AND provider.provider_type IN ('phone_otp','sms_mfa')
+              AND provider.status='enabled'
+              AND provider.controller_url IS NOT NULL
+              AND provider.secret_ref IS NOT NULL
+            ORDER BY provider.updated_at DESC
+            LIMIT 1
+         ) AS provider_type,
+         (
+           EXISTS (
+             SELECT 1
+               FROM backend_worker_heartbeats heartbeat
+              WHERE heartbeat.status='online'
+                AND heartbeat.last_seen_at>=NOW()-INTERVAL '2 minutes'
+           )
+           AND EXISTS (
+             SELECT 1
+               FROM backend_jobs job
+              WHERE job.handler_key='goodbase.auth.sms.dispatch'
+                AND job.status='active'
+           )
+         ) AS worker_ready,
+         (
+           SELECT MAX(heartbeat.last_seen_at)
+             FROM backend_worker_heartbeats heartbeat
+            WHERE heartbeat.status='online'
+         ) AS worker_last_seen_at,
          COUNT(*) FILTER (WHERE delivery.status='queued')::integer AS queued,
          COUNT(*) FILTER (WHERE delivery.status='sending')::integer AS sending,
          COUNT(*) FILTER (WHERE delivery.status='delivered')::integer AS delivered,
@@ -858,7 +888,10 @@ router.get("/sms-readiness", employeeScope, requireCustomerSender, async (reques
       data: {
         softwareReady: true,
         providerConfigured: Boolean(data.provider_configured),
-        workerReady: true,
+        providerType: data.provider_type || null,
+        workerReady: Boolean(data.worker_ready),
+        workerLastSeenAt: data.worker_last_seen_at || null,
+        canSend: Boolean(data.provider_configured && data.worker_ready),
         queue: {
           queued: Number(data.queued || 0),
           sending: Number(data.sending || 0),

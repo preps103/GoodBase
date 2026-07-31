@@ -395,6 +395,7 @@ function auditPayload(row) {
     action: row.action,
     entityType: row.entity_type,
     entityId: row.entity_id,
+    bookingId: row.after_json?.bookingId || row.before_json?.bookingId || undefined,
     timestamp: row.created_at,
     details: row.after_json?.details || row.action,
     ipAddress: row.ip_address || undefined
@@ -551,11 +552,17 @@ function customerPayload(row) {
 function bookingPayload(row) {
   const pickup = new Date(row.pickup_at);
   const returned = new Date(row.return_at);
+  const returnRecordedAt =
+    row.payload?.actualReturnAt ||
+    row.payload?.returnInspectionCompletedAt ||
+    row.payload?.returnInspectionRequiredAt ||
+    undefined;
   return {
     ...(row.payload || {}), id: row.id, reservationNumber: row.reservation_number,
     customerId: row.customer_id, carId: row.vehicle_id || undefined,
     startDate: pickup.toISOString().slice(0, 10), endDate: returned.toISOString().slice(0, 10),
     pickupTime: pickup.toISOString().slice(11, 16), dropoffTime: returned.toISOString().slice(11, 16),
+    actualReturnAt: returnRecordedAt,
     pickupLocationId: row.pickup_branch_id, returnLocationId: row.return_branch_id,
     status: row.status, paymentStatus: row.payment_status,
     totalAmount: Number(row.total_amount), depositAmount: Number(row.deposit_amount),
