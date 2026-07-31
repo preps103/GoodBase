@@ -24,6 +24,8 @@ test("GoodFleet production audit checks tables, integrity, constraints, and prov
   assert.match(audit, /incomplete_completed_contracts/);
   assert.match(audit, /incomplete_submitted_condition_reports/);
   assert.match(audit, /notification_channels_without_delivery/);
+  assert.match(audit, /legacyDataWarnings/);
+  assert.match(audit, /recovered-legacy-live-ledger/);
   assert.equal(
     packageJson.scripts["audit:goodfleet"],
     "node scripts/audit-goodfleet-readiness.js",

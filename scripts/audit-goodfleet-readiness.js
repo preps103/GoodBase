@@ -275,6 +275,8 @@ async function operationalIntegrity(client) {
          WHERE booking.organization_id=$1
            AND booking.archived_at IS NULL
            AND booking.status='completed'
+           AND COALESCE(booking.payload->>'dataProvenance','')
+               <> 'recovered-legacy-live-ledger'
            AND COALESCE(
              NULLIF(booking.payload->>'actualReturnAt',''),
              NULLIF(booking.payload->>'returnInspectionCompletedAt',''),
@@ -285,6 +287,35 @@ async function operationalIntegrity(client) {
   return Object.fromEntries(
     Object.entries(result.rows[0] || {}).map(([key, value]) => [key, Number(value)]),
   );
+}
+
+async function legacyDataWarnings(client) {
+  const result = await client.query(
+    `SELECT
+       COUNT(*)::integer AS legacy_completed_bookings_without_return_record,
+       COALESCE(
+         array_agg(booking.reservation_number ORDER BY booking.return_at)
+           FILTER (WHERE booking.id IS NOT NULL),
+         ARRAY[]::text[]
+       ) AS legacy_completed_reservation_numbers
+       FROM fleet_bookings booking
+      WHERE booking.organization_id=$1
+        AND booking.archived_at IS NULL
+        AND booking.status='completed'
+        AND booking.payload->>'dataProvenance'='recovered-legacy-live-ledger'
+        AND COALESCE(
+          NULLIF(booking.payload->>'actualReturnAt',''),
+          NULLIF(booking.payload->>'returnInspectionCompletedAt',''),
+          NULLIF(booking.payload->>'returnInspectionRequiredAt','')
+        ) IS NULL`,
+    [ORGANIZATION_ID],
+  );
+  return {
+    legacy_completed_bookings_without_return_record:
+      Number(result.rows[0]?.legacy_completed_bookings_without_return_record || 0),
+    legacy_completed_reservation_numbers:
+      result.rows[0]?.legacy_completed_reservation_numbers || [],
+  };
 }
 
 async function inventory(client) {
@@ -417,6 +448,7 @@ async function main() {
     const schemaConstraints = await constraints(client);
     const dataIntegrity = await integrity(client);
     const operations = await operationalIntegrity(client);
+    const warnings = await legacyDataWarnings(client);
     const vehicles = await inventory(client);
     const providers = await providerState(client);
     await client.query("COMMIT");
@@ -434,6 +466,7 @@ async function main() {
         constraints: schemaConstraints,
         integrity: dataIntegrity,
         operations,
+        warnings,
         healthy:
           tables.missing.length === 0 &&
           schemaConstraints.invalid === 0 &&
