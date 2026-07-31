@@ -24,6 +24,7 @@ const WORKSPACE_ARRAY_KEYS = new Set([
   "discounts", "fees", "expenses", "addons", "onboardingSteps"
 ]);
 const WORKSPACE_OBJECT_KEYS = new Set(["branding", "billingSettings", "ownerSettings"]);
+const WORKSPACE_SCALAR_KEYS = new Set(["addonCatalogVersion"]);
 const WORKSPACE_AUDIT_DESCRIPTORS = {
   contracts: ["contract", "Contract"],
   branches: ["branch", "Branch"],
@@ -38,6 +39,7 @@ const WORKSPACE_AUDIT_DESCRIPTORS = {
   fees: ["fee", "Fee"],
   expenses: ["expense", "Expense"],
   addons: ["addon", "Add-on"],
+  addonCatalogVersion: ["addon_catalog", "Add-on catalog"],
   onboardingSteps: ["onboarding_step", "Onboarding step"],
   branding: ["branding", "Branding settings"],
   billingSettings: ["billing_settings", "Billing settings"],
@@ -155,10 +157,19 @@ function requireCustomerManager(request, response, next) {
 function allowedWorkspaceKeys(request) {
   const role = goodFleetAccessRole(request);
   if (role === "owner" || role === "admin") {
-    return new Set([...WORKSPACE_ARRAY_KEYS, ...WORKSPACE_OBJECT_KEYS]);
+    return new Set([
+      ...WORKSPACE_ARRAY_KEYS,
+      ...WORKSPACE_OBJECT_KEYS,
+      ...WORKSPACE_SCALAR_KEYS
+    ]);
   }
   if (role === "manager") {
-    return new Set([...WORKSPACE_ARRAY_KEYS, "branding", "billingSettings"]);
+    return new Set([
+      ...WORKSPACE_ARRAY_KEYS,
+      ...WORKSPACE_SCALAR_KEYS,
+      "branding",
+      "billingSettings"
+    ]);
   }
   if (role === "staff") {
     return new Set([
@@ -222,6 +233,17 @@ function required(value, field, max) {
     const error = new Error(`${field} is required.`);
     error.statusCode = 400;
     error.code = "REQUIRED_FIELD";
+    throw error;
+  }
+  return normalized;
+}
+
+function uuidParam(value, field) {
+  const normalized = required(value, field, 36).toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)) {
+    const error = new Error(`${field} is invalid.`);
+    error.statusCode = 400;
+    error.code = "INVALID_FIELD";
     throw error;
   }
   return normalized;
@@ -370,6 +392,16 @@ function sanitizeWorkspace(input) {
       output[key] = value;
     }
   }
+  if ("addonCatalogVersion" in input) {
+    const version = Number(input.addonCatalogVersion);
+    if (!Number.isInteger(version) || version < 1 || version > 10000) {
+      const error = new Error("addonCatalogVersion must be a positive integer.");
+      error.statusCode = 400;
+      error.code = "INVALID_WORKSPACE_STATE";
+      throw error;
+    }
+    output.addonCatalogVersion = version;
+  }
   if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_WORKSPACE_BYTES) {
     const error = new Error("Workspace state exceeds the 2 MB safety limit.");
     error.statusCode = 413;
@@ -399,6 +431,21 @@ function auditPayload(row) {
     timestamp: row.created_at,
     details: row.after_json?.details || row.action,
     ipAddress: row.ip_address || undefined
+  };
+}
+
+function workspaceRevisionPayload(row, includeState = false) {
+  return {
+    id: row.id,
+    version: row.workspace_version,
+    changedSections: row.changed_sections || [],
+    changeSource: row.change_source,
+    actorId: row.actor_id || "system",
+    previousRevisionHash: row.previous_revision_hash || null,
+    revisionHash: row.revision_hash,
+    stateBytes: Number(row.state_bytes || 0),
+    createdAt: row.created_at,
+    ...(includeState ? { state: row.state_json || {} } : {})
   };
 }
 
@@ -744,7 +791,8 @@ router.get("/health", async (request, response, next) => {
         to_regclass('public.fleet_customer_notifications') IS NOT NULL AS notifications_ready,
         to_regclass('public.fleet_staff_onboarding_progress') IS NOT NULL AS onboarding_ready,
         to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready,
-        to_regclass('public.fleet_contract_envelopes') IS NOT NULL AS contract_schema_ready`
+        to_regclass('public.fleet_contract_envelopes') IS NOT NULL AS contract_schema_ready,
+        to_regclass('public.fleet_workspace_revisions') IS NOT NULL AS workspace_recovery_ready`
     );
     const readiness = result.rows[0];
     response.json({
@@ -1044,6 +1092,142 @@ router.get("/staff-onboarding/team", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+router.get("/workspace/revisions", requireOwner, async (request, response, next) => {
+  try {
+    const requestedLimit = Number(request.query.limit);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 100)
+      : 25;
+    const result = await query(
+      `SELECT id,workspace_version,changed_sections,change_source,actor_id,
+              previous_revision_hash,revision_hash,created_at,
+              pg_column_size(state_json)::integer AS state_bytes
+         FROM fleet_workspace_revisions
+        WHERE organization_id=$1
+        ORDER BY workspace_version DESC
+        LIMIT $2`,
+      [organization(request), limit]
+    );
+    response.json({
+      success: true,
+      data: result.rows.map(row => workspaceRevisionPayload(row))
+    });
+  } catch (error) { next(error); }
+});
+
+router.get("/workspace/revisions/:revisionId", requireOwner, async (request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT *,pg_column_size(state_json)::integer AS state_bytes
+         FROM fleet_workspace_revisions
+        WHERE organization_id=$1 AND id=$2`,
+      [
+        organization(request),
+        uuidParam(request.params.revisionId, "revisionId")
+      ]
+    );
+    if (!result.rowCount) {
+      return fail(response, 404, "WORKSPACE_REVISION_NOT_FOUND", "The selected recovery point no longer exists.");
+    }
+    response.json({
+      success: true,
+      data: workspaceRevisionPayload(result.rows[0], true)
+    });
+  } catch (error) { next(error); }
+});
+
+router.post("/workspace/revisions/:revisionId/restore", requireOwner, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const revisionId = uuidParam(request.params.revisionId, "revisionId");
+    const requestedVersion = Number(request.body?.version);
+    if (!Number.isInteger(requestedVersion) || requestedVersion < 1) {
+      return fail(response, 400, "INVALID_WORKSPACE_VERSION", "A valid current workspace version is required.");
+    }
+
+    await client.query("BEGIN");
+    const [current, revision] = await Promise.all([
+      client.query(
+        `SELECT state_json,version
+           FROM fleet_workspace_state
+          WHERE organization_id=$1
+          FOR UPDATE`,
+        [org]
+      ),
+      client.query(
+        `SELECT id,workspace_version,state_json
+           FROM fleet_workspace_revisions
+          WHERE organization_id=$1 AND id=$2`,
+        [org, revisionId]
+      )
+    ]);
+    if (!current.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "WORKSPACE_NOT_FOUND", "No GoodFleet workspace is available to restore.");
+    }
+    if (!revision.rowCount) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "WORKSPACE_REVISION_NOT_FOUND", "The selected recovery point no longer exists.");
+    }
+    const currentVersion = current.rows[0].version;
+    if (requestedVersion !== currentVersion) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "WORKSPACE_VERSION_CONFLICT", "Workspace changed in another session.", {
+        currentVersion,
+        currentState: current.rows[0].state_json
+      });
+    }
+
+    const previousState = current.rows[0].state_json || {};
+    const restoredState = sanitizeWorkspace(revision.rows[0].state_json || {});
+    await client.query(
+      `SELECT set_config('goodfleet.workspace_change_source','restore',true)`
+    );
+    const saved = await client.query(
+      `UPDATE fleet_workspace_state
+          SET state_json=$2::jsonb,version=version+1,updated_by=$3,updated_at=NOW()
+        WHERE organization_id=$1
+        RETURNING state_json,version,updated_at`,
+      [org, JSON.stringify(restoredState), actor(request)]
+    );
+    const result = saved.rows[0];
+    const changedSections = await auditWorkspaceChanges(
+      client,
+      request,
+      previousState,
+      result.state_json
+    );
+    await audit(client, request, "workspace.restored", "workspace", org, {
+      version: currentVersion
+    }, {
+      version: result.version,
+      restoredFromRevisionId: revisionId,
+      restoredFromVersion: revision.rows[0].workspace_version,
+      changedSections,
+      details: `GoodFleet workspace restored from version ${revision.rows[0].workspace_version}`
+    });
+    await client.query("COMMIT");
+
+    const auditEvents = await client.query(
+      `SELECT * FROM fleet_audit_events
+       WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`,
+      [org]
+    );
+    response.json({ success: true, data: {
+      state: result.state_json,
+      version: result.version,
+      updatedAt: result.updated_at,
+      auditLogs: auditEvents.rows.map(auditPayload)
+    }});
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.put("/workspace", async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -1063,11 +1247,16 @@ router.put("/workspace", async (request, response, next) => {
     if (requestedVersion !== currentVersion) {
       await client.query("ROLLBACK");
       return fail(response, 409, "WORKSPACE_VERSION_CONFLICT", "Workspace changed in another session.", {
-        currentVersion
+        currentVersion,
+        currentState: previousState
       });
     }
     const permittedWorkspaceKeys = allowedWorkspaceKeys(request);
-    for (const key of [...WORKSPACE_ARRAY_KEYS, ...WORKSPACE_OBJECT_KEYS]) {
+    for (const key of [
+      ...WORKSPACE_ARRAY_KEYS,
+      ...WORKSPACE_OBJECT_KEYS,
+      ...WORKSPACE_SCALAR_KEYS
+    ]) {
       if (!permittedWorkspaceKeys.has(key)) {
         if (Object.prototype.hasOwnProperty.call(previousState, key)) {
           state[key] = previousState[key];
@@ -1076,6 +1265,9 @@ router.put("/workspace", async (request, response, next) => {
         }
       }
     }
+    await client.query(
+      `SELECT set_config('goodfleet.workspace_change_source','save',true)`
+    );
     const saved = current.rowCount
       ? await client.query(
         `UPDATE fleet_workspace_state
@@ -1195,6 +1387,9 @@ router.delete("/branches/:branchId", requireFleetEditor, async (request, respons
       ...previousState,
       branches: branches.filter(item => text(item?.id, 200) !== branchId)
     };
+    await client.query(
+      `SELECT set_config('goodfleet.workspace_change_source','branch_delete',true)`
+    );
     const saved = await client.query(
       `UPDATE fleet_workspace_state
        SET state_json=$2::jsonb,version=version+1,updated_by=$3,updated_at=NOW()

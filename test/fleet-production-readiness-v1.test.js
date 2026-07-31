@@ -19,9 +19,43 @@ test("GoodFleet production audit checks tables, integrity, constraints, and prov
   assert.match(audit, /constraint_record\.convalidated/);
   assert.match(audit, /paymentExcludedReadiness/);
   assert.match(audit, /listing_photos_incomplete/);
+  assert.match(audit, /current_workspace_without_revision/);
+  assert.match(audit, /booking_financial_mismatches/);
+  assert.match(audit, /incomplete_completed_contracts/);
+  assert.match(audit, /incomplete_submitted_condition_reports/);
+  assert.match(audit, /notification_channels_without_delivery/);
   assert.equal(
     packageJson.scripts["audit:goodfleet"],
     "node scripts/audit-goodfleet-readiness.js",
+  );
+});
+
+test("GoodFleet retains immutable workspace recovery points and owner restore controls", () => {
+  const migration = read(
+    "migrations/20260731_goodfleet_workspace_recovery_v1.sql",
+  );
+  const runner = read(
+    "scripts/apply-goodfleet-workspace-recovery-migration.js",
+  );
+  const routes = read("src/routes/fleet.routes.js");
+  const packageJson = read("package.json");
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS fleet_workspace_revisions/);
+  assert.match(migration, /CREATE TRIGGER fleet_workspace_revision_capture/);
+  assert.match(migration, /CREATE TRIGGER fleet_workspace_revision_append_only/);
+  assert.match(migration, /workspace recovery points are append-only/);
+  assert.match(migration, /previous_revision_hash/);
+  assert.match(migration, /revision_hash/);
+  assert.match(migration, /ON CONFLICT \(organization_id, workspace_version\) DO NOTHING/);
+  assert.match(runner, /pg_advisory_lock/);
+  assert.match(runner, /current_workspace_captured/);
+  assert.match(runner, /append_only_trigger/);
+  assert.match(routes, /router\.get\("\/workspace\/revisions"/);
+  assert.match(routes, /router\.post\("\/workspace\/revisions\/:revisionId\/restore"/);
+  assert.match(routes, /workspace\.restored/);
+  assert.match(
+    packageJson,
+    /apply-goodfleet-workspace-recovery-migration\.js/,
   );
 });
 
