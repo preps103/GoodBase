@@ -113,6 +113,12 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /BOOKING_NOT_EDITABLE/);
   assert.match(routes, /additionalCharges/);
   assert.match(routes, /router\.delete\("\/vehicles\/:vehicleId"/);
+  assert.match(routes, /router\.delete\("\/branches\/:branchId", requireFleetEditor/);
+  assert.match(routes, /LAST_BRANCH_REQUIRED/);
+  assert.match(routes, /BRANCH_IN_USE/);
+  assert.match(routes, /assigned_branch_id=\$2/);
+  assert.match(routes, /pickup_branch_id=\$2 OR return_branch_id=\$2/);
+  assert.match(routes, /pricingRules: pricingReferences/);
   assert.match(routes, /router\.post\("\/staff\/invitations"/);
   assert.match(routes, /router\.patch\("\/staff\/:userId"/);
   assert.match(routes, /router\.delete\("\/staff\/:userId"/);
