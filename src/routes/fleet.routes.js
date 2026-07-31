@@ -1104,6 +1104,121 @@ router.put("/workspace", async (request, response, next) => {
   } finally { client.release(); }
 });
 
+router.delete("/branches/:branchId", requireFleetEditor, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const org = organization(request);
+    const branchId = required(request.params.branchId, "branchId", 200);
+    const requestedVersion = Number(request.body?.version);
+    if (!Number.isInteger(requestedVersion) || requestedVersion < 0) {
+      return fail(response, 400, "INVALID_WORKSPACE_VERSION", "A valid workspace version is required.");
+    }
+
+    await client.query("BEGIN");
+    const current = await client.query(
+      `SELECT state_json,version FROM fleet_workspace_state WHERE organization_id=$1 FOR UPDATE`,
+      [org]
+    );
+    const previousState = current.rows[0]?.state_json || {};
+    const currentVersion = current.rows[0]?.version || 0;
+    if (requestedVersion !== currentVersion) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "WORKSPACE_VERSION_CONFLICT", "Workspace changed in another session.", {
+        currentVersion
+      });
+    }
+
+    const branches = Array.isArray(previousState.branches) ? previousState.branches : [];
+    const branch = branches.find(item => text(item?.id, 200) === branchId);
+    if (!branch) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "BRANCH_NOT_FOUND", "The selected branch no longer exists.");
+    }
+    if (branches.length <= 1) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "LAST_BRANCH_REQUIRED", "GoodFleet must retain at least one operating branch.");
+    }
+
+    const [vehicleReferences, bookingReferences] = await Promise.all([
+      client.query(
+        `SELECT COUNT(*)::int AS count
+         FROM fleet_vehicles
+         WHERE organization_id=$1 AND archived_at IS NULL AND assigned_branch_id=$2`,
+        [org, branchId]
+      ),
+      client.query(
+        `SELECT COUNT(*)::int AS count
+         FROM fleet_bookings
+         WHERE organization_id=$1 AND archived_at IS NULL
+           AND (pickup_branch_id=$2 OR return_branch_id=$2)`,
+        [org, branchId]
+      )
+    ]);
+    const pricingReferences = ["rates", "seasonalAdjustments", "discounts", "fees"]
+      .reduce((count, key) => count + (
+        Array.isArray(previousState[key])
+          ? previousState[key].filter(item => text(item?.branchId, 200) === branchId).length
+          : 0
+      ), 0);
+    const blockers = {
+      vehicles: vehicleReferences.rows[0]?.count || 0,
+      bookings: bookingReferences.rows[0]?.count || 0,
+      pricingRules: pricingReferences
+    };
+    if (blockers.vehicles || blockers.bookings || blockers.pricingRules) {
+      await client.query("ROLLBACK");
+      return fail(
+        response,
+        409,
+        "BRANCH_IN_USE",
+        "Reassign vehicles, reservations, and pricing rules before removing this branch.",
+        blockers
+      );
+    }
+
+    const nextState = {
+      ...previousState,
+      branches: branches.filter(item => text(item?.id, 200) !== branchId)
+    };
+    const saved = await client.query(
+      `UPDATE fleet_workspace_state
+       SET state_json=$2::jsonb,version=version+1,updated_by=$3,updated_at=NOW()
+       WHERE organization_id=$1 RETURNING state_json,version,updated_at`,
+      [org, JSON.stringify(nextState), actor(request)]
+    );
+    const result = saved.rows[0];
+    const changedSections = await auditWorkspaceChanges(
+      client,
+      request,
+      previousState,
+      result.state_json
+    );
+    await audit(client, request, "workspace.updated", "workspace", org, null, {
+      version: result.version,
+      changedSections,
+      details: `GoodFleet branch ${workspaceItemLabel(branch, branchId)} removed`
+    });
+    await client.query("COMMIT");
+
+    const auditEvents = await client.query(
+      `SELECT * FROM fleet_audit_events
+       WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`,
+      [org]
+    );
+    return response.json({ success: true, data: {
+      state: result.state_json,
+      version: result.version,
+      updatedAt: result.updated_at,
+      auditLogs: auditEvents.rows.map(auditPayload)
+    }});
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/vehicles", requireFleetEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
