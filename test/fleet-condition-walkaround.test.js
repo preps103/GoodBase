@@ -47,6 +47,8 @@ test("Booking transitions fail closed until departure and return evidence is sub
   assert.match(routes, /captured_by_type='customer'/);
   assert.match(routes, /COUNT\(DISTINCT photo\.slot\)/);
   assert.match(routes, /\)=7/);
+  assert.match(routes, /merged\.actualReturnAt = actualReturnAt/);
+  assert.match(routes, /merged\.returnInspectionRequiredAt = actualReturnAt/);
 });
 
 test("Management may override missing return photos only after a confirmed physical inspection", () => {
