@@ -61,6 +61,21 @@ test("Guest booking is server-priced, owner-scoped, serialized, and does not req
   );
 });
 
+test("Guest profile provisioning links the Base identity without exposing private auth metadata", () => {
+  const routes = read("src/routes/fleet-marketplace.routes.js");
+  const auth = read("src/services/auth.service.js");
+  assert.match(routes, /SELECT auth_metadata_json/);
+  assert.match(routes, /parsedIdentityMetadata\.phone/);
+  assert.match(routes, /user_id=COALESCE\(user_id,\$3\)/);
+  assert.match(routes, /accountSource: "goodfleet_marketplace"/);
+  const publicUserBlock = auth.slice(
+    auth.indexOf("function publicUser"),
+    auth.indexOf("function hashToken"),
+  );
+  assert.doesNotMatch(publicUserBlock, /authMetadata\.phone/);
+  assert.doesNotMatch(publicUserBlock, /auth_metadata_json:/);
+});
+
 test("Public marketplace inventory fails closed on compliance and active conflicts", () => {
   const routes = read("src/routes/fleet-public.routes.js");
   assert.match(routes, /listing\.status='active'/);

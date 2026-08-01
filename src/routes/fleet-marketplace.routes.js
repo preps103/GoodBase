@@ -647,7 +647,27 @@ async function ensureCustomer(client, request, input = {}) {
     clean(request.user.displayName, 200) ||
     [request.user.firstName, request.user.lastName].filter(Boolean).join(" ") ||
     "GoodFleet guest";
-  const phone = clean(input.phone, 50) || null;
+  const identityResult = await client.query(
+    `SELECT auth_metadata_json
+       FROM users
+      WHERE id=$1
+      LIMIT 1`,
+    [request.user.id],
+  );
+  const identityMetadata = identityResult.rows[0]?.auth_metadata_json || {};
+  let parsedIdentityMetadata = identityMetadata;
+  if (typeof identityMetadata === "string") {
+    try {
+      parsedIdentityMetadata = JSON.parse(identityMetadata || "{}");
+    } catch {
+      parsedIdentityMetadata = {};
+    }
+  }
+  if (!parsedIdentityMetadata || typeof parsedIdentityMetadata !== "object") {
+    parsedIdentityMetadata = {};
+  }
+  const phone =
+    clean(input.phone, 50) || clean(parsedIdentityMetadata.phone, 50) || null;
 
   if (existing.rowCount) {
     const result = await client.query(
