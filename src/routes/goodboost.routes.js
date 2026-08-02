@@ -41,6 +41,18 @@ function publicProfile(row) {
   };
 }
 
+function publicPost(row) {
+  return { id: row.id, accountId: row.connection_id || undefined, platform: row.platform, content: row.content, mediaUrls: row.media_urls || [], scheduledFor: row.scheduled_for || undefined, publishedAt: row.published_at || undefined, status: row.status, approvalNote: row.approval_note || undefined, providerPostId: row.provider_post_id || undefined, errorReason: row.error_reason || undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function publicInboxItem(row) {
+  return { id: row.id, accountId: row.connection_id || undefined, platform: row.platform, providerItemId: row.provider_item_id, itemType: row.item_type, authorName: row.author_name, authorUsername: row.author_username || undefined, content: row.content, status: row.status, sentiment: row.sentiment || undefined, assignedTo: row.assigned_to || undefined, receivedAt: row.received_at, respondedAt: row.responded_at || undefined };
+}
+
+function publicMetric(row) {
+  return { accountId: row.connection_id || undefined, platform: row.platform, recordedAt: row.recorded_at, followers: Number(row.followers || 0), impressions: Number(row.impressions || 0), reach: Number(row.reach || 0), engagements: Number(row.engagements || 0), clicks: Number(row.clicks || 0), videoViews: Number(row.video_views || 0), postsPublished: Number(row.posts_published || 0) };
+}
+
 function validCampaignUrl(platform, value) {
   let url;
   try { url = new URL(value); } catch { return false; }
@@ -122,6 +134,51 @@ router.post("/social/relationships/:id/actions", async (req, res, next) => {
     const relationship = await social.action(req.user.id, req.params.id, clean(req.body?.action, 20), clean(req.get("Idempotency-Key"), 200), req.body?.dailyLimit);
     return res.json({ success: true, relationship });
   } catch (error) { return next(error); }
+});
+
+router.get("/operations", async (req, res, next) => {
+  try {
+    const [posts, inbox, metrics] = await Promise.all([
+      database.query("SELECT * FROM goodboost_publishing_posts WHERE user_id=$1 ORDER BY created_at DESC LIMIT 500", [req.user.id]),
+      database.query("SELECT * FROM goodboost_inbox_items WHERE user_id=$1 ORDER BY received_at DESC LIMIT 500", [req.user.id]),
+      database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 1000", [req.user.id]),
+    ]);
+    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: social.providers().some(provider => provider.available) });
+  } catch (error) { return next(error); }
+});
+
+router.post("/publishing/posts", async (req, res, next) => {
+  try {
+    const platform = clean(req.body?.platform, 40); const content = clean(req.body?.content, 5000); const status = clean(req.body?.status, 30); const idempotencyKey = clean(req.get("Idempotency-Key"), 200);
+    const allowedStatuses = new Set(["draft","pending_approval","scheduled"]);
+    if (!platform || content.length < 2 || !allowedStatuses.has(status) || !idempotencyKey) return res.status(400).json({ success: false, code: "GOODBOOST_POST_INVALID", message: "Platform, content, status, and Idempotency-Key are required." });
+    const scheduledFor = req.body?.scheduledFor ? new Date(req.body.scheduledFor) : null;
+    if (status === "scheduled" && (!scheduledFor || Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() <= Date.now())) return res.status(400).json({ success: false, code: "GOODBOOST_SCHEDULE_INVALID", message: "Scheduled posts require a future publishing time." });
+    const mediaUrls = Array.isArray(req.body?.mediaUrls) ? req.body.mediaUrls.map(value => clean(value, 2048)).filter(value => { try { return new URL(value).protocol === "https:"; } catch { return false; } }).slice(0, 20) : [];
+    const accountId = req.body?.accountId || null;
+    if (accountId) { const account = await database.query("SELECT id FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status='active'", [accountId, req.user.id]); if (!account.rows[0]) return res.status(404).json({ success: false, code: "GOODBOOST_CONNECTION_NOT_FOUND", message: "Connected account not found." }); }
+    const result = await database.query(`INSERT INTO goodboost_publishing_posts(user_id,connection_id,platform,content,media_urls,scheduled_for,status,idempotency_key) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8) ON CONFLICT(user_id,idempotency_key) DO UPDATE SET updated_at=NOW() RETURNING *`, [req.user.id, accountId, platform, content, JSON.stringify(mediaUrls), scheduledFor, status, idempotencyKey]);
+    await logAudit({ userId: req.user.id, appId: "goodboost", action: "goodboost.post.create", entityType: "publishing_post", entityId: result.rows[0].id, ipAddress: req.ip, metadata: { platform, status } }).catch(() => {});
+    return res.status(201).json({ success: true, post: publicPost(result.rows[0]) });
+  } catch (error) { return next(error); }
+});
+
+router.patch("/publishing/posts/:id", async (req, res, next) => {
+  try {
+    const found = await database.query("SELECT * FROM goodboost_publishing_posts WHERE id=$1 AND user_id=$2", [req.params.id, req.user.id]); if (!found.rows[0]) return res.status(404).json({ success: false, message: "Publishing post not found." });
+    const current = found.rows[0]; const status = req.body?.status ? clean(req.body.status, 30) : current.status; const allowed = new Set(["draft","pending_approval","scheduled","publishing","published","failed"]); if (!allowed.has(status)) return res.status(400).json({ success: false, message: "Publishing status is invalid." });
+    const content = req.body?.content === undefined ? current.content : clean(req.body.content, 5000); const approvalNote = req.body?.approvalNote === undefined ? current.approval_note : clean(req.body.approvalNote, 1000); const scheduledFor = req.body?.scheduledFor === undefined ? current.scheduled_for : req.body.scheduledFor ? new Date(req.body.scheduledFor) : null;
+    const result = await database.query("UPDATE goodboost_publishing_posts SET content=$1,scheduled_for=$2,status=$3,approval_note=$4,updated_at=NOW() WHERE id=$5 AND user_id=$6 RETURNING *", [content, scheduledFor, status, approvalNote, req.params.id, req.user.id]);
+    return res.json({ success: true, post: publicPost(result.rows[0]) });
+  } catch (error) { return next(error); }
+});
+
+router.patch("/inbox/:id", async (req, res, next) => {
+  try { const status = clean(req.body?.status, 20); if (!["unread","open","resolved","archived"].includes(status)) return res.status(400).json({ success: false, message: "Inbox status is invalid." }); const result = await database.query("UPDATE goodboost_inbox_items SET status=$1,responded_at=CASE WHEN $1='resolved' THEN COALESCE(responded_at,NOW()) ELSE responded_at END,updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *", [status, req.params.id, req.user.id]); if (!result.rows[0]) return res.status(404).json({ success: false, message: "Inbox item not found." }); return res.json({ success: true, item: publicInboxItem(result.rows[0]) }); } catch (error) { return next(error); }
+});
+
+router.get("/reports/export", async (req, res, next) => {
+  try { const format = req.query.format === "csv" ? "csv" : "json"; const metrics = await database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 10000", [req.user.id]); const data = metrics.rows.map(publicMetric); res.setHeader("Content-Disposition", `attachment; filename=goodboost-report.${format}`); res.setHeader("Cache-Control", "private, no-store"); if (format === "json") return res.type("application/json").send(JSON.stringify({ generatedAt: new Date().toISOString(), metrics: data }, null, 2)); const fields = ["platform","recordedAt","followers","impressions","reach","engagements","clicks","videoViews","postsPublished"]; const csv = [fields.join(","), ...data.map(row => fields.map(field => JSON.stringify(row[field] ?? "")).join(","))].join("\n"); return res.type("text/csv").send(csv); } catch (error) { return next(error); }
 });
 
 router.post("/campaigns", async (req, res, next) => {
