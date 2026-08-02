@@ -7,6 +7,7 @@ const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const { logAudit } = require("../services/audit.service");
 const videoService = require("../services/goodspeech-video.service");
+const avatarService = require("../services/goodspeech-avatar.service");
 
 const router = express.Router();
 const MAX_TEXT_LENGTH = 2000;
@@ -85,6 +86,26 @@ const videoUpload = multer({
     fields: 20,
   },
 });
+const avatarLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 12,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => `goodspeech-avatar-user:${req.user.id}`,
+  message: {
+    success: false,
+    code: "GOODSPEECH_AVATAR_RATE_LIMITED",
+    message: "Too many avatar render requests. Try again later.",
+  },
+});
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+    files: 2,
+    fields: 10,
+  },
+});
 
 function cleanEnum(value, allowed, fallback) {
   return allowed.has(value) ? value : fallback;
@@ -144,6 +165,10 @@ function kokoroSpeed(input) {
 function buildCapabilities(health, videoHealth = {
   ready: false,
   message: "Open AI video generation needs a connected GoodMotion GPU worker. Motion Canvas remains available.",
+}, avatarHealth = {
+  ready: false,
+  engine: "browser-live",
+  model: null,
 }) {
   const kokoroStatus = health.ready ? "ready" : "unavailable";
   const kokoroIssue = health.ready ? null : health.message;
@@ -162,6 +187,13 @@ function buildCapabilities(health, videoHealth = {
       engine: "goodmotion-open",
       status: videoStatus,
       issue: videoHealth.ready ? null : videoHealth.message,
+    },
+    {
+      id: "avatars",
+      execution: avatarHealth.ready ? "goodbase" : "browser",
+      engine: avatarHealth.ready ? (avatarHealth.model || avatarHealth.engine || "liveavatar-open") : "browser-live",
+      status: "ready",
+      issue: null,
     },
     ...BROWSER_TOOL_IDS.map((id) => ({
       id,
@@ -324,9 +356,10 @@ router.get("/health", authRequired, async (_req, res) => {
 
 router.get("/capabilities", authRequired, async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
-  const [health, videoHealth] = await Promise.all([
+  const [health, videoHealth, avatarHealth] = await Promise.all([
     checkKokoroHealth(),
     videoService.checkHealth(),
+    avatarService.checkHealth(),
   ]);
   return res.json({
     success: true,
@@ -337,11 +370,66 @@ router.get("/capabilities", authRequired, async (_req, res) => {
     engines: {
       speech: health,
       video: videoHealth,
+      avatars: avatarHealth,
     },
     voices: Object.keys(KOKORO_VOICES),
-    capabilities: buildCapabilities(health, videoHealth),
+    capabilities: buildCapabilities(health, videoHealth, avatarHealth),
   });
 });
+
+function sendAvatarError(res, error) {
+  const status = error?.statusCode || 500;
+  console.error("[GoodSpeech Avatar] request failed", {
+    status,
+    code: error?.code || "GOODSPEECH_AVATAR_ERROR",
+  });
+  return res.status(status).json({
+    success: false,
+    code: error?.code || "GOODSPEECH_AVATAR_ERROR",
+    message: String(error?.code || "").startsWith("GOODSPEECH_AVATAR_")
+      ? error.message
+      : "The avatar request could not be completed.",
+  });
+}
+
+router.get("/avatars/status", authRequired, async (_req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  return res.json({ success: true, ...(await avatarService.checkHealth()) });
+});
+
+router.post(
+  "/avatars/render",
+  authRequired,
+  avatarLimiter,
+  avatarUpload.fields([
+    { name: "portrait", maxCount: 1 },
+    { name: "audio", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    res.set("Cache-Control", "private, no-store, max-age=0");
+    try {
+      const upstream = await avatarService.renderAvatar(req.body, req.files || {});
+      logAudit({
+        userId: req.user.id,
+        action: "goodspeech.avatar.render",
+        entityType: "goodspeech_avatar_render",
+        ipAddress: req.ip,
+        metadata: {
+          consent: "self",
+          portraitBytes: req.files?.portrait?.[0]?.size || 0,
+          audioBytes: req.files?.audio?.[0]?.size || 0,
+        },
+      }).catch(() => {});
+      res.status(200);
+      res.set("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+      const length = upstream.headers.get("content-length");
+      if (length) res.set("Content-Length", length);
+      return Readable.fromWeb(upstream.body).pipe(res);
+    } catch (error) {
+      return sendAvatarError(res, error);
+    }
+  },
+);
 
 function sendVideoError(res, error) {
   const status = error?.statusCode || 500;

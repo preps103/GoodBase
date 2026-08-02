@@ -20,6 +20,7 @@ const {
   readAudioBytes,
 } = require("../src/routes/goodspeech.routes");
 const videoService = require("../src/services/goodspeech-video.service");
+const avatarService = require("../src/services/goodspeech-avatar.service");
 const collaborationRoutes = require("../src/routes/goodspeech-collaboration.routes");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
@@ -111,14 +112,54 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
     { ready: false, message: "GPU worker unavailable" },
   );
 
-  assert.equal(ready.length, 15);
+  assert.equal(ready.length, 16);
   assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "video").engine, "goodmotion-open");
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
+  assert.equal(ready.find((item) => item.id === "avatars").status, "ready");
   assert.equal(ready.every((item) => item.status === "ready" && item.issue === null), true);
   assert.equal(degraded.find((item) => item.id === "speech").issue, "Kokoro unavailable");
   assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
   assert.equal(degraded.find((item) => item.id === "image").issue, null);
+  assert.equal(degraded.find((item) => item.id === "avatars").issue, null);
+});
+
+test("GoodSpeech live avatars require an approved adult likeness and validated media", () => {
+  const files = {
+    portrait: [{ mimetype: "image/jpeg", buffer: Buffer.from("portrait"), originalname: "me.jpg" }],
+    audio: [{ mimetype: "audio/wav", buffer: Buffer.from("narration"), originalname: "voice.wav" }],
+  };
+  assert.throws(
+    () => avatarService.validateRender({ name: "My avatar" }, files),
+    /confirm that the portrait/i,
+  );
+  const valid = avatarService.validateRender({ name: "My avatar", consent: "self" }, files);
+  assert.equal(valid.name, "My avatar");
+  assert.equal(valid.portrait.mimetype, "image/jpeg");
+  assert.equal(valid.audio.mimetype, "audio/wav");
+  assert.throws(
+    () => avatarService.validateRender({ consent: "self" }, { ...files, portrait: [{ mimetype: "image/svg+xml", buffer: Buffer.from("svg") }] }),
+    /unsupported file format/i,
+  );
+});
+
+test("GoodSpeech live avatars keep the browser renderer available without a GPU worker", async () => {
+  const originalUrl = process.env.GOODAVATAR_LIVE_URL;
+  const originalToken = process.env.GOODAVATAR_LIVE_TOKEN;
+  try {
+    delete process.env.GOODAVATAR_LIVE_URL;
+    delete process.env.GOODAVATAR_LIVE_TOKEN;
+    assert.equal(avatarService.workerConfig(), null);
+    const health = await avatarService.checkHealth();
+    assert.equal(health.ready, false);
+    assert.equal(health.engine, "browser-live");
+    assert.match(health.message, /browser live mode is ready/i);
+  } finally {
+    if (originalUrl === undefined) delete process.env.GOODAVATAR_LIVE_URL;
+    else process.env.GOODAVATAR_LIVE_URL = originalUrl;
+    if (originalToken === undefined) delete process.env.GOODAVATAR_LIVE_TOKEN;
+    else process.env.GOODAVATAR_LIVE_TOKEN = originalToken;
+  }
 });
 
 test("GoodSpeech validates open video workflows and reference frames", () => {

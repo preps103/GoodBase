@@ -63,6 +63,12 @@ kokoro_url="$(
 kokoro_token="$(
   awk -F= '/^KOKORO_TTS_TOKEN=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
 )"
+goodavatar_url="$(
+  awk -F= '/^GOODAVATAR_LIVE_URL=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
+)"
+goodavatar_token="$(
+  awk -F= '/^GOODAVATAR_LIVE_TOKEN=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
+)"
 
 install -m 0644 "${SERVICE_SOURCE}" "${SERVICE_TARGET}"
 systemctl daemon-reload
@@ -112,6 +118,8 @@ if command -v pm2 >/dev/null 2>&1; then
             PM2_HOME="${pm2_home}" \
             KOKORO_TTS_URL="${kokoro_url}" \
             KOKORO_TTS_TOKEN="${kokoro_token}" \
+            GOODAVATAR_LIVE_URL="${goodavatar_url}" \
+            GOODAVATAR_LIVE_TOKEN="${goodavatar_token}" \
             pm2 restart "${process_name}" --update-env
         runtime_restarted=1
         restarted=1
