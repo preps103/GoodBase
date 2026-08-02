@@ -125,6 +125,9 @@ test("Host and guest messaging is trip-scoped, private, auditable, and idempoten
 test("Guest checkout only accepts an owned booking and stays disabled without Stripe keys", () => {
   const routes = read("src/routes/fleet-payments.routes.js");
   assert.match(routes, /"\/customer-capability"/);
+  assert.match(routes, /"\/customer-payments"/);
+  assert.match(routes, /booking\.guest_user_id=\$2 OR customer\.user_id=\$2/);
+  assert.match(routes, /reservation_number/);
   assert.match(routes, /"\/customer-checkout-sessions"/);
   assert.match(routes, /requirePaymentCustomer/);
   assert.match(routes, /booking\.guest_user_id === request\.user\.id/);

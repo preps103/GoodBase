@@ -184,6 +184,11 @@ test("Fleet payments stay disabled without credentials and expose the complete p
   assert.match(routes, /STRIPE_WEBHOOK_SECRET/);
   assert.match(routes, /router\.post\("\/webhooks\/stripe"/);
   assert.match(routes, /constructEvent/);
+  assert.match(routes, /expand: \["latest_charge"\]/);
+  assert.match(routes, /receipt_url/);
+  assert.match(routes, /booking\.status === "pending_payment"/);
+  assert.match(routes, /"confirmed"/);
+  assert.match(routes, /booking\.payment_confirmed/);
   assert.match(routes, /router\.post\("\/checkout-sessions"/);
   assert.match(routes, /router\.post\("\/manual-payments"/);
   assert.match(routes, /router\.post\("\/authorizations"/);

@@ -147,6 +147,15 @@ function operationPayload(row) {
   };
 }
 
+function customerPaymentPayload(row) {
+  return {
+    ...operationPayload(row),
+    bookingId: row.booking_id,
+    reservationNumber: row.reservation_number,
+    createdAt: row.created_at,
+  };
+}
+
 async function existingOperation(client, org, key) {
   const result = await client.query(
     `SELECT * FROM fleet_payment_operations
@@ -196,13 +205,22 @@ async function recalculateBookingBalance(client, org, bookingId) {
   const paymentStatus = paidAmount <= 0
     ? "unpaid"
     : paidAmount + 0.005 >= totalAmount ? "paid" : "partial";
+  const bookingStatus = paymentStatus === "paid" && booking.status === "pending_payment"
+    ? "confirmed"
+    : booking.status;
   await client.query(
     `UPDATE fleet_bookings
-        SET paid_amount=$3,payment_status=$4,version=version+1,updated_at=NOW()
+        SET paid_amount=$3,payment_status=$4,status=$5,version=version+1,updated_at=NOW()
       WHERE organization_id=$1 AND id=$2`,
-    [org, bookingId, paidAmount.toFixed(2), paymentStatus]
+    [org, bookingId, paidAmount.toFixed(2), paymentStatus, bookingStatus]
   );
-  return { paidAmount, paymentStatus, balanceDue: Math.max(0, totalAmount - paidAmount) };
+  return {
+    paidAmount,
+    paymentStatus,
+    balanceDue: Math.max(0, totalAmount - paidAmount),
+    previousBookingStatus: booking.status,
+    bookingStatus,
+  };
 }
 
 function safeReturnUrl(value) {
@@ -275,11 +293,17 @@ async function updateStripeOperation(event, stripe) {
     providerReference = object.id;
     operationId = object.metadata?.operationId || null;
     if (object.payment_intent) {
-      const intent = await stripe.paymentIntents.retrieve(String(object.payment_intent));
+      const intent = await stripe.paymentIntents.retrieve(
+        String(object.payment_intent),
+        { expand: ["latest_charge"] },
+      );
       providerReference = intent.id;
       status = intent.status === "requires_capture" ? "authorized"
         : intent.status === "succeeded" ? "succeeded"
           : intent.status === "requires_action" ? "requires_action" : "pending";
+      receiptUrl = typeof intent.latest_charge === "object"
+        ? intent.latest_charge?.receipt_url || null
+        : null;
     }
   } else if (object.object === "payment_intent") {
     status = object.status === "requires_capture" ? "authorized"
@@ -287,9 +311,11 @@ async function updateStripeOperation(event, stripe) {
         : object.status === "canceled" ? "voided"
           : object.status === "requires_action" ? "requires_action"
             : object.status === "requires_payment_method" ? "requires_payment_method" : "pending";
-  } else if (object.object === "charge" && object.refunded) {
+  } else if (object.object === "charge") {
     providerReference = object.payment_intent || object.id;
-    status = "refunded";
+    status = object.refunded
+      ? "refunded"
+      : object.status === "succeeded" || object.paid ? "succeeded" : null;
     receiptUrl = object.receipt_url || null;
   }
 
@@ -336,7 +362,20 @@ async function updateStripeOperation(event, stripe) {
       })]
     );
     if (bookingId && status === "succeeded") {
-      await recalculateBookingBalance(client, organizationId, bookingId);
+      const balance = await recalculateBookingBalance(client, organizationId, bookingId);
+      if (balance.previousBookingStatus !== balance.bookingStatus) {
+        await client.query(
+          `INSERT INTO fleet_audit_events
+            (organization_id,actor_id,action,entity_type,entity_id,after_json)
+           VALUES ($1,NULL,'booking.payment_confirmed','booking',$2,$3::jsonb)`,
+          [organizationId, bookingId, JSON.stringify({
+            paymentOperationId: operation.id,
+            previousStatus: balance.previousBookingStatus,
+            status: balance.bookingStatus,
+            paidAmount: balance.paidAmount,
+          })],
+        );
+      }
     }
     if (bookingId && status === "authorized" && operation.operation_type === "authorization") {
       await client.query(
@@ -444,6 +483,38 @@ router.get(
             ? []
             : ["Payment provider activation is pending"],
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.get(
+  "/customer-payments",
+  authRequired,
+  tenantContext,
+  requirePaymentCustomer,
+  async (request, response, next) => {
+    try {
+      const result = await query(
+        `SELECT operation.*,booking.reservation_number
+           FROM fleet_payment_operations operation
+           JOIN fleet_bookings booking
+             ON booking.organization_id=operation.organization_id
+            AND booking.id=operation.booking_id
+           LEFT JOIN fleet_customers customer
+             ON customer.organization_id=booking.organization_id
+            AND customer.id=booking.customer_id
+          WHERE operation.organization_id=$1
+            AND booking.archived_at IS NULL
+            AND (booking.guest_user_id=$2 OR customer.user_id=$2)
+          ORDER BY operation.created_at DESC`,
+        [PUBLIC_ORGANIZATION_ID, request.user.id],
+      );
+      return response.json({
+        success: true,
+        data: result.rows.map(customerPaymentPayload),
       });
     } catch (error) {
       next(error);
