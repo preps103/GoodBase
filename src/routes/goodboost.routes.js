@@ -4,6 +4,7 @@ const express = require("express");
 const database = require("../config/database");
 const authRequired = require("../middleware/authRequired");
 const { logAudit } = require("../services/audit.service");
+const social = require("../services/goodboost-social.service");
 
 const router = express.Router();
 const PLATFORMS = new Set(["Facebook","YouTube","TikTok","Instagram","Twitter","LinkedIn","Pinterest","SoundCloud","VKontakte","MySpace","Flickr","Vimeo","Reverbnation","Ok.ru","Ask.fm","Twitch","Website"]);
@@ -57,6 +58,16 @@ function validCampaignUrl(platform, value) {
   return (domains[platform] || []).some(domain => host === domain || host.endsWith(`.${domain}`));
 }
 
+router.get("/social/callback/:platform", async (req, res) => {
+  try {
+    await social.callback(req.params.platform, req.query.code, req.query.state);
+    return res.redirect(302, "https://boost.goodos.app/?social=connected");
+  } catch (error) {
+    const message = encodeURIComponent(error.statusCode ? error.message : "Social account connection failed.");
+    return res.redirect(302, `https://boost.goodos.app/?social=error&message=${message}`);
+  }
+});
+
 router.use(authRequired);
 router.use((req, res, next) => {
   const origin = clean(req.get("Origin"), 300);
@@ -74,18 +85,42 @@ router.use((req, res, next) => {
 router.get("/bootstrap", async (req, res, next) => {
   try {
     await database.query("INSERT INTO goodboost_profiles(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING", [req.user.id]);
-    const [profile, campaigns, activity] = await Promise.all([
+    const [profile, campaigns, activity, connectedAccounts] = await Promise.all([
       database.query("SELECT * FROM goodboost_profiles WHERE user_id=$1", [req.user.id]),
       database.query("SELECT * FROM goodboost_campaigns WHERE user_id=$1 ORDER BY created_at DESC LIMIT 500", [req.user.id]),
       database.query(`SELECT date_trunc('day',created_at) AS day,COUNT(*)::int AS count FROM goodboost_activity WHERE user_id=$1 AND created_at>NOW()-INTERVAL '90 days' GROUP BY 1 ORDER BY 1`, [req.user.id]),
+      social.connections(req.user.id),
     ]);
     return res.json({
       success: true,
       profile: publicProfile(profile.rows[0]),
       campaigns: campaigns.rows.map(publicCampaign),
       activityLogs: activity.rows.map(row => ({ date: row.day, count: row.count })),
-      connectedAccounts: [],
+      connectedAccounts,
     });
+  } catch (error) { return next(error); }
+});
+
+router.get("/social/providers", (_req, res) => res.json({ success: true, providers: social.providers() }));
+router.get("/social/connections", async (req, res, next) => {
+  try { return res.json({ success: true, connections: await social.connections(req.user.id) }); } catch (error) { return next(error); }
+});
+router.post("/social/connections", async (req, res, next) => {
+  try { return res.json({ success: true, authorizationUrl: social.authorizationUrl(req.user.id, req.body?.platform) }); } catch (error) { return next(error); }
+});
+router.delete("/social/connections/:id", async (req, res, next) => {
+  try { return res.json({ success: true, ...(await social.disconnect(req.user.id, req.params.id)) }); } catch (error) { return next(error); }
+});
+router.post("/social/connections/:id/sync", async (req, res, next) => {
+  try { return res.json({ success: true, connection: await social.sync(req.user.id, req.params.id) }); } catch (error) { return next(error); }
+});
+router.get("/social/relationships", async (req, res, next) => {
+  try { return res.json({ success: true, ...(await social.relationships(req.user.id, req.query.accountId, req.query.status)) }); } catch (error) { return next(error); }
+});
+router.post("/social/relationships/:id/actions", async (req, res, next) => {
+  try {
+    const relationship = await social.action(req.user.id, req.params.id, clean(req.body?.action, 20), clean(req.get("Idempotency-Key"), 200), req.body?.dailyLimit);
+    return res.json({ success: true, relationship });
   } catch (error) { return next(error); }
 });
 
@@ -151,6 +186,7 @@ router.patch("/profile", async (req, res, next) => {
       onboardingCompleted: settings.onboardingCompleted === true,
       onboardingVersion: settings.onboardingCompleted === true ? 1 : 0,
       webhookUrl: webhook || undefined,
+      automationDailyLimit: Math.min(200, Math.max(5, Number(settings.automationDailyLimit) || 25)),
     };
     const result = await database.query(
       `INSERT INTO goodboost_profiles(user_id,preferences_json) VALUES($1,$2::jsonb)
