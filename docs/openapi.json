@@ -3362,6 +3362,18 @@
       "/api/goodbase/v1/product/overview": {
         "get": {"summary":"Read phases 31–38 operational state","tags":["Goodbase Product Platform"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Analytics, telemetry, experiment, distribution, CDN, regional and commercial metrics"},"403":{"description":"Administrator role required"}}}
       },
+      "/api/goodscan/v1/health": {
+        "get": {"summary":"Read public GoodScan service readiness","tags":["GoodScan"],"security":[],"responses":{"200":{"description":"GoodScan API and private storage readiness"}}}
+      },
+      "/api/goodscan/v1/workspace": {
+        "get": {"summary":"Read the authenticated user's GoodScan assets, community gallery, analytics, devices, usage, and integrations","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Live GoodScan workspace snapshot"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"}}}
+      },
+      "/api/goodscan/v1/captures": {
+        "post": {"summary":"Upload a validated GoodScan capture manifest and original media","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["manifest","sources"],"properties":{"manifest":{"type":"string","format":"binary"},"sources":{"type":"array","maxItems":500,"items":{"type":"string","format":"binary"}}}}}}},"responses":{"202":{"description":"Capture accepted and queued"},"400":{"description":"Invalid capture manifest"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"},"413":{"description":"Capture limits exceeded"},"415":{"description":"Unsupported media type"},"429":{"description":"Upload rate limit exceeded"}}}
+      },
+      "/api/goodscan/v1/ai/capabilities": {
+        "get": {"summary":"Report verified GoodScan AI generation providers and capabilities","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Honest provider capability status"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"}}}
+      },
       "/api/goodbase/v1/ecosystem/overview": {
         "get": {"summary":"Read IaC, extension marketplace, and AI operational state","tags":["Goodbase Ecosystem"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Tenant ecosystem metrics"},"403":{"description":"Administrator role required"}}}
       },
