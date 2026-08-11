@@ -36,6 +36,7 @@ test("voice writes are scoped, allowlisted, and atomic", () => {
   assert.match(source, /fs\.renameSync\(temporaryPath, DB_PATH\)/);
   assert.match(source, /fs\.renameSync\(temporaryPath, SECRETS_PATH\)/);
   assert.match(source, /createCipheriv\("aes-256-gcm"/);
+  assert.match(source, /saveProviderSecrets\(payload\)/);
   assert.match(source, /GOODVOICE_PROVIDER_VAULT_KEY/);
   assert.match(source, /GOODVOICE_DATABASE_INVALID/);
   assert.doesNotMatch(

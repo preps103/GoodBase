@@ -532,7 +532,13 @@ function readProviderSecrets() {
     ]).toString("utf8");
     return JSON.parse(plaintext);
   }
-  return payload && typeof payload === "object" ? payload : {};
+  if (payload && typeof payload === "object") {
+    if (providerVaultKey()) {
+      saveProviderSecrets(payload);
+    }
+    return payload;
+  }
+  return {};
 }
 
 function saveProviderSecrets(secrets) {
