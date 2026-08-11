@@ -770,6 +770,8 @@ async function runHandler(handlerKey) {
       return goodAdsCompetitorIntelligence.syncDueCompetitors(10);
     case "goodboost.social.publish":
       return goodBoostSocial.processDuePublishingPosts(10, workerIdFromEnv());
+    case "goodboost.social.sync":
+      return goodBoostSocial.processDueSyncConnections(10, workerIdFromEnv());
     default:
       return {
         skipped: true,

@@ -17,7 +17,10 @@ test("GoodBoost stores user-owned application data in GoodBase", () => {
   assert.match(migration, /social-audience and growth-operations workspace/);
   assert.doesNotMatch(migration, /goodboost_campaigns|goodboost_activity|credit/);
   assert.match(runner, /20260811_goodboost_production_core\.sql/);
+  assert.match(runner, /20260811_goodboost_operational_readiness\.sql/);
   assert.match(runner, /goodboost_profiles/);
+  assert.match(runner, /job_goodboost_social_sync/);
+  assert.match(runner, /GoodBoost Growth Tools/);
   assert.match(runner, /client\.query\("BEGIN"\)/);
   assert.match(runner, /client\.query\("ROLLBACK"\)/);
 });

@@ -1,5 +1,6 @@
 "use strict";
 const crypto = require("crypto");
+const net = require("node:net");
 const database = require("../config/database");
 
 const MAX_ADAPTER_RESPONSE_BYTES = 5 * 1024 * 1024;
@@ -25,7 +26,14 @@ const DEFINITIONS = [
 function failure(message,statusCode=400,code="GOODBOOST_SOCIAL_INVALID") { const error=new Error(message); error.statusCode=statusCode; error.code=code; return error; }
 function key(value) { return String(value||"").trim().toLowerCase().replace(/[^a-z0-9]/g,"_"); }
 function definition(value) { const item=DEFINITIONS.find((entry)=>entry.key===key(value)||entry.platform.toLowerCase()===String(value||"").toLowerCase()); if(!item) throw failure("Unsupported social provider.",404,"GOODBOOST_PROVIDER_NOT_FOUND"); return item; }
-function endpoint(provider,operation) { const raw=String(process.env[`GOODBOOST_${provider.key.toUpperCase()}_${operation}_URL`]||"").trim(); try { const url=new URL(raw); return url.protocol==="https:"?url:null; } catch { return null; } }
+function endpoint(provider,operation) {
+  const raw=String(process.env[`GOODBOOST_${provider.key.toUpperCase()}_${operation}_URL`]||"").trim();
+  try {
+    const url=new URL(raw); const host=url.hostname.toLowerCase().replace(/^\[|\]$/g,"");
+    if(url.protocol!=="https:"||url.username||url.password||url.port||!host||host==="localhost"||host.endsWith(".localhost")||host.endsWith(".local")||net.isIP(host)) return null;
+    return url;
+  } catch { return null; }
+}
 function providers() { return DEFINITIONS.map((item)=>{ const adapterToken=Boolean(String(process.env.GOODBOOST_PROVIDER_ADAPTER_TOKEN||"").trim()); const oauthReady=Boolean(endpoint(item,"AUTHORIZE")&&endpoint(item,"CALLBACK")&&adapterToken); const syncReady=Boolean(endpoint(item,"SYNC")&&adapterToken); const actionReady=Boolean(endpoint(item,"ACTION")&&adapterToken); return {...item,available:oauthReady,authorizationUrl:null,capabilities:{...item.capabilities,followerList:item.capabilities.followerList&&syncReady,followingList:item.capabilities.followingList&&syncReady,follow:item.capabilities.follow&&actionReady,unfollow:item.capabilities.unfollow&&actionReady}}; }); }
 function publishingPlatforms() {
   if(process.env.GOODBOOST_PUBLISHING_ENABLED!=="true"||!String(process.env.GOODBOOST_PROVIDER_ADAPTER_TOKEN||"").trim()) return [];
@@ -89,10 +97,11 @@ async function callback(platform,code,state) {
   const result=await adapter(provider,"CALLBACK",{code,state,redirectUri:`https://base.goodos.app/api/goodboost/social/callback/${provider.key}`}); const account=result.account||{};
   const accountId=boundedText(account.id,300); const username=boundedText(account.username,200); const tokenReference=boundedText(result.tokenReference,1000);
   if(!accountId||!username||!tokenReference) throw failure("The provider callback did not return a complete account reference.",502,"GOODBOOST_PROVIDER_RESPONSE_INVALID");
+  const configured=providers().find((item)=>item.key===provider.key);
   const stored=await database.query(`INSERT INTO goodboost_social_connections(user_id,platform,provider_account_id,username,display_name,avatar_url,capabilities,token_reference,follower_count,following_count,last_synced_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,NOW()) ON CONFLICT(user_id,platform,provider_account_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,status='active',capabilities=EXCLUDED.capabilities,token_reference=EXCLUDED.token_reference,follower_count=EXCLUDED.follower_count,following_count=EXCLUDED.following_count,last_synced_at=NOW(),updated_at=NOW() RETURNING *`,[verified.userId,provider.key,accountId,username,boundedText(account.displayName,300)||null,safeHttpsValue(account.avatarUrl),JSON.stringify(provider.capabilities),tokenReference,account.followers===undefined?null:nonNegativeInteger(account.followers),account.following===undefined?null:nonNegativeInteger(account.following)]); return stored.rows[0];
+    VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,NOW()) ON CONFLICT(user_id,platform,provider_account_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,status='active',capabilities=EXCLUDED.capabilities,token_reference=EXCLUDED.token_reference,follower_count=EXCLUDED.follower_count,following_count=EXCLUDED.following_count,last_synced_at=NOW(),next_sync_at=NOW()+INTERVAL '15 minutes',sync_attempts=0,last_sync_error=NULL,updated_at=NOW() RETURNING *`,[verified.userId,provider.key,accountId,username,boundedText(account.displayName,300)||null,safeHttpsValue(account.avatarUrl),JSON.stringify(configured?.capabilities||{}),tokenReference,account.followers===undefined?null:nonNegativeInteger(account.followers),account.following===undefined?null:nonNegativeInteger(account.following)]); return stored.rows[0];
 }
-function publicConnection(row) { const provider=definition(row.platform); return {id:row.id,platform:provider.platform,username:row.username,displayName:row.display_name,avatarUrl:row.avatar_url,connectedAt:row.connected_at,status:row.status==="active"?"Active":row.status==="expired"?"Expired":"Needs Reconnect",lastSyncedAt:row.last_synced_at,followerCount:row.follower_count,followingCount:row.following_count,capabilities:row.capabilities||provider.capabilities}; }
+function publicConnection(row) { const provider=definition(row.platform); return {id:row.id,platform:provider.platform,username:row.username,displayName:row.display_name,avatarUrl:row.avatar_url,connectedAt:row.connected_at,status:row.status==="active"?"Active":row.status==="expired"?"Expired":"Needs Reconnect",lastSyncedAt:row.last_synced_at,nextSyncAt:row.next_sync_at,lastSyncError:row.last_sync_error||undefined,followerCount:row.follower_count,followingCount:row.following_count,capabilities:row.capabilities||provider.capabilities}; }
 function boundedText(value,max=500) { return String(value??"").trim().replace(/[\u0000-\u001f\u007f]/g," ").slice(0,max); }
 function nonNegativeInteger(value) { const parsed=Number(value); return Number.isFinite(parsed)&&parsed>=0?Math.min(Number.MAX_SAFE_INTEGER,Math.trunc(parsed)):0; }
 function boundedMetadata(value) { const raw=JSON.stringify(value&&typeof value==="object"?value:{}); return raw.length<=32768?raw:"{}"; }
@@ -113,11 +122,19 @@ async function sync(userId,id) {
   const result=await adapter(provider,"SYNC",{connectionId:id,tokenReference:connection.token_reference}); const account=result.account||{}; const client=await database.pool.connect();
   try {
     await client.query("BEGIN");
-    for(const item of (Array.isArray(result.relationships)?result.relationships:[]).slice(0,10000)) {
+    const sourceRelationships=Array.isArray(result.relationships)?result.relationships:[];
+    const boundedRelationships=sourceRelationships.slice(0,10000);
+    const synchronizedRelationshipIds=[];
+    for(const item of boundedRelationships) {
       const relationshipId=boundedText(item.id,300); const username=boundedText(item.username,200); const status=["not-following-back","mutual","fan","recently-unfollowed"].includes(item.status)?item.status:null;
       if(!relationshipId||!username||!status) continue;
+      synchronizedRelationshipIds.push(relationshipId);
       await client.query(`INSERT INTO goodboost_social_relationships(connection_id,provider_user_id,username,display_name,avatar_url,profile_url,status,follows_you,you_follow,verified,metadata,last_changed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT(connection_id,provider_user_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,profile_url=EXCLUDED.profile_url,status=EXCLUDED.status,follows_you=EXCLUDED.follows_you,you_follow=EXCLUDED.you_follow,verified=EXCLUDED.verified,metadata=EXCLUDED.metadata,last_changed_at=EXCLUDED.last_changed_at,updated_at=NOW()`,[id,relationshipId,username,boundedText(item.displayName,300)||null,safeHttpsValue(item.avatarUrl),safeHttpsValue(item.profileUrl),status,Boolean(item.followsYou),Boolean(item.youFollow),Boolean(item.verified),boundedMetadata(item.metadata),validIsoDate(item.lastChangedAt)]);
     }
+    const completeRelationshipSnapshot=result.relationshipsComplete===true
+      && sourceRelationships.length<=10000
+      && synchronizedRelationshipIds.length===sourceRelationships.length;
+    if(completeRelationshipSnapshot) await client.query("DELETE FROM goodboost_social_relationships WHERE connection_id=$1 AND NOT(provider_user_id=ANY($2::text[]))",[id,[...new Set(synchronizedRelationshipIds)]]);
     for(const item of (Array.isArray(result.inbox)?result.inbox:[]).slice(0,2000)) {
       const providerItemId=boundedText(item.id||item.providerItemId,300); const itemType=["comment","mention","message","review"].includes(item.itemType)?item.itemType:null; const authorName=boundedText(item.authorName,300); const content=boundedText(item.content,5000); const receivedAt=validIsoDate(item.receivedAt);
       if(!providerItemId||!itemType||!authorName||!content||!receivedAt) continue;
@@ -129,9 +146,73 @@ async function sync(userId,id) {
       const recordedAt=validIsoDate(item.recordedAt); if(!recordedAt) continue;
       await client.query(`INSERT INTO goodboost_metric_snapshots(user_id,connection_id,platform,recorded_at,followers,impressions,reach,engagements,clicks,video_views,posts_published,source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'provider') ON CONFLICT(connection_id,recorded_at) DO UPDATE SET followers=EXCLUDED.followers,impressions=EXCLUDED.impressions,reach=EXCLUDED.reach,engagements=EXCLUDED.engagements,clicks=EXCLUDED.clicks,video_views=EXCLUDED.video_views,posts_published=EXCLUDED.posts_published`,[userId,id,provider.platform,recordedAt,nonNegativeInteger(item.followers),nonNegativeInteger(item.impressions),nonNegativeInteger(item.reach),nonNegativeInteger(item.engagements),nonNegativeInteger(item.clicks),nonNegativeInteger(item.videoViews),nonNegativeInteger(item.postsPublished)]);
     }
-    const updated=await client.query("UPDATE goodboost_social_connections SET follower_count=$1,following_count=$2,last_synced_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *",[account.followers===undefined?connection.follower_count:nonNegativeInteger(account.followers),account.following===undefined?connection.following_count:nonNegativeInteger(account.following),id]);
+    const current=providers().find((item)=>item.key===provider.key);
+    const updated=await client.query("UPDATE goodboost_social_connections SET follower_count=$1,following_count=$2,capabilities=$3::jsonb,last_synced_at=NOW(),next_sync_at=NOW()+INTERVAL '15 minutes',sync_attempts=0,sync_locked_by=NULL,sync_locked_until=NULL,last_sync_error=NULL,updated_at=NOW() WHERE id=$4 RETURNING *",[account.followers===undefined?connection.follower_count:nonNegativeInteger(account.followers),account.following===undefined?connection.following_count:nonNegativeInteger(account.following),JSON.stringify(current?.capabilities||{}),id]);
     await client.query("COMMIT"); return publicConnection(updated.rows[0]);
   } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+}
+
+async function claimSyncConnection(workerId) {
+  const result=await database.query(`WITH selected AS (
+    SELECT id FROM goodboost_social_connections
+    WHERE status='active' AND token_reference IS NOT NULL AND next_sync_at<=NOW()
+      AND (sync_locked_until IS NULL OR sync_locked_until<NOW())
+    ORDER BY next_sync_at,last_synced_at NULLS FIRST,connected_at
+    FOR UPDATE SKIP LOCKED LIMIT 1
+  ) UPDATE goodboost_social_connections connection SET sync_attempts=sync_attempts+1,
+    sync_locked_by=$1,sync_locked_until=NOW()+INTERVAL '3 minutes',updated_at=NOW()
+    FROM selected WHERE connection.id=selected.id RETURNING connection.*`,[boundedText(workerId,200)]);
+  return result.rows[0]||null;
+}
+
+async function finishSyncFailure(connection,error,delaySeconds) {
+  const attempts=Math.max(1,Number(connection.sync_attempts||1));
+  const delay=delaySeconds||Math.min(21600,Math.max(60,60*(2**Math.min(8,attempts-1))));
+  await database.query(`UPDATE goodboost_social_connections SET next_sync_at=NOW()+($2*INTERVAL '1 second'),
+    sync_locked_by=NULL,sync_locked_until=NULL,last_sync_error=$3,updated_at=NOW() WHERE id=$1`,[
+    connection.id,delay,boundedText(error?.message||"Provider synchronization failed.",1000),
+  ]);
+}
+
+async function processDueSyncConnections(limit=10,workerId="goodboost-synchronizer") {
+  const boundedLimit=Math.min(50,Math.max(1,Number(limit)||10));
+  const summary={processed:0,synchronized:0,retrying:0,skipped:0};
+  for(let index=0;index<boundedLimit;index+=1) {
+    const connection=await claimSyncConnection(workerId); if(!connection) break; summary.processed+=1;
+    const provider=definition(connection.platform);
+    if(!endpoint(provider,"SYNC")||!String(process.env.GOODBOOST_PROVIDER_ADAPTER_TOKEN||"").trim()) {
+      await finishSyncFailure(connection,new Error(`${provider.displayName} synchronization is not configured.`),86400);
+      summary.skipped+=1; continue;
+    }
+    try { await sync(connection.user_id,connection.id); summary.synchronized+=1; }
+    catch(error) { await finishSyncFailure(connection,error); summary.retrying+=1; }
+  }
+  return summary;
+}
+
+async function operationalReadiness() {
+  const [jobs,ai]=await Promise.all([
+    database.query("SELECT id,status FROM backend_jobs WHERE id=ANY($1::text[])",[["job_goodboost_social_publish","job_goodboost_social_sync"]]).catch(()=>({rows:[]})),
+    database.query(`SELECT EXISTS (
+      SELECT 1 FROM goodbase_ai_policies policy
+      JOIN goodbase_ai_models model ON model.organization_id=policy.organization_id
+        AND model.project_id=policy.project_id AND model.environment_id=policy.environment_id
+        AND model.alias='goodboost-growth' AND model.alias=ANY(policy.allowed_model_aliases) AND model.status='active'
+      JOIN goodbase_ai_providers provider ON provider.id=model.provider_id AND provider.status='ready'
+      WHERE policy.organization_id='org_goodos' AND policy.project_id='proj_goodos_platform'
+        AND policy.environment_id='env_goodos_production' AND policy.app_id='goodboost' AND policy.status='active'
+    ) AS ready`).catch(()=>({rows:[]})),
+  ]);
+  const active=new Set(jobs.rows.filter((row)=>row.status==="active").map((row)=>row.id));
+  const registered=providers();
+  return {
+    syncWorkerReady:active.has("job_goodboost_social_sync"),
+    publishingWorkerReady:active.has("job_goodboost_social_publish"),
+    connectableProviders:registered.filter((item)=>item.available).map((item)=>item.platform),
+    synchronizedProviders:registered.filter((item)=>item.capabilities.followerList||item.capabilities.followingList).map((item)=>item.platform),
+    publishingPlatforms:active.has("job_goodboost_social_publish")?publishingPlatforms():[],
+    aiReady:Boolean(ai.rows[0]?.ready),
+  };
 }
 function configuredActionLimit(value) { const parsed=Number(value||25); return Math.min(200,Math.max(5,Number.isFinite(parsed)?parsed:25)); }
 async function actionUsage(userId) {
@@ -229,4 +310,4 @@ async function processDuePublishingPosts(limit=10,workerId="goodboost-publisher"
   return summary;
 }
 
-module.exports={providers,publishingPlatforms,publishingConfigured,publishingReadiness,authorizationUrl,callback,connections,disconnect,sync,relationships,action,actionUsage,processDuePublishingPosts};
+module.exports={providers,publishingPlatforms,publishingConfigured,publishingReadiness,operationalReadiness,authorizationUrl,callback,connections,disconnect,sync,processDueSyncConnections,relationships,action,actionUsage,processDuePublishingPosts};

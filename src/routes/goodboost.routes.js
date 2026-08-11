@@ -1,13 +1,16 @@
 "use strict";
 
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const net = require("node:net");
 const database = require("../config/database");
 const authRequired = require("../middleware/authRequired");
 const { logAudit } = require("../services/audit.service");
 const social = require("../services/goodboost-social.service");
+const ai = require("../services/goodbase-ai.service");
 
 const router = express.Router();
+const aiLimiter = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { success: false, code: "GOODBOOST_AI_RATE_LIMITED", message: "AI requests are temporarily rate limited." } });
 
 function clean(value, max = 500) {
   return String(value ?? "").trim().replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
@@ -56,7 +59,7 @@ function publicProfile(row) {
 }
 
 function publicPost(row) {
-  return { id: row.id, accountId: row.connection_id || undefined, platform: row.platform, content: row.content, mediaUrls: row.media_urls || [], scheduledFor: row.scheduled_for || undefined, publishedAt: row.published_at || undefined, status: row.status, approvalNote: row.approval_note || undefined, providerPostId: row.provider_post_id || undefined, errorReason: row.error_reason || undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, accountId: row.connection_id || undefined, platform: row.platform, content: row.content, mediaUrls: row.media_urls || [], scheduledFor: row.scheduled_for || undefined, publishedAt: row.published_at || undefined, status: row.status, approvalNote: row.approval_note || undefined, providerPostId: row.provider_post_id || undefined, errorReason: row.error_reason || undefined, attempts: Number(row.attempts || 0), maxAttempts: Number(row.max_attempts || 5), createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 function publicInboxItem(row) {
@@ -108,6 +111,37 @@ router.get("/bootstrap", async (req, res, next) => {
 });
 
 router.get("/social/providers", (_req, res) => res.json({ success: true, providers: social.providers() }));
+router.get("/readiness", async (_req, res, next) => {
+  try { return res.json({ success: true, ...(await social.operationalReadiness()) }); } catch (error) { return next(error); }
+});
+router.post("/ai/strategy", aiLimiter, async (req, res, next) => {
+  try {
+    const platform = clean(req.body?.platform, 40);
+    const topic = clean(req.body?.topic, 4000);
+    const tone = clean(req.body?.tone, 80);
+    const idempotencyKey = clean(req.get("Idempotency-Key"), 160);
+    const supported = social.providers().some(provider => provider.platform === platform);
+    if (!supported || topic.length < 2 || !["Professional","Funny","Inspirational","Educational","Conversational","Minimalist"].includes(tone) || !idempotencyKey) {
+      return res.status(400).json({ success: false, code: "GOODBOOST_AI_INPUT_INVALID", message: "A supported platform, topic, tone, and Idempotency-Key are required." });
+    }
+    const result = await ai.generate({
+      scope: { organizationId: "org_goodos", projectId: "proj_goodos_platform", environmentId: "env_goodos_production" },
+      userId: req.user.id,
+      attestationToken: "",
+      idempotencyKey,
+      body: {
+        appId: "goodboost",
+        model: "goodboost-growth",
+        temperature: 0.6,
+        maxOutputTokens: 900,
+        prompt: `Create a safe, policy-compliant social content strategy for ${platform}. Topic: ${topic}. Tone: ${tone}. Return JSON with title, content, and hashtags.`,
+        input: { platform, topic, tone },
+        outputSchema: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, content: { type: "string" }, hashtags: { type: "array", items: { type: "string" } } }, required: ["title","content","hashtags"] },
+      },
+    });
+    return res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
+  } catch (error) { return next(error); }
+});
 router.get("/social/connections", async (req, res, next) => {
   try { return res.json({ success: true, connections: await social.connections(req.user.id) }); } catch (error) { return next(error); }
 });
@@ -138,8 +172,8 @@ router.get("/operations", async (req, res, next) => {
       database.query("SELECT * FROM goodboost_inbox_items WHERE user_id=$1 ORDER BY received_at DESC LIMIT 500", [req.user.id]),
       database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 1000", [req.user.id]),
     ]);
-    const publishing = await social.publishingReadiness();
-    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: publishing.configured, publishingPlatforms: publishing.publishingPlatforms });
+    const readiness = await social.operationalReadiness();
+    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: readiness.publishingPlatforms.length > 0, publishingPlatforms: readiness.publishingPlatforms, syncWorkerReady: readiness.syncWorkerReady });
   } catch (error) { return next(error); }
 });
 
@@ -171,6 +205,29 @@ router.patch("/publishing/posts/:id", async (req, res, next) => {
     if (content.length < 2) return res.status(400).json({ success: false, message: "Post content is required." });
     if (status === "scheduled" && (!scheduledFor || Number.isNaN(new Date(scheduledFor).getTime()) || new Date(scheduledFor).getTime() <= Date.now())) return res.status(400).json({ success: false, code: "GOODBOOST_SCHEDULE_INVALID", message: "Scheduled posts require a future publishing time." });
     const result = await database.query("UPDATE goodboost_publishing_posts SET content=$1,scheduled_for=$2,status=$3,approval_note=$4,updated_at=NOW() WHERE id=$5 AND user_id=$6 RETURNING *", [content, scheduledFor, status, approvalNote, req.params.id, req.user.id]);
+    return res.json({ success: true, post: publicPost(result.rows[0]) });
+  } catch (error) { return next(error); }
+});
+
+router.delete("/publishing/posts/:id", async (req, res, next) => {
+  try {
+    const result = await database.query("UPDATE goodboost_publishing_posts SET status='cancelled',locked_by=NULL,locked_until=NULL,error_reason=NULL,updated_at=NOW() WHERE id=$1 AND user_id=$2 AND status IN ('draft','pending_approval','scheduled') RETURNING *", [req.params.id, req.user.id]);
+    if (!result.rows[0]) return res.status(409).json({ success: false, code: "GOODBOOST_POST_NOT_CANCELLABLE", message: "This post is already publishing, completed, failed, cancelled, or unavailable." });
+    await logAudit({ userId: req.user.id, appId: "goodboost", action: "goodboost.post.cancel", entityType: "publishing_post", entityId: result.rows[0].id, ipAddress: req.ip, metadata: { status: "cancelled" } }).catch(() => {});
+    return res.json({ success: true, post: publicPost(result.rows[0]) });
+  } catch (error) { return next(error); }
+});
+
+router.post("/publishing/posts/:id/retry", async (req, res, next) => {
+  try {
+    const found = await database.query("SELECT * FROM goodboost_publishing_posts WHERE id=$1 AND user_id=$2 AND status='failed'", [req.params.id, req.user.id]);
+    const current = found.rows[0];
+    if (!current) return res.status(409).json({ success: false, code: "GOODBOOST_POST_NOT_RETRYABLE", message: "Only failed posts can be retried." });
+    if (!(await social.publishingReadiness(current.platform)).configured) return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Publishing or its delivery worker is not configured for this provider." });
+    const account = await database.query("SELECT id FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status='active'", [current.connection_id, req.user.id]);
+    if (!account.rows[0]) return res.status(409).json({ success: false, code: "GOODBOOST_CONNECTION_REQUIRED", message: "Reconnect the publishing account before retrying this post." });
+    const result = await database.query("UPDATE goodboost_publishing_posts SET status='scheduled',scheduled_for=NOW(),available_at=NOW(),attempts=0,locked_by=NULL,locked_until=NULL,error_reason=NULL,updated_at=NOW() WHERE id=$1 AND user_id=$2 AND status='failed' RETURNING *", [req.params.id, req.user.id]);
+    await logAudit({ userId: req.user.id, appId: "goodboost", action: "goodboost.post.retry", entityType: "publishing_post", entityId: result.rows[0].id, ipAddress: req.ip, metadata: { platform: result.rows[0].platform } }).catch(() => {});
     return res.json({ success: true, post: publicPost(result.rows[0]) });
   } catch (error) { return next(error); }
 });

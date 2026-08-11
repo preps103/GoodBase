@@ -10,6 +10,7 @@ const MIGRATIONS = [
   "20260801_goodboost_social_connectors.sql",
   "20260802_goodboost_growth_operations.sql",
   "20260811_goodboost_delivery_worker.sql",
+  "20260811_goodboost_operational_readiness.sql",
 ];
 const LOCK_NAME = "goodbase:migration:goodboost-production-v2";
 
@@ -32,13 +33,33 @@ async function schemaReady(client) {
       EXISTS (
         SELECT 1 FROM backend_jobs
         WHERE id='job_goodboost_social_publish' AND handler_key='goodboost.social.publish' AND status='active'
-      ) AS delivery_worker
+      ) AS delivery_worker,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='goodboost_social_connections'
+          AND column_name='next_sync_at'
+      ) AS sync_columns,
+      EXISTS (
+        SELECT 1 FROM backend_jobs
+        WHERE id='job_goodboost_social_sync' AND handler_key='goodboost.social.sync' AND status='active'
+      ) AS sync_worker,
+      EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname='goodboost_publishing_posts_status_check'
+          AND pg_get_constraintdef(oid) LIKE '%cancelled%'
+      ) AS cancellation_status,
+      EXISTS (
+        SELECT 1 FROM goodbase_ai_policies
+        WHERE organization_id='org_goodos' AND project_id='proj_goodos_platform'
+          AND environment_id='env_goodos_production' AND app_id='goodboost'
+          AND name='GoodBoost Growth Tools' AND status='active'
+      ) AS ai_policy
   `);
   return result.rows[0] || {};
 }
 
 function ready(state) {
-  return Object.values(state).length === 10 && Object.values(state).every(Boolean);
+  return Object.values(state).length === 14 && Object.values(state).every(Boolean);
 }
 
 async function main() {
