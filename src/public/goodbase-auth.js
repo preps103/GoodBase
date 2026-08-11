@@ -154,7 +154,7 @@ async function loadProviders() {
         location.assign(`/api/oidc/start/${encodeURIComponent(provider.id)}?returnTo=${encodeURIComponent(returnTo)}`);
       });
     }
-    nodes.providers.append(button);
+    nodes.providers.insertBefore(button, nodes.goodos);
   }
 }
 

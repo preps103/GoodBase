@@ -15,21 +15,34 @@ const auth = fs.readFileSync(
   "utf8"
 );
 
-test("GoodBase bridges verified GoodMail identities across every active application", () => {
+test("GoodBase bridges verified employee identities across every active application", () => {
   assert.match(service, /http:\/\/127\.0\.0\.1:3021\/api\/login/);
   assert.match(service, /AbortSignal\.timeout\(5000\)/);
   assert.match(service, /response\.ok/);
   assert.match(service, /bcrypt\.hash\(password, 12\)/);
   assert.match(service, /corporateMailboxLinked/);
   assert.match(service, /ensureCorporateAppAccess/);
+  assert.match(service, /INSERT INTO app_memberships/);
   assert.match(service, /FROM apps application/);
   assert.match(service, /WHERE application\.status = 'active'/);
-  assert.doesNotMatch(service, /CORPORATE_APP_ACCESS/);
   assert.match(service, /WHEN app_memberships\.role = 'owner' THEN 'owner'/);
   assert.match(service, /ELSE 'admin'/);
   assert.doesNotMatch(service, /console\.(?:log|error).*password/i);
   assert.match(auth, /synchronizeCorporateIdentity/);
   assert.match(auth, /ensureCorporateAppAccess\(email, user\.id\)/);
+});
+
+test("central authentication exposes an authoritative per-application access check", () => {
+  const routes = fs.readFileSync(
+    path.join(root, "src", "routes", "auth.routes.js"),
+    "utf8"
+  );
+
+  assert.match(routes, /router\.get\("\/authorize\/:appId", authRequired/);
+  assert.match(routes, /membership\.appStatus/);
+  assert.match(routes, /membership\.membershipStatus/);
+  assert.match(routes, /APPLICATION_ACCESS_DENIED/);
+  assert.match(routes, /auth\.app_access_denied/);
 });
 
 test("GoodMail verification never replaces an existing GoodBase password", () => {

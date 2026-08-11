@@ -1112,6 +1112,42 @@ router.get("/me", authRequired, async (req, res) => {
   });
 });
 
+router.get("/authorize/:appId", authRequired, async (req, res) => {
+  const requestedAppId = String(req.params.appId || "").trim().toLowerCase();
+  const membership = (req.apps || []).find((app) =>
+    String(app.id || "").trim().toLowerCase() === requestedAppId
+  );
+  const authorized = Boolean(
+    membership &&
+    String(membership.appStatus || "").toLowerCase() === "active" &&
+    String(membership.membershipStatus || "").toLowerCase() === "active"
+  );
+
+  await logAudit({
+    userId: req.user.id,
+    action: authorized ? "auth.app_access_granted" : "auth.app_access_denied",
+    entityType: "application",
+    entityId: requestedAppId || null,
+    ipAddress: req.ip,
+    metadata: {
+      role: membership?.role || null,
+      authSource: req.auth.source
+    }
+  }).catch(() => {});
+
+  if (!authorized) {
+    return error(res, "Your GoodOS account does not have access to this application.", 403, {
+      code: "APPLICATION_ACCESS_DENIED",
+      appId: requestedAppId
+    });
+  }
+
+  return success(res, {
+    authorized: true,
+    app: membership
+  });
+});
+
 router.get("/sessions", authRequired, async (req, res) => {
   try {
     const sessions = await listUserSessions(req.user.id);
