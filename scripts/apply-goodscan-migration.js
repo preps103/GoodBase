@@ -12,12 +12,16 @@ const MIGRATION_PATHS = [
 async function main() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required to apply the GoodScan migration.");
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, application_name: "goodscan-migration" });
+  const client = await pool.connect();
   try {
+    await client.query("SELECT pg_advisory_lock(hashtext('goodscan-production-migrations'))");
     for (const migrationPath of MIGRATION_PATHS) {
-      await pool.query(fs.readFileSync(migrationPath, "utf8"));
+      await client.query(fs.readFileSync(migrationPath, "utf8"));
       console.log(`${path.basename(migrationPath)} applied.`);
     }
   } finally {
+    await client.query("SELECT pg_advisory_unlock(hashtext('goodscan-production-migrations'))").catch(() => {});
+    client.release();
     await pool.end();
   }
 }

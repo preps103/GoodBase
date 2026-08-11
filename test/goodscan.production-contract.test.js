@@ -47,3 +47,15 @@ test("GoodScan database migration is run before the API starts", () => {
   assert.match(creditMigration, /CREATE TABLE IF NOT EXISTS goodscan_credit_accounts/);
   assert.match(migrationRunner, /20260810_goodscan_credit_billing\.sql/);
 });
+
+test("GoodScan production release serializes migrations and exposes a fail-closed readiness gate", () => {
+  const migration = source("scripts/apply-goodscan-migration.js");
+  const readiness = source("scripts/goodscan-production-readiness.js");
+  const packageJson = JSON.parse(source("package.json"));
+  assert.match(migration, /pg_advisory_lock/);
+  assert.match(migration, /goodscan-production-migrations/);
+  assert.match(readiness, /GOODSCAN_STRIPE_WEBHOOK_SECRET/);
+  assert.match(readiness, /goodscan_credit_webhook_events/);
+  assert.match(packageJson.scripts.build, /migrate:goodscan/);
+  assert.equal(packageJson.scripts["readiness:goodscan"], "node scripts/goodscan-production-readiness.js");
+});
