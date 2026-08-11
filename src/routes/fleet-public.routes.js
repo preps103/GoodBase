@@ -59,6 +59,41 @@ function publicLocation(branch) {
   };
 }
 
+function isPublishableLocation(location) {
+  const address = clean(location?.address, 300).toLowerCase();
+  const phone = clean(location?.phone, 40);
+  const timezone = clean(location?.timezone, 80);
+  const placeholderAddress = /\b(?:example|placeholder|test|tbd|todo|unknown)\b/.test(address) ||
+    /^(?:123|000)\s+(?:main|market|test)\b/.test(address);
+
+  let validTimezone = false;
+  try {
+    validTimezone = Boolean(timezone && new Intl.DateTimeFormat("en-US", { timeZone: timezone }));
+  } catch {
+    validTimezone = false;
+  }
+
+  let validPhone = true;
+  if (phone) {
+    const digits = phone.replace(/\D/g, "");
+    const national = digits.length === 11 && digits.startsWith("1")
+      ? digits.slice(1)
+      : digits;
+    validPhone = national.length === 10 &&
+      /^[2-9]\d{2}[2-9]\d{6}$/.test(national) &&
+      national.slice(3, 6) !== "555";
+  }
+
+  return Boolean(
+    location?.id &&
+    location?.name &&
+    address.length >= 10 &&
+    !placeholderAddress &&
+    validTimezone &&
+    validPhone
+  );
+}
+
 function publicOffer(discount) {
   return {
     id: clean(discount?.id, 100),
@@ -429,7 +464,7 @@ router.get("/locations", async (_request, response, next) => {
     const state = await publicWorkspaceState();
     const locations = (Array.isArray(state.branches) ? state.branches : [])
       .map(publicLocation)
-      .filter(location => location.id && location.name);
+      .filter(isPublishableLocation);
     response.json({ success: true, data: locations });
   } catch (error) {
     next(error);

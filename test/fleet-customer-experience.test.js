@@ -13,6 +13,10 @@ test("GoodFleet publishes sanitized locations and active offers", () => {
   assert.match(routes, /router\.get\("\/locations"/);
   assert.match(routes, /router\.get\("\/offers"/);
   assert.match(routes, /publicLocation/);
+  assert.match(routes, /isPublishableLocation/);
+  assert.match(routes, /placeholderAddress/);
+  assert.match(routes, /validTimezone/);
+  assert.match(routes, /validPhone/);
   assert.match(routes, /discount\?\.status === "active"/);
   assert.doesNotMatch(routes, /financialConfig/);
   assert.doesNotMatch(routes, /locationSurcharge/);
