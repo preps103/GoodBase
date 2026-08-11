@@ -11,4 +11,6 @@ test("password recovery supports only secure GoodOS application return targets",
   assert.match(source, /parsed\.hostname\.endsWith\("\.goodos\.app"\)/);
   assert.match(source, /reset_token=/);
   assert.match(source, /encodeURIComponent\(rawToken\)/);
+  assert.match(source, /if \(!token \|\| !strongSignupPassword\(password\)\)/);
+  assert.match(source, /12–128 characters with uppercase, lowercase, a number, and a symbol/);
 });

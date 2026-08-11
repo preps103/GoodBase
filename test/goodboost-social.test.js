@@ -32,4 +32,6 @@ test("GoodBoost relationship actions require confirmation and transactional limi
   assert.match(routes, /GOODBOOST_CONFIRMATION_REQUIRED/);
   assert.match(service, /pg_advisory_xact_lock/);
   assert.match(service, /status IN \('processing','completed'\)/);
+  assert.match(service, /actionUsage/);
+  assert.doesNotMatch(routes, /req\.body\?\.dailyLimit/);
 });

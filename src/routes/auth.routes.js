@@ -1904,8 +1904,8 @@ router.post("/password-reset/complete", async (req, res) => {
     const token = String(req.body?.token || "").trim();
     const password = String(req.body?.password || "");
 
-    if (!token || password.length < 10) {
-      return error(res, "Token and a password with at least 10 characters are required", 400);
+    if (!token || !strongSignupPassword(password)) {
+      return error(res, "Token and a password using 12–128 characters with uppercase, lowercase, a number, and a symbol are required", 400);
     }
 
     const tokenHash = authV2Hash(token);

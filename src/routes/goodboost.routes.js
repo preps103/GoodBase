@@ -8,8 +8,6 @@ const { logAudit } = require("../services/audit.service");
 const social = require("../services/goodboost-social.service");
 
 const router = express.Router();
-const PLATFORMS = new Set(["Facebook","YouTube","TikTok","Instagram","Twitter","LinkedIn","Pinterest","SoundCloud","VKontakte","MySpace","Flickr","Vimeo","Reverbnation","Ok.ru","Ask.fm","Twitch","Website"]);
-const INTERACTIONS = new Set(["Like","Follow","View","Share","Comment","Subscribe","Save","Repost","Listen","Join","Connection","Fave","Fan","Retweet"]);
 
 function clean(value, max = 500) {
   return String(value ?? "").trim().replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
@@ -50,30 +48,10 @@ function safePublicHttpsUrl(value) {
   }
 }
 
-function publicCampaign(row) {
-  return {
-    id: row.id,
-    platform: row.platform,
-    url: row.content_url,
-    type: row.interaction_type,
-    target: row.target,
-    current: row.current_count,
-    status: row.status,
-    targeting: row.targeting_json,
-    createdAt: row.created_at,
-  };
-}
-
 function publicProfile(row) {
   if (!row) return {};
   return {
-    tier: row.tier,
-    trustScore: row.trust_score,
-    dailyStreak: row.daily_streak,
-    bonusClaimed: row.bonus_claimed,
-    referrals: row.referral_json,
     settings: row.preferences_json,
-    whiteLabelConfig: row.white_label_json,
   };
 }
 
@@ -87,23 +65,6 @@ function publicInboxItem(row) {
 
 function publicMetric(row) {
   return { accountId: row.connection_id || undefined, platform: row.platform, recordedAt: row.recorded_at, followers: Number(row.followers || 0), impressions: Number(row.impressions || 0), reach: Number(row.reach || 0), engagements: Number(row.engagements || 0), clicks: Number(row.clicks || 0), videoViews: Number(row.video_views || 0), postsPublished: Number(row.posts_published || 0) };
-}
-
-function validCampaignUrl(platform, value) {
-  let url;
-  try { url = new URL(value); } catch { return false; }
-  if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
-  const host = url.hostname.toLowerCase();
-  const domains = {
-    Facebook: ["facebook.com"], YouTube: ["youtube.com","youtu.be"], TikTok: ["tiktok.com"],
-    Instagram: ["instagram.com"], Twitter: ["x.com","twitter.com"], LinkedIn: ["linkedin.com"],
-    Pinterest: ["pinterest.com","pin.it"], SoundCloud: ["soundcloud.com"], VKontakte: ["vk.com"],
-    MySpace: ["myspace.com"], Flickr: ["flickr.com"], Vimeo: ["vimeo.com"],
-    Reverbnation: ["reverbnation.com"], "Ok.ru": ["ok.ru"], "Ask.fm": ["ask.fm"],
-    Twitch: ["twitch.tv"],
-  };
-  if (platform === "Website") return true;
-  return (domains[platform] || []).some(domain => host === domain || host.endsWith(`.${domain}`));
 }
 
 router.get("/social/callback/:platform", async (req, res) => {
@@ -134,17 +95,13 @@ router.use((req, res, next) => {
 router.get("/bootstrap", async (req, res, next) => {
   try {
     await database.query("INSERT INTO goodboost_profiles(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING", [req.user.id]);
-    const [profile, campaigns, activity, connectedAccounts] = await Promise.all([
+    const [profile, connectedAccounts] = await Promise.all([
       database.query("SELECT * FROM goodboost_profiles WHERE user_id=$1", [req.user.id]),
-      database.query("SELECT * FROM goodboost_campaigns WHERE user_id=$1 ORDER BY created_at DESC LIMIT 500", [req.user.id]),
-      database.query(`SELECT date_trunc('day',created_at) AS day,COUNT(*)::int AS count FROM goodboost_activity WHERE user_id=$1 AND created_at>NOW()-INTERVAL '90 days' GROUP BY 1 ORDER BY 1`, [req.user.id]),
       social.connections(req.user.id),
     ]);
     return res.json({
       success: true,
       profile: publicProfile(profile.rows[0]),
-      campaigns: campaigns.rows.map(publicCampaign),
-      activityLogs: activity.rows.map(row => ({ date: row.day, count: row.count })),
       connectedAccounts,
     });
   } catch (error) { return next(error); }
@@ -169,7 +126,7 @@ router.get("/social/relationships", async (req, res, next) => {
 router.post("/social/relationships/:id/actions", async (req, res, next) => {
   try {
     if (req.body?.confirmation !== true) return res.status(400).json({ success: false, code: "GOODBOOST_CONFIRMATION_REQUIRED", message: "Confirm this provider action before submitting it." });
-    const relationship = await social.action(req.user.id, req.params.id, clean(req.body?.action, 20), clean(req.get("Idempotency-Key"), 200), req.body?.dailyLimit);
+    const relationship = await social.action(req.user.id, req.params.id, clean(req.body?.action, 20), clean(req.get("Idempotency-Key"), 200));
     return res.json({ success: true, relationship });
   } catch (error) { return next(error); }
 });
@@ -223,62 +180,11 @@ router.get("/reports/export", async (req, res, next) => {
   try { const format = req.query.format === "csv" ? "csv" : "json"; const metrics = await database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 10000", [req.user.id]); const data = metrics.rows.map(publicMetric); res.setHeader("Content-Disposition", `attachment; filename=goodboost-report.${format}`); res.setHeader("Cache-Control", "private, no-store"); if (format === "json") return res.type("application/json").send(JSON.stringify({ generatedAt: new Date().toISOString(), metrics: data }, null, 2)); const fields = ["platform","recordedAt","followers","impressions","reach","engagements","clicks","videoViews","postsPublished"]; const csv = [fields.join(","), ...data.map(row => fields.map(field => JSON.stringify(row[field] ?? "")).join(","))].join("\n"); return res.type("text/csv").send(csv); } catch (error) { return next(error); }
 });
 
-router.post("/campaigns", async (req, res, next) => {
-  try {
-    const platform = clean(req.body?.platform, 40);
-    const interaction = clean(req.body?.type, 40);
-    const target = Number(req.body?.target);
-    const url = clean(req.body?.url, 2048);
-    const targeting = req.body?.targeting && typeof req.body.targeting === "object" ? req.body.targeting : {};
-    if (!PLATFORMS.has(platform) || !INTERACTIONS.has(interaction) || !Number.isInteger(target) || target < 10 || target > 1000 || !validCampaignUrl(platform, url)) {
-      return res.status(400).json({ success: false, code: "INVALID_CAMPAIGN", message: "Campaign platform, URL, interaction, or target is invalid." });
-    }
-    const safeTargeting = {
-      countries: Array.isArray(targeting.countries) ? targeting.countries.map(value => clean(value, 80)).filter(Boolean).slice(0, 25) : [],
-      interests: Array.isArray(targeting.interests) ? targeting.interests.map(value => clean(value, 80)).filter(Boolean).slice(0, 25) : [],
-      verifiedOnly: targeting.verifiedOnly === true,
-    };
-    const result = await database.query(
-      `INSERT INTO goodboost_campaigns(user_id,platform,content_url,interaction_type,target,targeting_json)
-       VALUES($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,
-      [req.user.id, platform, url, interaction, target, JSON.stringify(safeTargeting)]
-    );
-    await logAudit({ userId: req.user.id, appId: "goodboost", action: "goodboost.campaign.create", entityType: "campaign", entityId: result.rows[0].id, ipAddress: req.ip, metadata: { platform, interaction, target } }).catch(() => {});
-    return res.status(201).json({ success: true, campaign: publicCampaign(result.rows[0]) });
-  } catch (error) { return next(error); }
-});
-
-router.post("/activity", async (req, res, next) => {
-  const client = await database.pool.connect();
-  try {
-    const description = clean(req.body?.description, 240);
-    if (description.length < 2) return res.status(400).json({ success: false, message: "Activity description is required." });
-    await client.query("BEGIN");
-    await client.query("INSERT INTO goodboost_activity(user_id,description) VALUES($1,$2)", [req.user.id, description]);
-    const boosted = await client.query(
-      `UPDATE goodboost_campaigns SET current_count=LEAST(target,current_count+1),
-       status=CASE WHEN current_count+1>=target THEN 'Completed' ELSE status END,updated_at=NOW()
-       WHERE id=(SELECT id FROM goodboost_campaigns WHERE user_id=$1 AND status='Active' AND current_count<target ORDER BY created_at LIMIT 1)
-       RETURNING *`, [req.user.id]
-    );
-    await client.query("COMMIT");
-    const campaigns = await database.query("SELECT * FROM goodboost_campaigns WHERE user_id=$1 ORDER BY created_at DESC LIMIT 500", [req.user.id]);
-    return res.json({ success: true, user: {}, boostedCampaign: boosted.rows[0] ? publicCampaign(boosted.rows[0]) : null, campaigns: campaigns.rows.map(publicCampaign) });
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    return next(error);
-  } finally { client.release(); }
-});
-
 router.patch("/profile", async (req, res, next) => {
   try {
     const settings = req.body?.settings && typeof req.body.settings === "object" ? req.body.settings : {};
     const webhook = clean(settings.webhookUrl, 2048);
-    if (webhook) {
-      let parsed;
-      try { parsed = new URL(webhook); } catch { return res.status(400).json({ success: false, message: "Webhook URL is invalid." }); }
-      if (parsed.protocol !== "https:" || parsed.username || parsed.password) return res.status(400).json({ success: false, message: "Webhook URL must use HTTPS and cannot contain credentials." });
-    }
+    if (webhook && !safePublicHttpsUrl(webhook)) return res.status(400).json({ success: false, message: "Webhook URL must use a public HTTPS address without credentials or a custom port." });
     const safeSettings = {
       emailNotifications: settings.emailNotifications !== false,
       dailyReports: settings.dailyReports !== false,

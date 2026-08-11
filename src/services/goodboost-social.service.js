@@ -81,10 +81,21 @@ async function sync(userId,id) {
     const updated=await client.query("UPDATE goodboost_social_connections SET follower_count=$1,following_count=$2,last_synced_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *",[account.followers??connection.follower_count,account.following??connection.following_count,id]); await client.query("COMMIT"); return publicConnection(updated.rows[0]);
   } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
+function configuredActionLimit(value) { const parsed=Number(value||25); return Math.min(200,Math.max(5,Number.isFinite(parsed)?parsed:25)); }
+async function actionUsage(userId) {
+  const [profile,usage]=await Promise.all([
+    database.query("SELECT preferences_json FROM goodboost_profiles WHERE user_id=$1",[userId]),
+    database.query("SELECT action,COUNT(*)::int AS count FROM goodboost_social_actions WHERE user_id=$1 AND status IN ('processing','completed') AND created_at>=date_trunc('day',NOW()) GROUP BY action",[userId]),
+  ]);
+  const limit=configuredActionLimit(profile.rows[0]?.preferences_json?.automationDailyLimit);
+  const totals=Object.fromEntries(usage.rows.map((row)=>[row.action,Number(row.count||0)]));
+  const followUsed=totals.follow||0; const unfollowUsed=totals.unfollow||0;
+  return {limit,followUsed,unfollowUsed,followRemaining:Math.max(0,limit-followUsed),unfollowRemaining:Math.max(0,limit-unfollowUsed)};
+}
 async function relationships(userId,accountId,status) {
   const found=await database.query("SELECT * FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status<>'disconnected'",[accountId,userId]); const connection=found.rows[0]; if(!connection) throw failure("Connected account not found.",404,"GOODBOOST_CONNECTION_NOT_FOUND"); const safe=["not-following-back","mutual","fan","recently-unfollowed"].includes(status)?status:"not-following-back";
   const [records,counts]=await Promise.all([database.query("SELECT * FROM goodboost_social_relationships WHERE connection_id=$1 AND status=$2 ORDER BY updated_at DESC LIMIT 500",[accountId,safe]),database.query("SELECT status,COUNT(*)::int AS count FROM goodboost_social_relationships WHERE connection_id=$1 GROUP BY status",[accountId])]); const totals=Object.fromEntries(counts.rows.map((row)=>[row.status,row.count])); const provider=definition(connection.platform);
-  return {relationships:records.rows.map((row)=>({id:row.id,accountId:row.connection_id,platform:provider.platform,providerUserId:row.provider_user_id,username:row.username,displayName:row.display_name,avatarUrl:row.avatar_url,profileUrl:row.profile_url,status:row.status,followsYou:row.follows_you,youFollow:row.you_follow,verified:row.verified,lastChangedAt:row.last_changed_at})),summary:{followers:connection.follower_count||0,following:connection.following_count||0,mutual:totals.mutual||0,notFollowingBack:totals["not-following-back"]||0,fans:totals.fan||0,lastSyncedAt:connection.last_synced_at}};
+  return {relationships:records.rows.map((row)=>({id:row.id,accountId:row.connection_id,platform:provider.platform,providerUserId:row.provider_user_id,username:row.username,displayName:row.display_name,avatarUrl:row.avatar_url,profileUrl:row.profile_url,status:row.status,followsYou:row.follows_you,youFollow:row.you_follow,verified:row.verified,lastChangedAt:row.last_changed_at})),summary:{followers:connection.follower_count||0,following:connection.following_count||0,mutual:totals.mutual||0,notFollowingBack:totals["not-following-back"]||0,fans:totals.fan||0,lastSyncedAt:connection.last_synced_at},actionUsage:await actionUsage(userId)};
 }
 function boundedProviderResponse(value) {
   if(!value||typeof value!=="object") return {};
@@ -94,10 +105,10 @@ function boundedProviderResponse(value) {
   }
   return allowed;
 }
-async function action(userId,relationshipId,requestedAction,idempotencyKey,dailyLimit) {
+async function action(userId,relationshipId,requestedAction,idempotencyKey) {
   if(!["follow","unfollow"].includes(requestedAction)) throw failure("Unsupported relationship action."); if(!idempotencyKey) throw failure("Idempotency-Key is required.",400,"GOODBOOST_IDEMPOTENCY_REQUIRED");
   const found=await database.query(`SELECT r.*,c.platform,c.token_reference,c.capabilities FROM goodboost_social_relationships r JOIN goodboost_social_connections c ON c.id=r.connection_id WHERE r.id=$1 AND c.user_id=$2 AND c.status='active'`,[relationshipId,userId]); const row=found.rows[0]; if(!row) throw failure("Audience relationship not found.",404,"GOODBOOST_RELATIONSHIP_NOT_FOUND"); if(!row.capabilities?.[requestedAction]) throw failure("This provider requires review on its own platform.",409,"GOODBOOST_NATIVE_REVIEW_REQUIRED");
-  const profile=await database.query("SELECT preferences_json FROM goodboost_profiles WHERE user_id=$1",[userId]); const configured=Number(profile.rows[0]?.preferences_json?.automationDailyLimit||dailyLimit||25); const limit=Math.min(200,Math.max(5,configured));
+  const profile=await database.query("SELECT preferences_json FROM goodboost_profiles WHERE user_id=$1",[userId]); const limit=configuredActionLimit(profile.rows[0]?.preferences_json?.automationDailyLimit);
   const client=await database.pool.connect(); let actionId;
   try {
     await client.query("BEGIN");
@@ -112,4 +123,4 @@ async function action(userId,relationshipId,requestedAction,idempotencyKey,daily
   const provider=definition(row.platform);
   try { const providerResponse=await adapter(provider,"ACTION",{action:requestedAction,providerUserId:row.provider_user_id,tokenReference:row.token_reference},idempotencyKey); await database.query("UPDATE goodboost_social_actions SET status='completed',provider_response=$1::jsonb,completed_at=NOW() WHERE id=$2",[JSON.stringify(boundedProviderResponse(providerResponse)),actionId]); const updated=await database.query("UPDATE goodboost_social_relationships SET status=$1,you_follow=$2,last_changed_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *",[requestedAction==="unfollow"?"recently-unfollowed":"mutual",requestedAction==="follow",relationshipId]); return updated.rows[0]; } catch(error) { await database.query("UPDATE goodboost_social_actions SET status='failed',provider_response=$1::jsonb,completed_at=NOW() WHERE id=$2",[JSON.stringify({message:String(error.message||"Provider action failed").slice(0,500)}),actionId]); throw error; }
 }
-module.exports={providers,authorizationUrl,callback,connections,disconnect,sync,relationships,action};
+module.exports={providers,authorizationUrl,callback,connections,disconnect,sync,relationships,action,actionUsage};
