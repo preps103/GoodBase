@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 umask 077
 
-STATE_DIR="${GOODVOICE_STATE_DIR:-/var/www/GoodBase/data}"
-DATABASE_FILE="${GOODOS_VOICE_DB_PATH:-$STATE_DIR/goodos-voice-db.json}"
+DATABASE_FILE="${GOODOS_VOICE_DB_PATH:-/var/lib/goodapp-backend/goodos-voice-db.json}"
+STATE_DIR="${GOODVOICE_STATE_DIR:-$(dirname "$DATABASE_FILE")}"
 SECRETS_FILE="${GOODVOICE_SECRETS_PATH:-$STATE_DIR/goodvoice-provider-secrets.json}"
 BACKUP_ROOT="${GOODVOICE_STATE_BACKUP_ROOT:-/var/backups/goodvoice-state}"
 STAMP_FILE="${GOODVOICE_STATE_BACKUP_STAMP:-$STATE_DIR/goodvoice-state-backup.timestamp}"

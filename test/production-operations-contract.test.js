@@ -70,5 +70,7 @@ test("GoodVoice state receives a bounded, checksummed daily backup", () => {
   assert.match(backup, /GOODVOICE_STATE_MINIMUM_BACKUPS:-2/);
   assert.match(service, /ProtectSystem=strict/);
   assert.match(service, /\/var\/backups\/goodvoice-state/);
+  assert.match(service, /\/var\/lib\/goodapp-backend/);
+  assert.doesNotMatch(service, /\/var\/www\/GoodBase\/data/);
   assert.match(timer, /OnCalendar=/);
 });
