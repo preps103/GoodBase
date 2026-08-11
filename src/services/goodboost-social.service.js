@@ -2,6 +2,8 @@
 const crypto = require("crypto");
 const database = require("../config/database");
 
+const MAX_ADAPTER_RESPONSE_BYTES = 5 * 1024 * 1024;
+
 const DEFINITIONS = [
   ["twitter","Twitter","X",true,true,true,"Follower comparison and confirmed follow/unfollow actions."],
   ["youtube","YouTube","YouTube",true,true,true,"Channel subscriptions and confirmed subscription removal."],
@@ -25,6 +27,26 @@ function key(value) { return String(value||"").trim().toLowerCase().replace(/[^a
 function definition(value) { const item=DEFINITIONS.find((entry)=>entry.key===key(value)||entry.platform.toLowerCase()===String(value||"").toLowerCase()); if(!item) throw failure("Unsupported social provider.",404,"GOODBOOST_PROVIDER_NOT_FOUND"); return item; }
 function endpoint(provider,operation) { const raw=String(process.env[`GOODBOOST_${provider.key.toUpperCase()}_${operation}_URL`]||"").trim(); try { const url=new URL(raw); return url.protocol==="https:"?url:null; } catch { return null; } }
 function providers() { return DEFINITIONS.map((item)=>{ const adapterToken=Boolean(String(process.env.GOODBOOST_PROVIDER_ADAPTER_TOKEN||"").trim()); const oauthReady=Boolean(endpoint(item,"AUTHORIZE")&&endpoint(item,"CALLBACK")&&adapterToken); const syncReady=Boolean(endpoint(item,"SYNC")&&adapterToken); const actionReady=Boolean(endpoint(item,"ACTION")&&adapterToken); return {...item,available:oauthReady,authorizationUrl:null,capabilities:{...item.capabilities,followerList:item.capabilities.followerList&&syncReady,followingList:item.capabilities.followingList&&syncReady,follow:item.capabilities.follow&&actionReady,unfollow:item.capabilities.unfollow&&actionReady}}; }); }
+function publishingPlatforms() {
+  if(process.env.GOODBOOST_PUBLISHING_ENABLED!=="true"||!String(process.env.GOODBOOST_PROVIDER_ADAPTER_TOKEN||"").trim()) return [];
+  return DEFINITIONS.filter((item)=>Boolean(endpoint(item,"PUBLISH"))).map((item)=>item.platform);
+}
+function publishingConfigured(platform) {
+  if(!platform) return publishingPlatforms().length>0;
+  const provider=definition(platform);
+  return publishingPlatforms().includes(provider.platform);
+}
+async function publishingReadiness(platform) {
+  const configuredPlatforms=publishingPlatforms();
+  const worker=await database.query("SELECT 1 FROM backend_jobs WHERE id='job_goodboost_social_publish' AND handler_key='goodboost.social.publish' AND status='active' LIMIT 1").catch(()=>({rows:[]}));
+  const workerReady=Boolean(worker.rows[0]);
+  const enabledPlatforms=workerReady?configuredPlatforms:[];
+  return {
+    workerReady,
+    publishingPlatforms:enabledPlatforms,
+    configured:platform?enabledPlatforms.includes(definition(platform).platform):enabledPlatforms.length>0,
+  };
+}
 
 async function signState(userId,provider) {
   const secret=String(process.env.GOODBOOST_OAUTH_STATE_SECRET||process.env.JWT_SECRET||"");
@@ -52,18 +74,30 @@ async function adapter(provider,operation,payload,idempotencyKey) {
   const url=endpoint(provider,operation); const token=String(process.env.GOODBOOST_PROVIDER_ADAPTER_TOKEN||"").trim();
   if(!url||!token) throw failure(`${provider.displayName} ${operation.toLowerCase()} is not configured.`,503,"GOODBOOST_PROVIDER_NOT_CONFIGURED");
   const response=await fetch(url,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",...(idempotencyKey?{"Idempotency-Key":idempotencyKey}:{})},body:JSON.stringify(payload),signal:AbortSignal.timeout(30000)});
-  const body=await response.json().catch(()=>({})); if(!response.ok) throw failure(body.message||body.error||`Provider returned ${response.status}.`,response.status>=500?502:409,"GOODBOOST_PROVIDER_REJECTED"); return body;
+  const declared=Number(response.headers.get("content-length")||0);
+  if(declared>MAX_ADAPTER_RESPONSE_BYTES) throw failure("Provider response exceeded the allowed size.",502,"GOODBOOST_PROVIDER_RESPONSE_TOO_LARGE");
+  const chunks=[]; let total=0;
+  if(response.body) for await(const chunk of response.body) { const value=Buffer.from(chunk); total+=value.length; if(total>MAX_ADAPTER_RESPONSE_BYTES) { await response.body.cancel().catch(()=>{}); throw failure("Provider response exceeded the allowed size.",502,"GOODBOOST_PROVIDER_RESPONSE_TOO_LARGE"); } chunks.push(value); }
+  let body={};
+  if(chunks.length) { try { body=JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw failure("Provider returned invalid JSON.",502,"GOODBOOST_PROVIDER_RESPONSE_INVALID"); } }
+  if(!response.ok) throw failure(body.message||body.error||`Provider returned ${response.status}.`,response.status>=500?502:409,"GOODBOOST_PROVIDER_REJECTED"); return body;
 }
 async function authorizationUrl(userId,platform) { const provider=definition(platform); const ready=providers().find((item)=>item.key===provider.key); const url=endpoint(provider,"AUTHORIZE"); if(!ready?.available||!url) throw failure(`${provider.displayName} OAuth handoff is not fully configured.`,503,"GOODBOOST_PROVIDER_NOT_CONFIGURED"); url.searchParams.set("state",await signState(userId,provider)); url.searchParams.set("redirect_uri",`https://base.goodos.app/api/goodboost/social/callback/${provider.key}`); url.searchParams.set("return_to","https://boost.goodos.app/?social=connected"); return url.toString(); }
 
 async function callback(platform,code,state) {
   const provider=definition(platform); const verified=await readState(state); if(verified.provider!==provider.key) throw failure("OAuth provider mismatch.",400,"GOODBOOST_OAUTH_PROVIDER_MISMATCH");
   const result=await adapter(provider,"CALLBACK",{code,state,redirectUri:`https://base.goodos.app/api/goodboost/social/callback/${provider.key}`}); const account=result.account||{};
-  if(!account.id||!account.username||!result.tokenReference) throw failure("The provider callback did not return a complete account reference.",502,"GOODBOOST_PROVIDER_RESPONSE_INVALID");
+  const accountId=boundedText(account.id,300); const username=boundedText(account.username,200); const tokenReference=boundedText(result.tokenReference,1000);
+  if(!accountId||!username||!tokenReference) throw failure("The provider callback did not return a complete account reference.",502,"GOODBOOST_PROVIDER_RESPONSE_INVALID");
   const stored=await database.query(`INSERT INTO goodboost_social_connections(user_id,platform,provider_account_id,username,display_name,avatar_url,capabilities,token_reference,follower_count,following_count,last_synced_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,NOW()) ON CONFLICT(user_id,platform,provider_account_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,status='active',capabilities=EXCLUDED.capabilities,token_reference=EXCLUDED.token_reference,follower_count=EXCLUDED.follower_count,following_count=EXCLUDED.following_count,last_synced_at=NOW(),updated_at=NOW() RETURNING *`,[verified.userId,provider.key,String(account.id||""),String(account.username||""),account.displayName||null,account.avatarUrl||null,JSON.stringify(provider.capabilities),result.tokenReference||null,account.followers??null,account.following??null]); return stored.rows[0];
+    VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,NOW()) ON CONFLICT(user_id,platform,provider_account_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,status='active',capabilities=EXCLUDED.capabilities,token_reference=EXCLUDED.token_reference,follower_count=EXCLUDED.follower_count,following_count=EXCLUDED.following_count,last_synced_at=NOW(),updated_at=NOW() RETURNING *`,[verified.userId,provider.key,accountId,username,boundedText(account.displayName,300)||null,safeHttpsValue(account.avatarUrl),JSON.stringify(provider.capabilities),tokenReference,account.followers===undefined?null:nonNegativeInteger(account.followers),account.following===undefined?null:nonNegativeInteger(account.following)]); return stored.rows[0];
 }
 function publicConnection(row) { const provider=definition(row.platform); return {id:row.id,platform:provider.platform,username:row.username,displayName:row.display_name,avatarUrl:row.avatar_url,connectedAt:row.connected_at,status:row.status==="active"?"Active":row.status==="expired"?"Expired":"Needs Reconnect",lastSyncedAt:row.last_synced_at,followerCount:row.follower_count,followingCount:row.following_count,capabilities:row.capabilities||provider.capabilities}; }
+function boundedText(value,max=500) { return String(value??"").trim().replace(/[\u0000-\u001f\u007f]/g," ").slice(0,max); }
+function nonNegativeInteger(value) { const parsed=Number(value); return Number.isFinite(parsed)&&parsed>=0?Math.min(Number.MAX_SAFE_INTEGER,Math.trunc(parsed)):0; }
+function boundedMetadata(value) { const raw=JSON.stringify(value&&typeof value==="object"?value:{}); return raw.length<=32768?raw:"{}"; }
+function safeHttpsValue(value) { try { const url=new URL(boundedText(value,2048)); return url.protocol==="https:"&&!url.username&&!url.password?url.toString():null; } catch { return null; } }
+function validIsoDate(value) { const parsed=new Date(value); return Number.isNaN(parsed.getTime())?null:parsed.toISOString(); }
 async function connections(userId) { const result=await database.query("SELECT * FROM goodboost_social_connections WHERE user_id=$1 AND status<>'disconnected' ORDER BY connected_at DESC",[userId]); return result.rows.map(publicConnection); }
 async function disconnect(userId,id) {
   const found=await database.query("SELECT * FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status<>'disconnected'",[id,userId]);
@@ -77,8 +111,26 @@ async function disconnect(userId,id) {
 async function sync(userId,id) {
   const found=await database.query("SELECT * FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status='active'",[id,userId]); const connection=found.rows[0]; if(!connection) throw failure("Connected account not found.",404,"GOODBOOST_CONNECTION_NOT_FOUND"); const provider=definition(connection.platform);
   const result=await adapter(provider,"SYNC",{connectionId:id,tokenReference:connection.token_reference}); const account=result.account||{}; const client=await database.pool.connect();
-  try { await client.query("BEGIN"); for(const item of (Array.isArray(result.relationships)?result.relationships:[]).slice(0,10000)) { const relationshipId=String(item.id||"").trim(); const username=String(item.username||"").trim(); const status=["not-following-back","mutual","fan","recently-unfollowed"].includes(item.status)?item.status:null; if(!relationshipId||!username||!status) continue; await client.query(`INSERT INTO goodboost_social_relationships(connection_id,provider_user_id,username,display_name,avatar_url,profile_url,status,follows_you,you_follow,verified,metadata,last_changed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT(connection_id,provider_user_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,profile_url=EXCLUDED.profile_url,status=EXCLUDED.status,follows_you=EXCLUDED.follows_you,you_follow=EXCLUDED.you_follow,verified=EXCLUDED.verified,metadata=EXCLUDED.metadata,last_changed_at=EXCLUDED.last_changed_at,updated_at=NOW()`,[id,relationshipId,username,item.displayName||null,item.avatarUrl||null,item.profileUrl||null,status,Boolean(item.followsYou),Boolean(item.youFollow),Boolean(item.verified),JSON.stringify(item.metadata||{}),item.lastChangedAt||null]); }
-    const updated=await client.query("UPDATE goodboost_social_connections SET follower_count=$1,following_count=$2,last_synced_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *",[account.followers??connection.follower_count,account.following??connection.following_count,id]); await client.query("COMMIT"); return publicConnection(updated.rows[0]);
+  try {
+    await client.query("BEGIN");
+    for(const item of (Array.isArray(result.relationships)?result.relationships:[]).slice(0,10000)) {
+      const relationshipId=boundedText(item.id,300); const username=boundedText(item.username,200); const status=["not-following-back","mutual","fan","recently-unfollowed"].includes(item.status)?item.status:null;
+      if(!relationshipId||!username||!status) continue;
+      await client.query(`INSERT INTO goodboost_social_relationships(connection_id,provider_user_id,username,display_name,avatar_url,profile_url,status,follows_you,you_follow,verified,metadata,last_changed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT(connection_id,provider_user_id) DO UPDATE SET username=EXCLUDED.username,display_name=EXCLUDED.display_name,avatar_url=EXCLUDED.avatar_url,profile_url=EXCLUDED.profile_url,status=EXCLUDED.status,follows_you=EXCLUDED.follows_you,you_follow=EXCLUDED.you_follow,verified=EXCLUDED.verified,metadata=EXCLUDED.metadata,last_changed_at=EXCLUDED.last_changed_at,updated_at=NOW()`,[id,relationshipId,username,boundedText(item.displayName,300)||null,safeHttpsValue(item.avatarUrl),safeHttpsValue(item.profileUrl),status,Boolean(item.followsYou),Boolean(item.youFollow),Boolean(item.verified),boundedMetadata(item.metadata),validIsoDate(item.lastChangedAt)]);
+    }
+    for(const item of (Array.isArray(result.inbox)?result.inbox:[]).slice(0,2000)) {
+      const providerItemId=boundedText(item.id||item.providerItemId,300); const itemType=["comment","mention","message","review"].includes(item.itemType)?item.itemType:null; const authorName=boundedText(item.authorName,300); const content=boundedText(item.content,5000); const receivedAt=validIsoDate(item.receivedAt);
+      if(!providerItemId||!itemType||!authorName||!content||!receivedAt) continue;
+      const status=["unread","open","resolved","archived"].includes(item.status)?item.status:"unread"; const sentiment=["positive","neutral","negative"].includes(item.sentiment)?item.sentiment:null;
+      await client.query(`INSERT INTO goodboost_inbox_items(user_id,connection_id,platform,provider_item_id,item_type,author_name,author_username,content,status,sentiment,received_at,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) ON CONFLICT(connection_id,provider_item_id) DO UPDATE SET author_name=EXCLUDED.author_name,author_username=EXCLUDED.author_username,content=EXCLUDED.content,status=CASE WHEN goodboost_inbox_items.status IN ('resolved','archived') THEN goodboost_inbox_items.status ELSE EXCLUDED.status END,sentiment=EXCLUDED.sentiment,received_at=EXCLUDED.received_at,metadata=EXCLUDED.metadata,updated_at=NOW()`,[userId,id,provider.platform,providerItemId,itemType,authorName,boundedText(item.authorUsername,200)||null,content,status,sentiment,receivedAt,boundedMetadata(item.metadata)]);
+    }
+    const metrics=Array.isArray(result.metrics)?result.metrics:(result.metrics&&typeof result.metrics==="object"?[result.metrics]:[]);
+    for(const item of metrics.slice(0,1000)) {
+      const recordedAt=validIsoDate(item.recordedAt); if(!recordedAt) continue;
+      await client.query(`INSERT INTO goodboost_metric_snapshots(user_id,connection_id,platform,recorded_at,followers,impressions,reach,engagements,clicks,video_views,posts_published,source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'provider') ON CONFLICT(connection_id,recorded_at) DO UPDATE SET followers=EXCLUDED.followers,impressions=EXCLUDED.impressions,reach=EXCLUDED.reach,engagements=EXCLUDED.engagements,clicks=EXCLUDED.clicks,video_views=EXCLUDED.video_views,posts_published=EXCLUDED.posts_published`,[userId,id,provider.platform,recordedAt,nonNegativeInteger(item.followers),nonNegativeInteger(item.impressions),nonNegativeInteger(item.reach),nonNegativeInteger(item.engagements),nonNegativeInteger(item.clicks),nonNegativeInteger(item.videoViews),nonNegativeInteger(item.postsPublished)]);
+    }
+    const updated=await client.query("UPDATE goodboost_social_connections SET follower_count=$1,following_count=$2,last_synced_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *",[account.followers===undefined?connection.follower_count:nonNegativeInteger(account.followers),account.following===undefined?connection.following_count:nonNegativeInteger(account.following),id]);
+    await client.query("COMMIT"); return publicConnection(updated.rows[0]);
   } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
 function configuredActionLimit(value) { const parsed=Number(value||25); return Math.min(200,Math.max(5,Number.isFinite(parsed)?parsed:25)); }
@@ -123,4 +175,58 @@ async function action(userId,relationshipId,requestedAction,idempotencyKey) {
   const provider=definition(row.platform);
   try { const providerResponse=await adapter(provider,"ACTION",{action:requestedAction,providerUserId:row.provider_user_id,tokenReference:row.token_reference},idempotencyKey); await database.query("UPDATE goodboost_social_actions SET status='completed',provider_response=$1::jsonb,completed_at=NOW() WHERE id=$2",[JSON.stringify(boundedProviderResponse(providerResponse)),actionId]); const updated=await database.query("UPDATE goodboost_social_relationships SET status=$1,you_follow=$2,last_changed_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *",[requestedAction==="unfollow"?"recently-unfollowed":"mutual",requestedAction==="follow",relationshipId]); return updated.rows[0]; } catch(error) { await database.query("UPDATE goodboost_social_actions SET status='failed',provider_response=$1::jsonb,completed_at=NOW() WHERE id=$2",[JSON.stringify({message:String(error.message||"Provider action failed").slice(0,500)}),actionId]); throw error; }
 }
-module.exports={providers,authorizationUrl,callback,connections,disconnect,sync,relationships,action,actionUsage};
+
+async function claimPublishingPost(workerId) {
+  const client=await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result=await client.query(`WITH selected AS (
+      SELECT id FROM goodboost_publishing_posts
+      WHERE status='scheduled' AND scheduled_for<=NOW() AND available_at<=NOW()
+        AND attempts<max_attempts AND (locked_until IS NULL OR locked_until<NOW())
+      ORDER BY scheduled_for,created_at FOR UPDATE SKIP LOCKED LIMIT 1
+    ) UPDATE goodboost_publishing_posts post SET status='publishing',attempts=attempts+1,
+      locked_by=$1,locked_until=NOW()+INTERVAL '2 minutes',error_reason=NULL,updated_at=NOW()
+      FROM selected WHERE post.id=selected.id RETURNING post.*`,[workerId]);
+    await client.query("COMMIT"); return result.rows[0]||null;
+  } catch(error) { await client.query("ROLLBACK").catch(()=>{}); throw error; } finally { client.release(); }
+}
+
+async function finishPublishingFailure(post,error) {
+  const retry=Number(post.attempts||0)<Number(post.max_attempts||5);
+  const delay=Math.min(3600,Math.max(30,30*(2**Math.max(0,Number(post.attempts||1)-1))));
+  await database.query(`UPDATE goodboost_publishing_posts SET status=$2,
+    available_at=CASE WHEN $2='scheduled' THEN NOW()+($3*INTERVAL '1 second') ELSE available_at END,
+    locked_by=NULL,locked_until=NULL,error_reason=$4,updated_at=NOW() WHERE id=$1`,[
+    post.id,retry?"scheduled":"failed",delay,boundedText(error?.message||"Provider publishing failed.",1000),
+  ]);
+  return retry?"retrying":"failed";
+}
+
+async function processDuePublishingPosts(limit=10,workerId="goodboost-publisher") {
+  const boundedLimit=Math.min(50,Math.max(1,Number(limit)||10));
+  if(process.env.GOODBOOST_PUBLISHING_ENABLED!=="true") return {processed:0,published:0,retrying:0,failed:0,skipped:"publishing_disabled"};
+  await database.query(`UPDATE goodboost_publishing_posts SET
+    status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'scheduled' END,
+    available_at=NOW(),locked_by=NULL,locked_until=NULL,
+    error_reason=COALESCE(error_reason,'Recovered after worker lock expiration.'),updated_at=NOW()
+    WHERE status='publishing' AND locked_until<NOW()`);
+  const summary={processed:0,published:0,retrying:0,failed:0};
+  for(let index=0;index<boundedLimit;index+=1) {
+    const post=await claimPublishingPost(workerId); if(!post) break; summary.processed+=1;
+    try {
+      const found=await database.query("SELECT * FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status='active'",[post.connection_id,post.user_id]);
+      const connection=found.rows[0]; if(!connection) throw failure("Connected publishing account is unavailable.",409,"GOODBOOST_CONNECTION_NOT_FOUND");
+      const provider=definition(connection.platform); if(!publishingConfigured(provider.platform)) throw failure(`${provider.displayName} publishing is not configured.`,503,"GOODBOOST_PUBLISHING_NOT_CONFIGURED");
+      const receipt=await adapter(provider,"PUBLISH",{connectionId:connection.id,tokenReference:connection.token_reference,content:post.content,mediaUrls:post.media_urls||[],scheduledFor:post.scheduled_for},post.idempotency_key);
+      const providerPostId=boundedText(receipt.providerPostId||receipt.id,500); if(!providerPostId) throw failure("Provider did not return a publishing receipt.",502,"GOODBOOST_PROVIDER_RESPONSE_INVALID");
+      await database.query(`UPDATE goodboost_publishing_posts SET status='published',published_at=NOW(),
+        provider_post_id=$2,provider_receipt=$3::jsonb,locked_by=NULL,locked_until=NULL,error_reason=NULL,updated_at=NOW()
+        WHERE id=$1`,[post.id,providerPostId,JSON.stringify(boundedProviderResponse({...receipt,providerRequestId:receipt.providerRequestId||receipt.requestId}))]);
+      summary.published+=1;
+    } catch(error) { summary[await finishPublishingFailure(post,error)]+=1; }
+  }
+  return summary;
+}
+
+module.exports={providers,publishingPlatforms,publishingConfigured,publishingReadiness,authorizationUrl,callback,connections,disconnect,sync,relationships,action,actionUsage,processDuePublishingPosts};

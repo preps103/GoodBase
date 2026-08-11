@@ -138,7 +138,8 @@ router.get("/operations", async (req, res, next) => {
       database.query("SELECT * FROM goodboost_inbox_items WHERE user_id=$1 ORDER BY received_at DESC LIMIT 500", [req.user.id]),
       database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 1000", [req.user.id]),
     ]);
-    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: process.env.GOODBOOST_PUBLISHING_ENABLED === "true" });
+    const publishing = await social.publishingReadiness();
+    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: publishing.configured, publishingPlatforms: publishing.publishingPlatforms });
   } catch (error) { return next(error); }
 });
 
@@ -149,7 +150,7 @@ router.post("/publishing/posts", async (req, res, next) => {
     if (!platform || content.length < 2 || !allowedStatuses.has(status) || !idempotencyKey) return res.status(400).json({ success: false, code: "GOODBOOST_POST_INVALID", message: "Platform, content, status, and Idempotency-Key are required." });
     const scheduledFor = req.body?.scheduledFor ? new Date(req.body.scheduledFor) : null;
     if (status === "scheduled" && (!scheduledFor || Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() <= Date.now())) return res.status(400).json({ success: false, code: "GOODBOOST_SCHEDULE_INVALID", message: "Scheduled posts require a future publishing time." });
-    if (status === "scheduled" && process.env.GOODBOOST_PUBLISHING_ENABLED !== "true") return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Provider publishing is not configured. Save this content as a draft instead." });
+    if (status === "scheduled" && !(await social.publishingReadiness(platform)).configured) return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Publishing or its delivery worker is not configured for this provider. Save this content as a draft instead." });
     const mediaUrls = Array.isArray(req.body?.mediaUrls) ? req.body.mediaUrls.map(value => clean(value, 2048)).filter(safePublicHttpsUrl).slice(0, 20) : [];
     const accountId = req.body?.accountId || null;
     if (status !== "draft" && !accountId) return res.status(400).json({ success: false, code: "GOODBOOST_CONNECTION_REQUIRED", message: "Choose a connected account before submitting or scheduling content." });
@@ -164,9 +165,11 @@ router.patch("/publishing/posts/:id", async (req, res, next) => {
   try {
     const found = await database.query("SELECT * FROM goodboost_publishing_posts WHERE id=$1 AND user_id=$2", [req.params.id, req.user.id]); if (!found.rows[0]) return res.status(404).json({ success: false, message: "Publishing post not found." });
     const current = found.rows[0]; const status = req.body?.status ? clean(req.body.status, 30) : current.status; const allowed = new Set(["draft","pending_approval","scheduled"]); if (!allowed.has(status)) return res.status(400).json({ success: false, message: "Publishing status is invalid." });
-    if (status === "scheduled" && process.env.GOODBOOST_PUBLISHING_ENABLED !== "true") return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Provider publishing is not configured. Keep this content as a draft." });
+    if (status === "scheduled" && !(await social.publishingReadiness(current.platform)).configured) return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Publishing or its delivery worker is not configured for this provider. Keep this content as a draft." });
     if (current.status === "pending_approval" && status !== "pending_approval" && !privileged(req.user)) return res.status(403).json({ success: false, code: "GOODBOOST_APPROVAL_REQUIRED", message: "An owner or administrator must approve this post." });
     const content = req.body?.content === undefined ? current.content : clean(req.body.content, 5000); const approvalNote = req.body?.approvalNote === undefined ? current.approval_note : clean(req.body.approvalNote, 1000); const scheduledFor = req.body?.scheduledFor === undefined ? current.scheduled_for : req.body.scheduledFor ? new Date(req.body.scheduledFor) : null;
+    if (content.length < 2) return res.status(400).json({ success: false, message: "Post content is required." });
+    if (status === "scheduled" && (!scheduledFor || Number.isNaN(new Date(scheduledFor).getTime()) || new Date(scheduledFor).getTime() <= Date.now())) return res.status(400).json({ success: false, code: "GOODBOOST_SCHEDULE_INVALID", message: "Scheduled posts require a future publishing time." });
     const result = await database.query("UPDATE goodboost_publishing_posts SET content=$1,scheduled_for=$2,status=$3,approval_note=$4,updated_at=NOW() WHERE id=$5 AND user_id=$6 RETURNING *", [content, scheduledFor, status, approvalNote, req.params.id, req.user.id]);
     return res.json({ success: true, post: publicPost(result.rows[0]) });
   } catch (error) { return next(error); }
