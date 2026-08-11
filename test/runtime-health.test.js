@@ -85,6 +85,36 @@ test("worker degradation is visible without removing a request-serving instance"
   assert.equal(readiness.trafficReady, true);
 });
 
+test("required GoodSpeech inference participates in traffic readiness", async () => {
+  const authorization = `Bearer ${"k".repeat(32)}`;
+  const ready = await runReadinessChecks({
+    queryFn: healthyQuery,
+    fetchFn: async (url, options) => {
+      if (String(url).includes(":8880/health/ready")) {
+        assert.equal(options.headers.Authorization, authorization);
+      }
+      return healthyFetch();
+    },
+    lifecycle: createLifecycleState(),
+    goodSpeechRequired: true,
+    kokoroUrl: "http://127.0.0.1:8880",
+    kokoroToken: "k".repeat(32),
+  });
+  assert.equal(ready.checks.find((check) => check.name === "goodspeech-kokoro").status, "ready");
+  assert.equal(ready.trafficReady, true);
+
+  const unavailable = await runReadinessChecks({
+    queryFn: healthyQuery,
+    fetchFn: healthyFetch,
+    lifecycle: createLifecycleState(),
+    goodSpeechRequired: true,
+    kokoroUrl: "",
+    kokoroToken: "",
+  });
+  assert.equal(unavailable.checks.find((check) => check.name === "goodspeech-kokoro").status, "degraded");
+  assert.equal(unavailable.trafficReady, false);
+});
+
 test("graceful shutdown drains traffic and closes runtime resources", async () => {
   const events = [];
   const lifecycle = createLifecycleState();

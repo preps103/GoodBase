@@ -1,4 +1,5 @@
 const path = require("path");
+const { execFileSync } = require("child_process");
 const dotenv = require("dotenv");
 
 dotenv.config();
@@ -51,11 +52,28 @@ function isAllowedOrigin(origin) {
   }
 }
 
+function releaseCommit() {
+  const configured = String(process.env.GOODBASE_RELEASE_COMMIT || "").trim();
+  if (/^[0-9a-f]{7,64}$/i.test(configured)) return configured.toLowerCase();
+  try {
+    const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(__dirname, "../.."),
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^[0-9a-f]{7,64}$/i.test(commit) ? commit.toLowerCase() : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 const env = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: Number(process.env.PORT || 8001),
   serviceName: process.env.SERVICE_NAME || "Goodbase",
   version: process.env.VERSION || "1.0.0",
+  releaseCommit: releaseCommit(),
   databaseUrl: process.env.DATABASE_URL,
   goodSpeechEnvFile,
 

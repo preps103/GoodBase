@@ -116,18 +116,19 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "video").engine, "goodmotion-open");
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
-  assert.equal(ready.find((item) => item.id === "avatars").status, "ready");
-  assert.equal(ready.every((item) => item.status === "ready" && item.issue === null), true);
+  assert.equal(ready.find((item) => item.id === "avatars").status, "limited");
+  assert.equal(ready.find((item) => item.id === "voice-changer").status, "limited");
+  assert.match(ready.find((item) => item.id === "voice-changer").issue, /voice-conversion model/i);
   assert.equal(degraded.find((item) => item.id === "speech").issue, "Kokoro unavailable");
   assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
-  assert.equal(degraded.find((item) => item.id === "image").issue, null);
-  assert.equal(degraded.find((item) => item.id === "avatars").issue, null);
+  assert.match(degraded.find((item) => item.id === "image").issue, /image model/i);
+  assert.match(degraded.find((item) => item.id === "avatars").issue, /browser live mode/i);
 });
 
 test("GoodSpeech live avatars require an approved adult likeness and validated media", () => {
   const files = {
-    portrait: [{ mimetype: "image/jpeg", buffer: Buffer.from("portrait"), originalname: "me.jpg" }],
-    audio: [{ mimetype: "audio/wav", buffer: Buffer.from("narration"), originalname: "voice.wav" }],
+    portrait: [{ mimetype: "image/jpeg", buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0]), originalname: "me.jpg" }],
+    audio: [{ mimetype: "audio/wav", buffer: Buffer.from("RIFF0000WAVEdata"), originalname: "voice.wav" }],
   };
   assert.throws(
     () => avatarService.validateRender({ name: "My avatar" }, files),
@@ -139,6 +140,10 @@ test("GoodSpeech live avatars require an approved adult likeness and validated m
   assert.equal(valid.audio.mimetype, "audio/wav");
   assert.throws(
     () => avatarService.validateRender({ consent: "self" }, { ...files, portrait: [{ mimetype: "image/svg+xml", buffer: Buffer.from("svg") }] }),
+    /unsupported file format/i,
+  );
+  assert.throws(
+    () => avatarService.validateRender({ consent: "self" }, { ...files, portrait: [{ mimetype: "image/jpeg", buffer: Buffer.from("not-a-jpeg") }] }),
     /unsupported file format/i,
   );
 });
@@ -197,7 +202,7 @@ test("GoodSpeech validates open video workflows and reference frames", () => {
   }, {
     startFrame: [{
       mimetype: "image/png",
-      buffer: Buffer.from("image"),
+      buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     }],
   });
   assert.equal(imageJob.startFrame.mimetype, "image/png");
@@ -400,4 +405,29 @@ test("GoodSpeech collaboration ships durable projects, tasks, chat, read state, 
   assert.match(service, /replyToMessageId/);
   assert.match(service, /notifyChannelMembers/);
   assert.doesNotMatch(`${migration}\n${routes}\n${service}`, /Google AI|Gemini|AI Studio/i);
+});
+
+test("GoodSpeech production contracts expose release identity, truthful health, and complete deployment wiring", () => {
+  const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech.routes.js"), "utf8");
+  const health = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "health.routes.js"), "utf8");
+  const readiness = fs.readFileSync(path.join(__dirname, "..", "src", "services", "readiness.service.js"), "utf8");
+  const provisioner = fs.readFileSync(path.join(__dirname, "..", "scripts", "provision-goodspeech.sh"), "utf8");
+  const videoUnit = fs.readFileSync(path.join(__dirname, "..", "deploy", "systemd", "goodspeech-video.service"), "utf8");
+  const openapi = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "docs", "openapi.json"), "utf8"));
+  const videoWorker = fs.readFileSync(path.join(__dirname, "..", "services", "goodmotion-video", "app", "main.py"), "utf8");
+
+  assert.match(routes, /router\.get\("\/status", statusLimiter/);
+  assert.match(routes, /releaseCommit: env\.releaseCommit/);
+  assert.match(routes, /status: avatarHealth\.ready \? "ready" : "limited"/);
+  assert.match(health, /releaseCommit: env\.releaseCommit/);
+  assert.match(readiness, /name: "goodspeech-kokoro"/);
+  assert.match(provisioner, /GOODBASE_RELEASE_COMMIT="\$\{release_commit\}"/);
+  assert.match(provisioner, /systemctl enable --now goodspeech-video\.service/);
+  assert.match(videoUnit, /deploy\/goodspeech-video/);
+  assert.ok(openapi.paths["/api/goodspeech/v1/status"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/avatars/render"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/video/jobs"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/collaboration/projects"]);
+  assert.match(videoWorker, /GOODMOTION_RETENTION_SECONDS/);
+  assert.match(videoWorker, /cleanup_stale_jobs/);
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 import os
 import secrets
 import time
@@ -15,11 +16,13 @@ from diffusers import DiffusionPipeline
 from diffusers.utils import export_to_video, load_image
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from PIL import Image
 
 DATA_ROOT = Path(os.getenv("GOODMOTION_DATA_ROOT", "/var/lib/goodmotion"))
 OUTPUT_ROOT = DATA_ROOT / "outputs"
 INPUT_ROOT = DATA_ROOT / "inputs"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+RETENTION_SECONDS = max(3_600, int(os.getenv("GOODMOTION_RETENTION_SECONDS", "86400")))
 T2V_MODEL = os.getenv("GOODMOTION_T2V_MODEL", "Wan-AI/Wan2.1-T2V-1.3B")
 I2V_MODEL = os.getenv("GOODMOTION_I2V_MODEL", "Wan-AI/Wan2.1-I2V-14B-480P")
 ALLOWED_MODELS = {
@@ -48,6 +51,7 @@ jobs: dict[str, dict] = {}
 pipeline: DiffusionPipeline | None = None
 pipeline_model: str | None = None
 generation_lock = asyncio.Lock()
+cleanup_task: asyncio.Task | None = None
 
 
 def configured_token() -> str:
@@ -82,6 +86,14 @@ async def save_upload(upload: UploadFile | None, job_id: str) -> Path | None:
     contents = await upload.read(MAX_IMAGE_BYTES + 1)
     if not contents or len(contents) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Reference images must be 10 MB or smaller")
+    expected_format = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[upload.content_type]
+    try:
+        with Image.open(BytesIO(contents)) as source:
+            source.verify()
+            if source.format != expected_format:
+                raise ValueError("format mismatch")
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="Reference image content is invalid") from error
     extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[upload.content_type]
     target = INPUT_ROOT / f"{job_id}-start.{extension}"
     target.write_bytes(contents)
@@ -151,11 +163,40 @@ def render_job(job_id: str) -> None:
             message="The open video model could not complete this shot.",
             completedAt=time.time(),
         )
+    finally:
+        start_frame = job.get("startFrame")
+        if start_frame:
+            Path(start_frame).unlink(missing_ok=True)
+            job["startFrame"] = None
 
 
 async def run_job(job_id: str) -> None:
     async with generation_lock:
         await asyncio.to_thread(render_job, job_id)
+
+
+def cleanup_stale_jobs() -> None:
+    cutoff = time.time() - RETENTION_SECONDS
+    for job_id, job in list(jobs.items()):
+        completed_at = float(job.get("completedAt") or 0)
+        if completed_at and completed_at < cutoff:
+            output = job.get("output")
+            if output:
+                Path(output).unlink(missing_ok=True)
+            jobs.pop(job_id, None)
+    for root in (INPUT_ROOT, OUTPUT_ROOT):
+        for item in root.glob("*"):
+            try:
+                if item.is_file() and item.stat().st_mtime < cutoff:
+                    item.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
+async def cleanup_loop() -> None:
+    while True:
+        await asyncio.sleep(3_600)
+        await asyncio.to_thread(cleanup_stale_jobs)
 
 
 app = FastAPI(
@@ -169,9 +210,20 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup() -> None:
+    global cleanup_task
     configured_token()
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     INPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(cleanup_stale_jobs)
+    cleanup_task = asyncio.create_task(cleanup_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global cleanup_task
+    if cleanup_task is not None:
+        cleanup_task.cancel()
+        cleanup_task = None
 
 
 @app.get("/health/live")

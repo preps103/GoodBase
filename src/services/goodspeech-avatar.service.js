@@ -1,5 +1,7 @@
 "use strict";
 
+const { matchesMediaSignature } = require("../utils/media-signature");
+
 const MAX_PORTRAIT_BYTES = 10 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
@@ -78,7 +80,12 @@ async function checkHealth({ fetchFn = global.fetch, timeoutMs = 5_000 } = {}) {
 }
 
 function validateFile(file, allowedTypes, maximumBytes, label) {
-  if (!file?.buffer?.length || !allowedTypes.has(String(file.mimetype || "").toLowerCase())) {
+  const mimeType = String(file?.mimetype || "").toLowerCase();
+  if (
+    !file?.buffer?.length ||
+    !allowedTypes.has(mimeType) ||
+    !matchesMediaSignature(file.buffer, mimeType)
+  ) {
     throw serviceError(`${label} has an unsupported file format.`);
   }
   if (file.buffer.length > maximumBytes) {

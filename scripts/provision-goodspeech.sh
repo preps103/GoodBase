@@ -15,6 +15,9 @@ GOODBASE_PM2_RUNTIMES="${GOODBASE_PM2_RUNTIMES:-${GOODBASE_PM2_USER}:${GOODBASE_
 GOODBASE_PM2_PROCESSES="${GOODBASE_PM2_PROCESSES:-goodapp-backend goodapp-backend-ha goodbase-api goodbase-api-ha}"
 SERVICE_SOURCE="${GOODBASE_ROOT}/deploy/systemd/goodspeech-inference.service"
 SERVICE_TARGET="/etc/systemd/system/goodspeech-inference.service"
+VIDEO_SERVICE_SOURCE="${GOODBASE_ROOT}/deploy/systemd/goodspeech-video.service"
+VIDEO_SERVICE_TARGET="/etc/systemd/system/goodspeech-video.service"
+GOODSPEECH_ENABLE_VIDEO="${GOODSPEECH_ENABLE_VIDEO:-0}"
 
 for command in curl docker openssl systemctl; do
   if ! command -v "${command}" >/dev/null 2>&1; then
@@ -27,6 +30,19 @@ if [[ ! -f "${SERVICE_SOURCE}" ]]; then
   echo "GoodSpeech service definition was not found at ${SERVICE_SOURCE}." >&2
   exit 1
 fi
+
+ensure_env_value() {
+  local key="$1"
+  local value="$2"
+  if ! grep -q "^${key}=" "${GOODSPEECH_ENV_FILE}"; then
+    printf '%s=%s\n' "${key}" "${value}" >> "${GOODSPEECH_ENV_FILE}"
+  fi
+}
+
+read_env_value() {
+  local key="$1"
+  awk -F= -v key="${key}" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
+}
 
 install -d -m 0750 -o root -g "${GOODBASE_RUNTIME_USER}" "$(dirname "${GOODSPEECH_ENV_FILE}")"
 
@@ -43,6 +59,14 @@ else
   chown root:"${GOODBASE_RUNTIME_USER}" "${GOODSPEECH_ENV_FILE}"
   chmod 0640 "${GOODSPEECH_ENV_FILE}"
 fi
+
+ensure_env_value "GOODSPEECH_REQUIRED" "true"
+ensure_env_value "GOODMOTION_VIDEO_URL" ""
+ensure_env_value "GOODMOTION_VIDEO_TOKEN" ""
+ensure_env_value "GOODMOTION_JOB_SIGNING_SECRET" ""
+ensure_env_value "GOODMOTION_RETENTION_SECONDS" "86400"
+ensure_env_value "GOODAVATAR_LIVE_URL" ""
+ensure_env_value "GOODAVATAR_LIVE_TOKEN" ""
 
 if ! grep -Eq '^KOKORO_TTS_URL=https?://' "${GOODSPEECH_ENV_FILE}"; then
   echo "KOKORO_TTS_URL is missing or invalid in ${GOODSPEECH_ENV_FILE}." >&2
@@ -63,16 +87,57 @@ kokoro_url="$(
 kokoro_token="$(
   awk -F= '/^KOKORO_TTS_TOKEN=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
 )"
-goodavatar_url="$(
-  awk -F= '/^GOODAVATAR_LIVE_URL=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
-)"
-goodavatar_token="$(
-  awk -F= '/^GOODAVATAR_LIVE_TOKEN=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
-)"
+goodspeech_required="$(read_env_value GOODSPEECH_REQUIRED)"
+goodmotion_url="$(read_env_value GOODMOTION_VIDEO_URL)"
+goodmotion_token="$(read_env_value GOODMOTION_VIDEO_TOKEN)"
+goodmotion_signing_secret="$(read_env_value GOODMOTION_JOB_SIGNING_SECRET)"
+goodavatar_url="$(read_env_value GOODAVATAR_LIVE_URL)"
+goodavatar_token="$(read_env_value GOODAVATAR_LIVE_TOKEN)"
+release_commit="$(git -C "${GOODBASE_ROOT}" rev-parse HEAD)"
+
+if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
+  if [[ ! -f "${VIDEO_SERVICE_SOURCE}" ]]; then
+    echo "GoodMotion service definition was not found at ${VIDEO_SERVICE_SOURCE}." >&2
+    exit 1
+  fi
+  if [[ -z "${goodmotion_url}" ]]; then
+    sed -i.bak 's|^GOODMOTION_VIDEO_URL=.*|GOODMOTION_VIDEO_URL=http://127.0.0.1:8890|' "${GOODSPEECH_ENV_FILE}"
+    goodmotion_url="http://127.0.0.1:8890"
+  fi
+  if [[ "${#goodmotion_token}" -lt 32 ]]; then
+    goodmotion_token="$(openssl rand -hex 32)"
+    sed -i.bak "s|^GOODMOTION_VIDEO_TOKEN=.*|GOODMOTION_VIDEO_TOKEN=${goodmotion_token}|" "${GOODSPEECH_ENV_FILE}"
+  fi
+  if [[ "${#goodmotion_signing_secret}" -lt 32 ]]; then
+    goodmotion_signing_secret="$(openssl rand -hex 32)"
+    sed -i.bak "s|^GOODMOTION_JOB_SIGNING_SECRET=.*|GOODMOTION_JOB_SIGNING_SECRET=${goodmotion_signing_secret}|" "${GOODSPEECH_ENV_FILE}"
+  fi
+  rm -f "${GOODSPEECH_ENV_FILE}.bak"
+  install -m 0644 "${VIDEO_SERVICE_SOURCE}" "${VIDEO_SERVICE_TARGET}"
+fi
 
 install -m 0644 "${SERVICE_SOURCE}" "${SERVICE_TARGET}"
 systemctl daemon-reload
 systemctl enable --now goodspeech-inference.service
+
+if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
+  systemctl enable --now goodspeech-video.service
+  video_ready=0
+  for _attempt in $(seq 1 180); do
+    if curl --fail --silent --show-error --max-time 5 \
+      -H "Authorization: Bearer ${goodmotion_token}" \
+      http://127.0.0.1:8890/health/ready >/dev/null; then
+      video_ready=1
+      break
+    fi
+    sleep 5
+  done
+  if [[ "${video_ready}" -ne 1 ]]; then
+    systemctl status goodspeech-video.service --no-pager >&2 || true
+    echo "GoodMotion did not become ready before the provisioning timeout." >&2
+    exit 1
+  fi
+fi
 
 ready=0
 for _attempt in $(seq 1 120); do
@@ -118,6 +183,11 @@ if command -v pm2 >/dev/null 2>&1; then
             PM2_HOME="${pm2_home}" \
             KOKORO_TTS_URL="${kokoro_url}" \
             KOKORO_TTS_TOKEN="${kokoro_token}" \
+            GOODSPEECH_REQUIRED="${goodspeech_required}" \
+            GOODBASE_RELEASE_COMMIT="${release_commit}" \
+            GOODMOTION_VIDEO_URL="${goodmotion_url}" \
+            GOODMOTION_VIDEO_TOKEN="${goodmotion_token}" \
+            GOODMOTION_JOB_SIGNING_SECRET="${goodmotion_signing_secret}" \
             GOODAVATAR_LIVE_URL="${goodavatar_url}" \
             GOODAVATAR_LIVE_TOKEN="${goodavatar_token}" \
             pm2 restart "${process_name}" --update-env
@@ -140,4 +210,7 @@ if command -v pm2 >/dev/null 2>&1; then
   fi
 fi
 
-echo "GoodSpeech Kokoro is ready on the Base loopback interface."
+echo "GoodSpeech Kokoro is ready on the Base loopback interface at release ${release_commit}."
+if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
+  echo "GoodMotion open video is ready on the Base loopback interface."
+fi

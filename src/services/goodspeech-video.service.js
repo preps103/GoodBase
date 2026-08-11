@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { matchesMediaSignature } = require("../utils/media-signature");
 
 const MAX_PROMPT_LENGTH = 3_000;
 const MAX_NEGATIVE_PROMPT_LENGTH = 1_500;
@@ -189,7 +190,11 @@ async function checkHealth({ fetchFn = global.fetch, timeoutMs = 5_000 } = {}) {
 
 function validateImage(file, label) {
   if (!file) return null;
-  if (!ALLOWED_IMAGE_TYPES.has(file.mimetype) || !file.buffer?.length) {
+  if (
+    !ALLOWED_IMAGE_TYPES.has(file.mimetype) ||
+    !file.buffer?.length ||
+    !matchesMediaSignature(file.buffer, file.mimetype)
+  ) {
     throw serviceError(`${label} must be a PNG, JPEG, or WebP image.`);
   }
   if (file.buffer.length > 10 * 1024 * 1024) {

@@ -4,6 +4,7 @@ const { Readable } = require("node:stream");
 const express = require("express");
 const { rateLimit } = require("express-rate-limit");
 const multer = require("multer");
+const env = require("../config/env");
 const authRequired = require("../middleware/authRequired");
 const { logAudit } = require("../services/audit.service");
 const videoService = require("../services/goodspeech-video.service");
@@ -50,6 +51,18 @@ const BROWSER_TOOL_IDS = Object.freeze([
   "templates",
   "assets",
 ]);
+const BROWSER_TOOL_LIMITATIONS = Object.freeze({
+  image: "Local design renderer active; an open image model is not connected.",
+  "sound-effects": "Procedural sound renderer active; an open text-to-audio model is not connected.",
+  music: "Procedural score renderer active; an open music model is not connected.",
+  "voice-changer": "Studio DSP is active; a realistic voice-conversion model is not connected.",
+  "voice-isolator": "Audio cleanup is active; a source-separation model is not connected.",
+  upscale: "Browser enhancement is active; a super-resolution model is not connected.",
+  "speech-to-text": "Browser live transcription only; private audio-file transcription is not connected.",
+  flows: "Guided local recipes only; server workflow execution is not connected.",
+  templates: "Templates are device-local; team template sync is not connected.",
+  assets: "Assets are device-local; team cloud storage is not connected.",
+});
 const ALLOWED_VOICES = new Set(Object.keys(KOKORO_VOICES));
 const ALLOWED_STYLES = new Set(["Natural", "Cheerfully", "Sadly", "Angrily", "Professionally", "Whispering", "Excitedly"]);
 const ALLOWED_TONES = new Set(["Standard", "Warm", "Bright", "Airy", "Deep", "Gritty", "Crisp", "Soft"]);
@@ -65,6 +78,12 @@ const speechLimiter = rateLimit({
     code: "GOODSPEECH_RATE_LIMITED",
     message: "Too many speech requests. Try again shortly.",
   },
+});
+const statusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
 });
 const videoLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -169,6 +188,7 @@ function buildCapabilities(health, videoHealth = {
   ready: false,
   engine: "browser-live",
   model: null,
+  message: "Private browser live mode is ready; high-fidelity lip sync is not connected.",
 }) {
   const kokoroStatus = health.ready ? "ready" : "unavailable";
   const kokoroIssue = health.ready ? null : health.message;
@@ -192,15 +212,15 @@ function buildCapabilities(health, videoHealth = {
       id: "avatars",
       execution: avatarHealth.ready ? "goodbase" : "browser",
       engine: avatarHealth.ready ? (avatarHealth.model || avatarHealth.engine || "liveavatar-open") : "browser-live",
-      status: "ready",
-      issue: null,
+      status: avatarHealth.ready ? "ready" : "limited",
+      issue: avatarHealth.ready ? null : avatarHealth.message,
     },
     ...BROWSER_TOOL_IDS.map((id) => ({
       id,
       execution: "browser",
       engine: "native-media",
-      status: "ready",
-      issue: null,
+      status: "limited",
+      issue: BROWSER_TOOL_LIMITATIONS[id],
     })),
   ];
 }
@@ -343,6 +363,24 @@ async function readAudioBytes(response) {
   return Buffer.concat(chunks, total);
 }
 
+router.get("/status", statusLimiter, async (_req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  const [speech, video, avatars] = await Promise.all([
+    checkKokoroHealth(),
+    videoService.checkHealth(),
+    avatarService.checkHealth(),
+  ]);
+  return res.status(speech.ready ? 200 : 503).json({
+    success: speech.ready,
+    service: "GoodSpeech",
+    version: env.version,
+    releaseCommit: env.releaseCommit,
+    status: speech.ready ? (video.ready && avatars.ready ? "ready" : "degraded") : "unready",
+    engines: { speech, video, avatars },
+    checkedAt: new Date().toISOString(),
+  });
+});
+
 router.get("/health", authRequired, async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   const health = await checkKokoroHealth();
@@ -365,7 +403,7 @@ router.get("/capabilities", authRequired, async (_req, res) => {
     success: true,
     service: "GoodSpeech",
     provider: "kokoro",
-    degraded: !health.ready || !videoHealth.ready,
+    degraded: !health.ready || !videoHealth.ready || !avatarHealth.ready,
     engine: health,
     engines: {
       speech: health,

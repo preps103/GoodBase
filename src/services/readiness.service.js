@@ -48,6 +48,9 @@ async function runReadinessChecks({
   lifecycle = runtimeLifecycle,
   postgrestRequired = booleanSetting(process.env.GOODOS_POSTGREST_REQUIRED, true),
   workerRequired = booleanSetting(process.env.GOODOS_WORKER_REQUIRED, false),
+  goodSpeechRequired = booleanSetting(process.env.GOODSPEECH_REQUIRED, false),
+  kokoroUrl = String(process.env.KOKORO_TTS_URL || "").trim(),
+  kokoroToken = String(process.env.KOKORO_TTS_TOKEN || "").trim(),
 } = {}) {
   const lifecycleState = lifecycle.snapshot();
   const checks = [];
@@ -72,6 +75,37 @@ async function runReadinessChecks({
       return { message: "PostgreSQL accepted a readiness query." };
     },
   }));
+
+  if (goodSpeechRequired || kokoroUrl) {
+    checks.push(await runCheck({
+      name: "goodspeech-kokoro",
+      type: "inference",
+      critical: goodSpeechRequired,
+      action: async () => {
+        if (!kokoroUrl || kokoroToken.length < 32 || typeof fetchFn !== "function") {
+          return { ready: false, message: "GoodSpeech Kokoro is not configured." };
+        }
+        const endpoint = new URL(kokoroUrl);
+        if (!["http:", "https:"].includes(endpoint.protocol)) {
+          return { ready: false, message: "GoodSpeech Kokoro has an invalid endpoint." };
+        }
+        endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}/health/ready`;
+        endpoint.search = "";
+        endpoint.hash = "";
+        const response = await fetchFn(endpoint.toString(), {
+          signal: AbortSignal.timeout(2500),
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${kokoroToken}`,
+            "X-GoodBase-Service": "GoodSpeech",
+          },
+        });
+        if (!response.ok) throw new Error("Kokoro is unavailable");
+        await response.body?.cancel?.();
+        return { message: `GoodSpeech Kokoro returned HTTP ${response.status}.` };
+      },
+    }));
+  }
 
   checks.push(await runCheck({
     name: "automatic-rest",

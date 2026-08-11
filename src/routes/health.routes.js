@@ -12,6 +12,7 @@ router.get("/", (req, res) => {
     status: "ok",
     environment: env.nodeEnv,
     version: env.version,
+    releaseCommit: env.releaseCommit,
     ...runtimeLifecycle.snapshot(),
   });
 });
@@ -22,6 +23,7 @@ router.get("/live", (req, res) => {
     status: "alive",
     environment: env.nodeEnv,
     version: env.version,
+    releaseCommit: env.releaseCommit,
     ...runtimeLifecycle.snapshot(),
     timestamp: new Date().toISOString(),
   });
@@ -33,6 +35,8 @@ router.get("/ready", async (req, res, next) => {
     return res.status(readiness.trafficReady ? 200 : 503).json({
       success: readiness.trafficReady,
       service: env.serviceName,
+      version: env.version,
+      releaseCommit: env.releaseCommit,
       ...readiness,
     });
   } catch (error) {

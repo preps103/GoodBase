@@ -223,6 +223,172 @@
         }
       }
     },
+    "/api/goodspeech/v1/status": {
+      "get": {
+        "summary": "Check public GoodSpeech production readiness",
+        "description": "Returns release identity and the readiness of the private speech, video, and avatar engines without exposing provider credentials.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [],
+        "responses": {
+          "200": { "description": "Kokoro is ready; optional engines may be degraded" },
+          "503": { "description": "The primary Kokoro speech engine is unavailable" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/avatars/status": {
+      "get": {
+        "summary": "Check the open avatar renderer",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": {
+          "200": { "description": "Avatar capability and fallback status" },
+          "401": { "description": "Authentication required" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/avatars/render": {
+      "post": {
+        "summary": "Render an approved self avatar",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["portrait", "audio", "consent"],
+                "properties": {
+                  "portrait": { "type": "string", "format": "binary" },
+                  "audio": { "type": "string", "format": "binary" },
+                  "name": { "type": "string", "maxLength": 80 },
+                  "consent": { "type": "string", "enum": ["self"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Rendered avatar video" },
+          "401": { "description": "Authentication required" },
+          "422": { "description": "Consent or media validation failed" },
+          "503": { "description": "High-fidelity avatar renderer is not configured" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/video/models": {
+      "get": {
+        "summary": "List GoodMotion open video models",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": {
+          "200": { "description": "Available models and worker health" },
+          "401": { "description": "Authentication required" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/video/jobs": {
+      "post": {
+        "summary": "Create an open-model video generation job",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["mode", "model", "prompt", "aspect", "resolution", "duration"],
+                "properties": {
+                  "mode": { "type": "string", "enum": ["text-to-video", "image-to-video"] },
+                  "model": { "type": "string" },
+                  "prompt": { "type": "string", "maxLength": 3000 },
+                  "negativePrompt": { "type": "string", "maxLength": 1500 },
+                  "aspect": { "type": "string", "enum": ["16:9", "9:16", "1:1"] },
+                  "resolution": { "type": "string", "enum": ["480p", "720p"] },
+                  "duration": { "type": "integer", "enum": [4, 5, 8] },
+                  "startFrame": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Generation job accepted" },
+          "401": { "description": "Authentication required" },
+          "429": { "description": "Per-user generation limit exceeded" },
+          "503": { "description": "GoodMotion is not configured" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/video/jobs/{jobId}": {
+      "get": {
+        "summary": "Read a scoped GoodMotion job",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "jobId", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Current job state" },
+          "401": { "description": "Authentication required" },
+          "404": { "description": "Job unavailable or expired" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/video/jobs/{jobId}/content": {
+      "get": {
+        "summary": "Download a completed GoodMotion video",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "jobId", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Generated MP4 video" },
+          "401": { "description": "Authentication required" },
+          "409": { "description": "Video is not ready" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/collaboration/bootstrap": {
+      "get": {
+        "summary": "Load the tenant-scoped GoodSpeech collaboration workspace",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": {
+          "200": { "description": "Teams, projects, members, and channels" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "GoodSpeech entitlement required" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/collaboration/projects": {
+      "get": {
+        "summary": "List GoodSpeech projects",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Tenant-scoped projects" }, "401": { "description": "Authentication required" } }
+      },
+      "post": {
+        "summary": "Create a GoodSpeech team project",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "201": { "description": "Project created" }, "400": { "description": "Invalid project" }, "401": { "description": "Authentication required" } }
+      }
+    },
+    "/api/goodspeech/v1/collaboration/channels/{channelId}/messages": {
+      "get": {
+        "summary": "List channel messages",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "channelId", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Channel messages" }, "401": { "description": "Authentication required" } }
+      },
+      "post": {
+        "summary": "Send a channel message",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "channelId", "required": true, "schema": { "type": "string" } }],
+        "responses": { "201": { "description": "Message sent" }, "401": { "description": "Authentication required" }, "429": { "description": "Message rate limit exceeded" } }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Public API health check",

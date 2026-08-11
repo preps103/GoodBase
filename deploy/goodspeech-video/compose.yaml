@@ -13,6 +13,7 @@ services:
       GOODMOTION_VIDEO_TOKEN: ${GOODMOTION_VIDEO_TOKEN:?GOODMOTION_VIDEO_TOKEN is required}
       GOODMOTION_T2V_MODEL: ${GOODMOTION_T2V_MODEL:-Wan-AI/Wan2.1-T2V-1.3B}
       GOODMOTION_I2V_MODEL: ${GOODMOTION_I2V_MODEL:-Wan-AI/Wan2.1-I2V-14B-480P}
+      GOODMOTION_RETENTION_SECONDS: ${GOODMOTION_RETENTION_SECONDS:-86400}
       HF_HOME: /var/lib/goodmotion/models
     volumes:
       - goodmotion_models:/var/lib/goodmotion/models
@@ -33,6 +34,16 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8890/health/ready',headers={'Authorization':'Bearer '+os.environ['GOODMOTION_VIDEO_TOKEN']}); urllib.request.urlopen(r,timeout=4)"
+      interval: 30s
+      timeout: 6s
+      start_period: 300s
+      retries: 5
 
 volumes:
   goodmotion_models:

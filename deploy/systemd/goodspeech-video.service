@@ -1,0 +1,19 @@
+[Unit]
+Description=GoodSpeech GoodMotion open video service
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/goodbase/goodspeech.env
+WorkingDirectory=/var/www/GoodBase/deploy/goodspeech-video
+ExecStart=/usr/bin/docker compose --env-file /etc/goodbase/goodspeech.env up -d --build --remove-orphans
+ExecReload=/usr/bin/docker compose --env-file /etc/goodbase/goodspeech.env up -d --build --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /etc/goodbase/goodspeech.env down
+TimeoutStartSec=1800
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

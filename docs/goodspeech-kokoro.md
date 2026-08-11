@@ -8,8 +8,14 @@ GoodBase authenticates the user, validates and rate-limits the request, calls th
 
 Authenticated clients also read `GET /api/goodspeech/v1/capabilities`. That
 contract reports which application tools use GoodBase/Kokoro and which use a
-privacy-preserving browser media engine. Only genuinely unavailable engines
-carry an issue message.
+privacy-preserving browser media engine. Unavailable and intentionally limited
+engines carry an issue message instead of advertising false readiness.
+
+Public monitors read `GET /api/goodspeech/v1/status`. It returns HTTP 503 when
+Kokoro is unavailable and otherwise includes the GoodBase release commit plus
+the truthful readiness of Kokoro, GoodMotion, and the optional avatar renderer.
+With `GOODSPEECH_REQUIRED=true`, Kokoro also participates in the general
+`/api/health/ready` traffic gate.
 
 GoodSpeech exposes nine distinct personas backed by nine real Kokoro voices:
 Kore, Puck, Charon, Fenrir, Zephyr, Amara, Celeste, Bennett, and Ellis.
@@ -20,6 +26,13 @@ Run the idempotent provisioner from the active GoodBase checkout:
 
 ```sh
 sudo npm run provision:goodspeech
+```
+
+On a supported NVIDIA host, enable and verify the private GoodMotion service in
+the same deployment:
+
+```sh
+sudo env GOODSPEECH_ENABLE_VIDEO=1 npm run provision:goodspeech
 ```
 
 The provisioner creates `/etc/goodbase/goodspeech.env` when needed, generates
@@ -40,6 +53,7 @@ when a server uses different service accounts.
 - Containers run as an unprivileged user with all Linux capabilities removed, a read-only root filesystem, and a bounded temporary filesystem.
 - Request text is limited to 2,000 characters and generated audio is limited to 24 MiB at the GoodBase boundary.
 - The model cache is persistent so releases and restarts do not repeatedly download weights.
+- GoodMotion reference inputs are deleted after processing and generated outputs expire according to `GOODMOTION_RETENTION_SECONDS`.
 - Voice cloning is intentionally unavailable. Kokoro does not clone voices, and GoodSpeech must not imply that a stock voice is a user-provided voice.
 
 ## Verification
