@@ -173,7 +173,7 @@ router.get("/operations", async (req, res, next) => {
       database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 1000", [req.user.id]),
     ]);
     const readiness = await social.operationalReadiness();
-    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: readiness.publishingPlatforms.length > 0, publishingPlatforms: readiness.publishingPlatforms, syncWorkerReady: readiness.syncWorkerReady });
+    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: readiness.publishingPlatforms.length > 0, publishingPlatforms: readiness.publishingPlatforms, syncWorkerReady: readiness.syncWorkerReady, publishingLifecycleReady: readiness.publishingLifecycleReady });
   } catch (error) { return next(error); }
 });
 

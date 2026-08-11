@@ -191,7 +191,7 @@ async function processDueSyncConnections(limit=10,workerId="goodboost-synchroniz
 }
 
 async function operationalReadiness() {
-  const [jobs,ai]=await Promise.all([
+  const [jobs,ai,lifecycle]=await Promise.all([
     database.query("SELECT id,status FROM backend_jobs WHERE id=ANY($1::text[])",[["job_goodboost_social_publish","job_goodboost_social_sync"]]).catch(()=>({rows:[]})),
     database.query(`SELECT EXISTS (
       SELECT 1 FROM goodbase_ai_policies policy
@@ -202,6 +202,11 @@ async function operationalReadiness() {
       WHERE policy.organization_id='org_goodos' AND policy.project_id='proj_goodos_platform'
         AND policy.environment_id='env_goodos_production' AND policy.app_id='goodboost' AND policy.status='active'
     ) AS ready`).catch(()=>({rows:[]})),
+    database.query(`SELECT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname='goodboost_publishing_posts_status_check'
+        AND pg_get_constraintdef(oid) LIKE '%cancelled%'
+    ) AS ready`).catch(()=>({rows:[]})),
   ]);
   const active=new Set(jobs.rows.filter((row)=>row.status==="active").map((row)=>row.id));
   const registered=providers();
@@ -211,6 +216,7 @@ async function operationalReadiness() {
     connectableProviders:registered.filter((item)=>item.available).map((item)=>item.platform),
     synchronizedProviders:registered.filter((item)=>item.capabilities.followerList||item.capabilities.followingList).map((item)=>item.platform),
     publishingPlatforms:active.has("job_goodboost_social_publish")?publishingPlatforms():[],
+    publishingLifecycleReady:Boolean(lifecycle.rows[0]?.ready),
     aiReady:Boolean(ai.rows[0]?.ready),
   };
 }

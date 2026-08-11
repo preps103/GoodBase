@@ -49,6 +49,7 @@ test("GoodBoost exposes planner, inbox, analytics, and report routes", () => {
   assert.match(routes, /safePublicHttpsUrl/);
   assert.match(routes, /publishingPlatforms/);
   assert.match(routes, /publishingReadiness/);
+  assert.match(routes, /publishingLifecycleReady/);
   assert.match(social, /FOR UPDATE SKIP LOCKED/);
   assert.match(social, /processDueSyncConnections/);
   assert.match(social, /relationshipsComplete===true/);
