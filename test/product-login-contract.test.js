@@ -7,6 +7,7 @@ const routes = fs.readFileSync(path.join(__dirname, "..", "src/routes/index.js")
 const docs = fs.readFileSync(path.join(__dirname, "..", "docs/product-login-contract.md"), "utf8");
 const authUi = fs.readFileSync(path.join(__dirname, "..", "src/public/goodbase-auth.html"), "utf8");
 const authClient = fs.readFileSync(path.join(__dirname, "..", "src/public/goodbase-auth.js"), "utf8");
+const authRoutes = fs.readFileSync(path.join(__dirname, "..", "src/routes/auth.routes.js"), "utf8");
 
 test("shared product login stylesheet exposes the required structure", () => {
   for (const hook of ["data-goodbase-login", "data-goodbase-login-brand", "data-goodbase-login-auth", "data-goodbase-login-provider", "data-goodbase-login-fields", "data-goodbase-login-submit"]) assert.match(css, new RegExp(hook));
@@ -51,4 +52,7 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
   assert.match(routes, /router\.get\("\/register"/);
   assert.match(authClient, /setPasswordVisibility/);
   assert.match(authClient, /aria-pressed/);
+  assert.match(authUi, /Continue with GoodOS/);
+  assert.match(authRoutes, /router\.get\("\/authorize\/:appId", authRequired/);
+  assert.match(authRoutes, /APPLICATION_ACCESS_DENIED/);
 });

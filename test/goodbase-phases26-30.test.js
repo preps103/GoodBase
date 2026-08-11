@@ -17,7 +17,7 @@ test("Phase 27 publishes the handbook, starters, and controller-backed migration
 });
 
 test("Phase 28 completes guarded consumer auth without enabling unconfigured providers",()=>{
-  assert.match(migration,/goodbase_consumer_auth_providers/);assert.match(migration,/goodbase_sms_deliveries/);assert.match(routes,/\/auth\/anonymous/);assert.match(routes,/\/auth\/phone\/start/);assert.match(routes,/account_upgrade/);assert.match(routes,/verifyConsumerAuthProvider/);assert.match(read("src/public/goodbase-auth.html"),/Sign in to GoodBase/);assert.match(read("src/public/goodbase-auth.html"),/Sign in with GoodOS SSO/);
+  assert.match(migration,/goodbase_consumer_auth_providers/);assert.match(migration,/goodbase_sms_deliveries/);assert.match(routes,/\/auth\/anonymous/);assert.match(routes,/\/auth\/phone\/start/);assert.match(routes,/account_upgrade/);assert.match(routes,/verifyConsumerAuthProvider/);assert.match(read("src/public/goodbase-auth.html"),/Sign in to GoodBase/);assert.match(read("src/public/goodbase-auth.html"),/Continue with GoodOS/);
   assert.match(migration,/auth_consumer_google/);assert.match(migration,/auth_consumer_apple/);assert.match(migration,/auth_consumer_passkey/);assert.match(migration,/misconfigured/);
 });
 

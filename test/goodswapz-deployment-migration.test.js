@@ -14,7 +14,7 @@ test("GoodBase deployment applies and verifies the GoodSwapz handoff migration",
 
   assert.match(
     packageJson.scripts.build,
-    /node scripts\/apply-goodswapz-marketplace-migration\.js$/
+    /(?:^|&& )node scripts\/apply-goodswapz-marketplace-migration\.js(?= &&|$)/
   );
   assert.match(runner, /pg_advisory_lock/);
   assert.match(runner, /DATABASE_URL is required/);

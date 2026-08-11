@@ -49,10 +49,10 @@ fail() {
 }
 
 on_error() {
-  status="$?"
+  exit_code="$?"
   trap - ZERR
-  write_local_failure "Backup pull stopped unexpectedly with status $status"
-  exit "$status"
+  write_local_failure "Backup pull stopped unexpectedly with status $exit_code"
+  exit "$exit_code"
 }
 
 trap on_error ZERR
@@ -70,9 +70,17 @@ echo '=================================================='
 [ -r "$SSH_KEY" ] || fail "Backup SSH identity is unavailable"
 
 if ! /bin/mkdir "$LOCK_DIRECTORY" 2>/dev/null; then
-  echo "$(timestamp) Another backup pull is already running."
-  exit 0
+  LOCK_PID_FILE="$LOCK_DIRECTORY/pid"
+  LOCK_PID="$(/bin/cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+  if [[ "$LOCK_PID" == <-> ]] && /bin/kill -0 "$LOCK_PID" 2>/dev/null; then
+    echo "$(timestamp) Another backup pull is already running."
+    exit 0
+  fi
+  /bin/rm -rf "$LOCK_DIRECTORY"
+  /bin/mkdir "$LOCK_DIRECTORY" || fail "Unable to replace a stale backup lock"
+  echo "$(timestamp) Recovered a stale backup lock."
 fi
+/bin/echo "$$" >"$LOCK_DIRECTORY/pid"
 
 cleanup() {
   /bin/rmdir "$LOCK_DIRECTORY" 2>/dev/null || true
