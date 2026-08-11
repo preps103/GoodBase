@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule the GoodOS daily security audit
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=900
+Persistent=true
+Unit=goodos-security-audit.service
+
+[Install]
+WantedBy=timers.target

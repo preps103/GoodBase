@@ -1,0 +1,21 @@
+[Unit]
+Description=GoodVoice encrypted-state backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/var/www/GoodBase
+EnvironmentFile=-/var/www/GoodBase/.env
+ExecStart=/var/www/GoodBase/scripts/goodvoice-state-backup.sh
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/goodvoice-state /var/www/GoodBase/data

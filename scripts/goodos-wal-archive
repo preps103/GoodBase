@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+SOURCE="${1:?WAL source path is required}"
+WAL_NAME="${2:?WAL filename is required}"
+
+AGE="/usr/bin/age"
+GZIP="/usr/bin/gzip"
+IDENTITY="/etc/goodos/backup-age.key"
+RECIPIENT_FILE="/etc/goodos/backup-age-recipient.txt"
+ARCHIVE_ROOT="/var/backups/goodos-enterprise-v1/wal"
+
+if [[ ! "$WAL_NAME" =~ ^[A-Za-z0-9.]{1,64}$ ]]; then
+  echo "Invalid WAL filename: $WAL_NAME" >&2
+  exit 2
+fi
+
+test -r "$SOURCE"
+test -x "$AGE"
+test -x "$GZIP"
+test -r "$IDENTITY"
+test -r "$RECIPIENT_FILE"
+
+mkdir -p "$ARCHIVE_ROOT"
+chmod 700 "$ARCHIVE_ROOT"
+
+DESTINATION="$ARCHIVE_ROOT/${WAL_NAME}.age"
+CHECKSUM_FILE="$ARCHIVE_ROOT/${WAL_NAME}.sha256"
+SOURCE_CHECKSUM="$(sha256sum "$SOURCE" | awk '{print $1}')"
+
+if [ -s "$DESTINATION" ]; then
+  if [ -s "$CHECKSUM_FILE" ]; then
+    EXISTING_CHECKSUM="$(awk 'NR == 1 { print $1 }' "$CHECKSUM_FILE")"
+    if [ "$EXISTING_CHECKSUM" = "$SOURCE_CHECKSUM" ]; then
+      exit 0
+    fi
+    echo "Existing WAL checksum conflicts with source: $WAL_NAME" >&2
+    exit 1
+  fi
+
+  COMPARISON_CONTAINER="$ARCHIVE_ROOT/.compare-container-${WAL_NAME}.$$.$RANDOM"
+  COMPARISON_FILE="$ARCHIVE_ROOT/.compare-${WAL_NAME}.$$.$RANDOM"
+  cleanup_comparison() {
+    rm -f "$COMPARISON_CONTAINER" "$COMPARISON_FILE"
+  }
+  trap cleanup_comparison EXIT
+
+  "$AGE" --decrypt --identity "$IDENTITY" --output "$COMPARISON_CONTAINER" "$DESTINATION"
+  if "$GZIP" -t "$COMPARISON_CONTAINER" >/dev/null 2>&1; then
+    "$GZIP" -dc "$COMPARISON_CONTAINER" >"$COMPARISON_FILE"
+  else
+    mv "$COMPARISON_CONTAINER" "$COMPARISON_FILE"
+  fi
+
+  if ! cmp -s "$COMPARISON_FILE" "$SOURCE"; then
+    echo "Existing encrypted WAL conflicts with source: $WAL_NAME" >&2
+    exit 1
+  fi
+
+  printf '%s  %s\n' "$SOURCE_CHECKSUM" "$WAL_NAME" >"$CHECKSUM_FILE"
+  chmod 600 "$CHECKSUM_FILE"
+  cleanup_comparison
+  trap - EXIT
+  exit 0
+fi
+
+TEMP_COMPRESSED="$ARCHIVE_ROOT/.${WAL_NAME}.gz.$$.$RANDOM.tmp"
+TEMP_ENCRYPTED="$ARCHIVE_ROOT/.${WAL_NAME}.age.$$.$RANDOM.tmp"
+TEMP_CHECKSUM="$ARCHIVE_ROOT/.${WAL_NAME}.sha256.$$.$RANDOM.tmp"
+cleanup() {
+  rm -f "$TEMP_COMPRESSED" "$TEMP_ENCRYPTED" "$TEMP_CHECKSUM"
+}
+trap cleanup EXIT
+
+"$GZIP" -n -1 -c "$SOURCE" >"$TEMP_COMPRESSED"
+"$AGE" --encrypt --recipients-file "$RECIPIENT_FILE" --output "$TEMP_ENCRYPTED" "$TEMP_COMPRESSED"
+test -s "$TEMP_ENCRYPTED"
+
+printf '%s  %s\n' "$SOURCE_CHECKSUM" "$WAL_NAME" >"$TEMP_CHECKSUM"
+chmod 600 "$TEMP_ENCRYPTED" "$TEMP_CHECKSUM"
+mv "$TEMP_ENCRYPTED" "$DESTINATION"
+mv "$TEMP_CHECKSUM" "$CHECKSUM_FILE"
+rm -f "$TEMP_COMPRESSED"
+sync "$DESTINATION" "$CHECKSUM_FILE"
+
+trap - EXIT
+exit 0

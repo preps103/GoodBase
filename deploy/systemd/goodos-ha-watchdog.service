@@ -1,0 +1,12 @@
+[Unit]
+Description=GoodOS GoodBase high-availability watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PM2_HOME=/root/.pm2
+ExecStart=/usr/local/sbin/goodos-ha-watchdog.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -94,7 +94,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for command_name in runuser psql tar sha256sum openssl curl docker install; do require "$command_name"; done
+for command_name in runuser psql tar sha256sum openssl curl docker install gzip; do require "$command_name"; done
 [[ -x "$AGE" && -r "$IDENTITY" ]] || fail "The age binary or recovery identity is unavailable"
 [[ -d "$PROJECT_ROOT" && -d "$BACKUP_ROOT/base" && -d "$BACKUP_ROOT/wal" ]] || fail "Project or backup roots are unavailable"
 [[ "$MAX_BASE_AGE_HOURS" =~ ^[0-9]+$ ]] || fail "Base-backup age limit must be an integer"
@@ -171,11 +171,17 @@ name="\${1:?}"; destination="\${2:?}"
 encrypted="$BACKUP_ROOT/wal/\${name}.age"; checksum="$BACKUP_ROOT/wal/\${name}.sha256"
 [[ -s "\$encrypted" && -s "\$checksum" ]] || exit 1
 temporary="\${destination}.tmp"
-trap 'rm -f "\$temporary"' EXIT
-$AGE --decrypt --identity $IDENTITY --output "\$temporary" "\$encrypted"
+container="\${destination}.container.tmp"
+trap 'rm -f "\$temporary" "\$container"' EXIT
+$AGE --decrypt --identity $IDENTITY --output "\$container" "\$encrypted"
+if gzip -t "\$container" >/dev/null 2>&1; then
+  gzip -dc "\$container" >"\$temporary"
+else
+  mv "\$container" "\$temporary"
+fi
 expected="\$(awk 'NR==1{print \$1}' "\$checksum")"; actual="\$(sha256sum "\$temporary"|awk '{print \$1}')"
 [[ "\$expected" == "\$actual" ]] || exit 3
-mv "\$temporary" "\$destination"; trap - EXIT
+mv "\$temporary" "\$destination"; rm -f "\$container"; trap - EXIT
 EOF
 chmod 700 "$RESTORE_HELPER"
 

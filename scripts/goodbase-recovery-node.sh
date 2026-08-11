@@ -196,6 +196,7 @@ case "$identity_mode" in
 esac
 
 AGE="$(find_command age /opt/homebrew/bin/age /usr/local/bin/age)" || fail "age is not installed"
+GZIP="$(find_command gzip /usr/bin/gzip /bin/gzip)" || fail "gzip is not installed"
 PG_BIN="${GOODBASE_PG_BIN:-}"
 if [ -z "$PG_BIN" ]; then
   for candidate in /opt/homebrew/opt/postgresql@16/bin /usr/local/opt/postgresql@16/bin /usr/lib/postgresql/16/bin; do
@@ -239,6 +240,7 @@ verify_encrypted_checksum "$BASE"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/goodbase-recovery.XXXXXX")"
 PLAIN_DUMP="$WORK_DIR/backup.dump"
 PLAIN_WAL="$WORK_DIR/wal.segment"
+WAL_CONTAINER="$WORK_DIR/wal.container"
 PLAIN_BASE="$WORK_DIR/base.tar.gz"
 
 log "Decrypting and validating $(basename "$LOGICAL")"
@@ -250,7 +252,12 @@ ARCHIVE_ENTRIES="$(grep -cvE '^(;|$)' "$WORK_DIR/archive.list")"
 log "Validating newest WAL segment $(basename "$WAL")"
 WAL_CHECKSUM="${WAL%.age}.sha256"
 [ -s "$WAL_CHECKSUM" ] || fail "Checksum sidecar is missing for $(basename "$WAL")"
-"$AGE" --decrypt --identity "$IDENTITY_FILE" --output "$PLAIN_WAL" "$WAL"
+"$AGE" --decrypt --identity "$IDENTITY_FILE" --output "$WAL_CONTAINER" "$WAL"
+if "$GZIP" -t "$WAL_CONTAINER" >/dev/null 2>&1; then
+  "$GZIP" -dc "$WAL_CONTAINER" >"$PLAIN_WAL"
+else
+  mv "$WAL_CONTAINER" "$PLAIN_WAL"
+fi
 WAL_EXPECTED="$(awk 'NR == 1 {print $1}' "$WAL_CHECKSUM")"
 WAL_ACTUAL="$(sha256_file "$PLAIN_WAL")"
 [ -n "$WAL_EXPECTED" ] && [ "$WAL_EXPECTED" = "$WAL_ACTUAL" ] || fail "Decrypted WAL checksum mismatch"
@@ -261,7 +268,7 @@ tar -tzf "$PLAIN_BASE" >"$WORK_DIR/base.list"
 grep -Eq '(^|/)backup_label$' "$WORK_DIR/base.list" || fail "Base backup is missing backup_label"
 grep -Eq '(^|/)backup_manifest$' "$WORK_DIR/base.list" || fail "Base backup is missing backup_manifest"
 grep -Eq '(^|/)global/pg_control$' "$WORK_DIR/base.list" || fail "Base backup is missing pg_control"
-rm -f "$PLAIN_BASE" "$PLAIN_WAL"
+rm -f "$PLAIN_BASE" "$PLAIN_WAL" "$WAL_CONTAINER"
 
 PG_DATA="$WORK_DIR/postgres"
 PG_SOCKET="$WORK_DIR/socket"

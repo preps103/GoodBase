@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the GoodOS operations evaluation every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+RandomizedDelaySec=60
+Persistent=true
+Unit=goodos-operations-check.service
+
+[Install]
+WantedBy=timers.target

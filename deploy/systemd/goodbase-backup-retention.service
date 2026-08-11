@@ -6,6 +6,7 @@ After=postgresql.service goodos-enterprise-backup.service
 Type=oneshot
 User=root
 Group=root
+Environment=GOODBASE_BACKUP_RETENTION_DAYS=14
 ExecStart=/usr/local/sbin/goodbase-enterprise-retention
 Nice=10
 IOSchedulingClass=best-effort

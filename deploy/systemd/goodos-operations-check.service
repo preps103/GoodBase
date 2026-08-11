@@ -1,0 +1,23 @@
+[Unit]
+Description=GoodOS operations and recovery health evaluation
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/var/www/GoodBase
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=-/var/www/GoodBase/.env
+ExecStart=/usr/bin/node /var/www/GoodBase/scripts/operations-check.js
+TimeoutStartSec=90
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full

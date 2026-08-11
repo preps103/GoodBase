@@ -1,0 +1,19 @@
+[Unit]
+Description=GoodOS daily security audit
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/var/www/GoodBase
+Environment=NPM_CONFIG_CACHE=/var/cache/goodos-security-audit
+ExecStart=/usr/local/sbin/goodos-security-audit
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/log/goodos-security /var/cache/goodos-security-audit
+TimeoutStartSec=20min

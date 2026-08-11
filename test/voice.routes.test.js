@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -9,8 +10,26 @@ const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "goodvoice-routes-")
 process.env.NODE_ENV = "test";
 process.env.GOODOS_VOICE_DB_PATH = path.join(testDirectory, "voice-db.json");
 process.env.GOODVOICE_SECRETS_PATH = path.join(testDirectory, "voice-secrets.json");
+process.env.GOODVOICE_STATE_BACKUP_STAMP = path.join(testDirectory, "voice-state-backup.timestamp");
+process.env.GOODVOICE_PROVIDER_VAULT_KEY = crypto.randomBytes(32).toString("hex");
+process.env.GOODOS_VOICE_SECRET = crypto.randomBytes(32).toString("hex");
+fs.writeFileSync(process.env.GOODVOICE_STATE_BACKUP_STAMP, new Date().toISOString());
 
 const voiceRoutes = require("../src/routes/voice.routes");
+
+function signedVoiceRequest(body) {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = crypto
+    .createHmac("sha256", process.env.GOODOS_VOICE_SECRET)
+    .update(`${timestamp}.${JSON.stringify(body)}`)
+    .digest("hex");
+
+  return {
+    "content-type": "application/json",
+    "x-goodvoice-timestamp": timestamp,
+    "x-goodvoice-signature": signature
+  };
+}
 
 async function withServer(callback) {
   const app = express();
@@ -31,7 +50,7 @@ async function withServer(callback) {
 
 test("reports measured GoodVoice backend and telephony readiness", async () => {
   await withServer(async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/health`);
+    const response = await fetch(`${baseUrl}/health/details`);
     assert.equal(response.status, 200);
     const health = await response.json();
     assert.equal(health.module, "GoodVoice");
@@ -138,10 +157,10 @@ test("persists enterprise voice policies and reports readiness", async () => {
     assert.deepEqual(settings.disposition_codes, ["Resolved", "Escalated"]);
 
     const readiness = await (await fetch(`${baseUrl}/operations/readiness`)).json();
-    assert.equal(readiness.supervisor_controls.monitor, true);
+    assert.equal(readiness.supervisor_controls.monitor, false);
     assert.equal(readiness.quality_policy.minimum_mos, 3.8);
     assert.ok(readiness.blockers.includes(
-      "No carrier-validated emergency calling location is configured."
+      "Supervisor PBX actions are configured as policy only and are not enabled in this release."
     ));
   });
 });
@@ -158,7 +177,7 @@ test("tracks emergency locations without claiming carrier validation", async () 
         region: "CA",
         postal_code: "92805",
         callback_number: "(714) 555-0100",
-        status: "validated"
+        status: "pending_provider"
       })
     });
     assert.equal(response.status, 201);
@@ -178,7 +197,8 @@ test("tracks number-porting requests and prevents duplicate active numbers", asy
       numbers: ["(714) 555-0199"],
       losing_carrier: "Current Carrier",
       account_name: "GoodVoice",
-      status: "submitted"
+      status: "submitted",
+      external_reference: "carrier-port-test-001"
     };
     const firstResponse = await fetch(`${baseUrl}/port-requests`, {
       method: "POST",
@@ -214,32 +234,34 @@ test("creates post-call wrap-up, quality, and intelligence workflow records", as
       })
     });
 
+    const routeBody = {
+      call_id: "call_enterprise_test",
+      from_number: "+17145550199",
+      to_number: "+17145550102",
+      classification: "Support"
+    };
     const routeResponse = await fetch(`${baseUrl}/route-call`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        call_id: "call_enterprise_test",
-        from_number: "+17145550199",
-        to_number: "+17145550102",
-        classification: "Support"
-      })
+      headers: signedVoiceRequest(routeBody),
+      body: JSON.stringify(routeBody)
     });
     const route = await routeResponse.json();
     assert.equal(route.action, "dial_agent");
 
+    const eventBody = {
+      call_id: "call_enterprise_test",
+      event: "Hangup",
+      recording_url: "https://recordings.example.test/call.wav",
+      rtp_metrics: {
+        mos: 3.1,
+        jitter_ms: 45,
+        packet_loss_percent: 1.5
+      }
+    };
     const eventResponse = await fetch(`${baseUrl}/call-event`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        call_id: "call_enterprise_test",
-        event: "Hangup",
-        recording_url: "https://recordings.example.test/call.wav",
-        rtp_metrics: {
-          mos: 3.1,
-          jitter_ms: 45,
-          packet_loss_percent: 1.5
-        }
-      })
+      headers: signedVoiceRequest(eventBody),
+      body: JSON.stringify(eventBody)
     });
     assert.equal(eventResponse.status, 201);
     const event = await eventResponse.json();

@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up GoodVoice state daily
+
+[Timer]
+OnCalendar=*-*-* 03:45:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=goodvoice-state-backup.service
+
+[Install]
+WantedBy=timers.target

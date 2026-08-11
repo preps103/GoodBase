@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+APP_DIR="/var/www/GoodBase"
+REPORT_DIR="/var/log/goodos-security"
+REPORT="$REPORT_DIR/latest.json"
+TEMP="$REPORT.tmp"
+
+mkdir -p "$REPORT_DIR"
+chmod 700 "$REPORT_DIR"
+cd "$APP_DIR"
+
+AUDIT="$(mktemp)"
+trap 'rm -f "$AUDIT" "$TEMP"' EXIT
+
+set +e
+npm audit --omit=dev --json >"$AUDIT"
+AUDIT_EXIT=$?
+set -e
+
+node - "$AUDIT" "$TEMP" "$AUDIT_EXIT" <<'NODE'
+const fs = require("fs");
+const [auditPath, outputPath, auditExit] = process.argv.slice(2);
+const report = JSON.parse(fs.readFileSync(auditPath, "utf8"));
+const vulnerabilities = report.metadata?.vulnerabilities || {};
+const envMode = (fs.statSync("/var/www/GoodBase/.env").mode & 0o777).toString(8);
+const payload = {
+  checkedAt: new Date().toISOString(),
+  status:
+    Number(vulnerabilities.high || 0) === 0 &&
+    Number(vulnerabilities.critical || 0) === 0 &&
+    envMode === "600"
+      ? "passed"
+      : "failed",
+  auditExitCode: Number(auditExit),
+  vulnerabilities,
+  environmentFileMode: envMode,
+};
+fs.writeFileSync(outputPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+if (payload.status !== "passed") process.exitCode = 1;
+NODE
+
+mv "$TEMP" "$REPORT"
+chmod 600 "$REPORT"
+trap - EXIT
+cat "$REPORT"
