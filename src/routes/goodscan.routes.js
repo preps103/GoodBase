@@ -13,6 +13,8 @@ const { STORAGE_ROOT } = require("../services/storage-v2.service");
 
 const router = express.Router();
 const storageRoot = path.resolve(process.env.GOODSCAN_CAPTURE_ROOT || path.join(STORAGE_ROOT, "goodscan-captures"));
+const MAX_MANIFEST_BYTES = 256 * 1024;
+const MAX_CAPTURE_BYTES = 12 * 1024 * 1024 * 1024;
 fs.mkdirSync(storageRoot, { recursive: true, mode: 0o700 });
 
 function requireGoodScanAccess(req, res, next) {
@@ -49,10 +51,13 @@ router.post("/credits/webhooks/stripe", async (req, res) => {
   if (!/^whsec_/.test(credits.webhookSecret())) {
     return res.status(503).json({ success: false, code: "GOODSCAN_WEBHOOK_NOT_CONFIGURED", message: "GoodScan payment webhooks are not activated." });
   }
+  if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length === 0) {
+    return res.status(400).json({ success: false, code: "GOODSCAN_WEBHOOK_BODY_REQUIRED", message: "The original signed webhook body is required." });
+  }
   let event;
   try {
     event = credits.stripeClient().webhooks.constructEvent(
-      req.rawBody || Buffer.from(JSON.stringify(req.body || {})),
+      req.rawBody,
       req.get("Stripe-Signature"),
       credits.webhookSecret(),
     );
@@ -67,6 +72,10 @@ router.post("/credits/webhooks/stripe", async (req, res) => {
   }
 });
 router.use(authRequired, requireGoodScanAccess);
+router.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 router.get("/workspace", async (req, res, next) => {
   try {
     const [workspace, account] = await Promise.all([service.workspace(req.user.id), credits.accountUsage(req.user.id)]);
@@ -97,6 +106,13 @@ router.post("/captures", captureLimiter, upload.fields([{ name: "manifest", maxC
   const sources = grouped.sources || [];
   try {
     if (manifestFiles.length !== 1) throw service.serviceError("Exactly one capture manifest is required.");
+    if (Number(manifestFiles[0].size || 0) > MAX_MANIFEST_BYTES) {
+      throw service.serviceError("The capture manifest exceeds 256 KB.", 413, "GOODSCAN_MANIFEST_TOO_LARGE");
+    }
+    const captureBytes = sources.reduce((total, file) => total + Number(file.size || 0), 0);
+    if (captureBytes > MAX_CAPTURE_BYTES) {
+      throw service.serviceError("The staged capture exceeds the 12 GB package limit.", 413, "GOODSCAN_CAPTURE_TOO_LARGE");
+    }
     const rawManifest = JSON.parse(await fs.promises.readFile(manifestFiles[0].path, "utf8"));
     const asset = await service.createCapture({ userId: req.user.id, manifest: rawManifest, files: sources });
     await cleanup(manifestFiles);

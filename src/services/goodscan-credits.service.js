@@ -293,7 +293,7 @@ async function fulfillCheckout(client, session) {
   if (row.stripe_checkout_session_id && row.stripe_checkout_session_id !== session.id) {
     throw serviceError("Stripe session does not match the GoodScan checkout.", 409, "GOODSCAN_CHECKOUT_MISMATCH");
   }
-  if (session.payment_status === "unpaid") return row.id;
+  if (session.payment_status !== "paid") return row.id;
   if (Number(session.amount_total) !== Number(row.price_cents) || String(session.currency).toLowerCase() !== row.currency) {
     throw serviceError("Stripe payment amount does not match the GoodScan credit pack.", 409, "GOODSCAN_CHECKOUT_AMOUNT_MISMATCH");
   }

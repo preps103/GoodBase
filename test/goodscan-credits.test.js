@@ -51,7 +51,7 @@ test("GoodScan billing schema is an immutable ledger with idempotent fulfillment
   assert.match(migration, /idempotency_key TEXT NOT NULL UNIQUE/);
   assert.match(migration, /UNIQUE \(owner_user_id, idempotency_key\)/);
   assert.match(service, /stripe-checkout:/);
-  assert.match(service, /payment_status === "unpaid"/);
+  assert.match(service, /payment_status !== "paid"/);
   assert.match(service, /charge\.refunded/);
 });
 
@@ -61,7 +61,17 @@ test("GoodScan Stripe webhook is public, signed, and mounted before application 
   const auth = routes.indexOf("router.use(authRequired, requireGoodScanAccess)");
   assert.ok(webhook >= 0 && webhook < auth);
   assert.match(routes, /webhooks\.constructEvent/);
+  assert.match(routes, /Buffer\.isBuffer\(req\.rawBody\)/);
+  assert.doesNotMatch(routes, /req\.rawBody \|\| Buffer\.from/);
   assert.match(source("src/app.js"), /\/api\/goodscan\/v1\/credits\/webhooks\/stripe/);
+});
+
+test("GoodScan capture packages enforce manifest and aggregate byte limits", () => {
+  const routes = source("src/routes/goodscan.routes.js");
+  assert.match(routes, /MAX_MANIFEST_BYTES = 256 \* 1024/);
+  assert.match(routes, /MAX_CAPTURE_BYTES = 12 \* 1024 \* 1024 \* 1024/);
+  assert.match(routes, /GOODSCAN_MANIFEST_TOO_LARGE/);
+  assert.match(routes, /GOODSCAN_CAPTURE_TOO_LARGE/);
 });
 
 test("GoodScan checkout accepts only a product SKU and server-loaded pricing", () => {
