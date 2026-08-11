@@ -38,8 +38,12 @@ test("GoodScan originals use private persistent storage and randomized filenames
 test("GoodScan database migration is run before the API starts", () => {
   const server = source("src/server.js");
   const migration = source("migrations/20260810_goodscan_production_workspace.sql");
+  const creditMigration = source("migrations/20260810_goodscan_credit_billing.sql");
+  const migrationRunner = source("scripts/apply-goodscan-migration.js");
 
   assert.match(server, /runGoodScanMigrations\(\)/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodscan_assets/);
   assert.match(migration, /visibility = 'public' AND status = 'completed'/);
+  assert.match(creditMigration, /CREATE TABLE IF NOT EXISTS goodscan_credit_accounts/);
+  assert.match(migrationRunner, /20260810_goodscan_credit_billing\.sql/);
 });

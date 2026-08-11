@@ -405,7 +405,8 @@ app.use(
       if (
         req.originalUrl?.startsWith("/api/apps/goodads/v1/public/payment-webhooks/") ||
         req.originalUrl?.startsWith("/api/apps/goodads/v1/public/engagement-webhooks/") ||
-        req.originalUrl?.startsWith("/api/fleet/v1/payments/webhooks/stripe")
+        req.originalUrl?.startsWith("/api/fleet/v1/payments/webhooks/stripe") ||
+        req.originalUrl?.startsWith("/api/goodscan/v1/credits/webhooks/stripe")
       ) {
         req.rawBody = Buffer.from(buffer);
       }

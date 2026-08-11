@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const service = require("../services/goodscan.service");
+const credits = require("../services/goodscan-credits.service");
 const { STORAGE_ROOT } = require("../services/storage-v2.service");
 
 const router = express.Router();
@@ -36,15 +37,59 @@ const upload = multer({
   },
 });
 const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
+const billingLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
+const quoteLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false });
 
 async function cleanup(files) {
   await Promise.all(files.map(file => fs.promises.unlink(file.path).catch(() => {})));
 }
 
 router.get("/health", (_req, res) => res.json({ success: true, status: "online", service: "goodscan", storage: "private" }));
+router.post("/credits/webhooks/stripe", async (req, res) => {
+  if (!/^whsec_/.test(credits.webhookSecret())) {
+    return res.status(503).json({ success: false, code: "GOODSCAN_WEBHOOK_NOT_CONFIGURED", message: "GoodScan payment webhooks are not activated." });
+  }
+  let event;
+  try {
+    event = credits.stripeClient().webhooks.constructEvent(
+      req.rawBody || Buffer.from(JSON.stringify(req.body || {})),
+      req.get("Stripe-Signature"),
+      credits.webhookSecret(),
+    );
+  } catch {
+    return res.status(400).json({ success: false, code: "INVALID_WEBHOOK_SIGNATURE", message: "Webhook signature verification failed." });
+  }
+  try {
+    const result = await credits.processStripeEvent(event);
+    return res.json({ success: true, received: true, duplicate: result.duplicate === true });
+  } catch {
+    return res.status(500).json({ success: false, code: "GOODSCAN_WEBHOOK_PROCESSING_FAILED", message: "The verified payment event could not be processed." });
+  }
+});
 router.use(authRequired, requireGoodScanAccess);
 router.get("/workspace", async (req, res, next) => {
-  try { return res.json({ success: true, data: await service.workspace(req.user.id) }); } catch (error) { return next(error); }
+  try {
+    const [workspace, account] = await Promise.all([service.workspace(req.user.id), credits.accountUsage(req.user.id)]);
+    workspace.usage.creditsRemaining = account.balance;
+    workspace.usage.creditsLimit = null;
+    return res.json({ success: true, data: workspace });
+  } catch (error) { return next(error); }
+});
+router.get("/credits", async (req, res, next) => {
+  try { return res.json({ success: true, data: await credits.summary(req.user.id) }); } catch (error) { return next(error); }
+});
+router.post("/credits/checkout-sessions", billingLimiter, async (req, res, next) => {
+  try {
+    const data = await credits.createCheckoutSession({
+      userId: req.user.id,
+      productSku: req.body?.productSku,
+      idempotencyKey: req.get("Idempotency-Key"),
+    });
+    return res.status(201).json({ success: true, data });
+  } catch (error) { return next(error); }
+});
+router.post("/ai/quote", quoteLimiter, async (req, res, next) => {
+  try { return res.json({ success: true, data: credits.quoteGeneration(req.body?.manifest) }); } catch (error) { return next(error); }
 });
 router.post("/captures", captureLimiter, upload.fields([{ name: "manifest", maxCount: 1 }, { name: "sources", maxCount: 500 }]), async (req, res, next) => {
   const grouped = req.files || {};
@@ -61,6 +106,20 @@ router.post("/captures", captureLimiter, upload.fields([{ name: "manifest", maxC
     return next(error);
   }
 });
-router.get("/ai/capabilities", (_req, res) => res.json({ success: true, available: false, methods: [], operations: [], outputFormats: [], message: "GoodScan AI generation providers are not configured." }));
+router.get("/ai/capabilities", (_req, res) => res.json({
+  success: true,
+  available: false,
+  methods: [],
+  operations: [],
+  outputFormats: [],
+  creditMetering: true,
+  quoteEndpoint: "/api/goodscan/v1/ai/quote",
+  message: "GoodScan AI generation providers are not configured. Credit quotes and purchases are available; jobs are never charged until a provider accepts them.",
+}));
+router.post("/ai/generations", (_req, res) => res.status(503).json({
+  success: false,
+  code: "GOODSCAN_AI_PROVIDER_UNAVAILABLE",
+  message: "GoodScan AI generation is not activated. No credits were charged.",
+}));
 
 module.exports = router;

@@ -3374,6 +3374,21 @@
       "/api/goodscan/v1/ai/capabilities": {
         "get": {"summary":"Report verified GoodScan AI generation providers and capabilities","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Honest provider capability status"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"}}}
       },
+      "/api/goodscan/v1/credits": {
+        "get": {"summary":"Read the authenticated user's GoodScan credit balance, packs, purchases, and immutable usage ledger","tags":["GoodScan Billing"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"GoodScan credit account summary"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"}}}
+      },
+      "/api/goodscan/v1/credits/checkout-sessions": {
+        "post": {"summary":"Create an idempotent Stripe-hosted checkout for a server-priced GoodScan credit pack","tags":["GoodScan Billing"],"security":[{"GoodOSBearer":[]}],"parameters":[{"in":"header","name":"Idempotency-Key","required":true,"schema":{"type":"string","maxLength":255}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["productSku"],"properties":{"productSku":{"type":"string"}}}}}},"responses":{"201":{"description":"Checkout session created"},"400":{"description":"Invalid request or missing idempotency key"},"401":{"description":"Authentication required"},"402":{"description":"Payment required"},"403":{"description":"GoodScan application access required"},"503":{"description":"Stripe is not activated"}}}
+      },
+      "/api/goodscan/v1/credits/webhooks/stripe": {
+        "post": {"summary":"Receive signature-verified, duplicate-safe Stripe events for GoodScan credit fulfillment and refunds","tags":["GoodScan Billing"],"security":[],"responses":{"200":{"description":"Verified event accepted"},"400":{"description":"Invalid webhook signature"},"500":{"description":"Verified event processing failed"},"503":{"description":"Webhook secret is not configured"}}}
+      },
+      "/api/goodscan/v1/ai/quote": {
+        "post": {"summary":"Calculate the authoritative server-side credit cost for a GoodScan generation manifest","tags":["GoodScan Billing"],"security":[{"GoodOSBearer":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["manifest"],"properties":{"manifest":{"type":"object"}}}}}},"responses":{"200":{"description":"Authoritative credit quote"},"400":{"description":"Invalid generation manifest"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"}}}
+      },
+      "/api/goodscan/v1/ai/generations": {
+        "post": {"summary":"Submit a metered GoodScan AI generation job when a verified provider is active","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"responses":{"202":{"description":"Generation accepted and credits reserved"},"401":{"description":"Authentication required"},"402":{"description":"Insufficient credits"},"403":{"description":"GoodScan application access required"},"503":{"description":"Provider unavailable; no credits charged"}}}
+      },
       "/api/goodbase/v1/ecosystem/overview": {
         "get": {"summary":"Read IaC, extension marketplace, and AI operational state","tags":["Goodbase Ecosystem"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Tenant ecosystem metrics"},"403":{"description":"Administrator role required"}}}
       },
