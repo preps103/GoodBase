@@ -32,6 +32,9 @@ test("runtime readiness validates critical dependencies", async () => {
     queryFn: healthyQuery,
     fetchFn: healthyFetch,
     lifecycle: createLifecycleState(),
+    goodSpeechRequired: false,
+    kokoroUrl: "",
+    kokoroToken: "",
   });
 
   assert.equal(readiness.status, "ready");
