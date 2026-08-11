@@ -19,9 +19,11 @@ test("product login stylesheet is cross-origin reusable", () => {
   assert.match(routes, /Cross-Origin-Resource-Policy/);
   assert.match(routes, /no-store, no-cache, must-revalidate, proxy-revalidate/);
 });
-test("contract requires every provider and excludes direct GoodOS", () => {
-  for (const name of ["Google", "Apple", "Microsoft", "GoodOS SSO", "forgot-password", "create-account"]) assert.match(docs, new RegExp(name, "i"));
-  assert.match(docs, /GoodOS uses its own hub-specific login/);
+test("contract requires the same four-tile panel in GoodOS and every application", () => {
+  for (const name of ["Google", "Apple", "Microsoft", "GoodOS", "forgot-password", "create-account"]) assert.match(docs, new RegExp(name, "i"));
+  assert.match(docs, /GoodOS and every product application use the shared GoodBase authentication contract/);
+  assert.match(docs, /two-by-two provider grid/);
+  assert.match(css, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
 });
 test("GoodBase auth UI implements the complete shared product panel", () => {
   for (const hook of [
