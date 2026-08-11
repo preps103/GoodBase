@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+const net = require("node:net");
 const database = require("../config/database");
 const authRequired = require("../middleware/authRequired");
 const { logAudit } = require("../services/audit.service");
@@ -12,6 +13,41 @@ const INTERACTIONS = new Set(["Like","Follow","View","Share","Comment","Subscrib
 
 function clean(value, max = 500) {
   return String(value ?? "").trim().replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
+}
+
+function privileged(user) {
+  return ["owner", "admin", "super_admin", "superadmin"].includes(
+    String(user?.platformRole || user?.platform_role || user?.role || "").toLowerCase(),
+  );
+}
+
+function requireGoodBoostAccess(req, res, next) {
+  const entitled = (req.apps || []).some(app => {
+    const id = String(app.id || app.appId || app.slug || app.name || "").toLowerCase().replace(/\s+/g, "");
+    const domain = String(app.domain || "").toLowerCase();
+    const membership = String(app.membershipStatus || app.membership_status || "active").toLowerCase();
+    const status = String(app.appStatus || app.status || "active").toLowerCase();
+    return (["goodboost", "good-boost", "boost"].includes(id) || domain === "boost.goodos.app") && membership === "active" && status === "active";
+  });
+  if (!privileged(req.user) && !entitled) return res.status(403).json({ success: false, code: "GOODBOOST_ACCESS_REQUIRED", message: "Your GoodOS account does not have access to GoodBoost." });
+  return next();
+}
+
+function safePublicHttpsUrl(value) {
+  try {
+    const url = new URL(clean(value, 2048));
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false;
+    if (net.isIP(host) === 6) return false;
+    if (net.isIP(host) === 4) {
+      const [a, b] = host.split(".").map(Number);
+      if (a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function publicCampaign(row) {
@@ -81,6 +117,7 @@ router.get("/social/callback/:platform", async (req, res) => {
 });
 
 router.use(authRequired);
+router.use(requireGoodBoostAccess);
 router.use((req, res, next) => {
   const origin = clean(req.get("Origin"), 300);
   const expected = process.env.GOODBOOST_ORIGIN || "https://boost.goodos.app";
@@ -118,7 +155,7 @@ router.get("/social/connections", async (req, res, next) => {
   try { return res.json({ success: true, connections: await social.connections(req.user.id) }); } catch (error) { return next(error); }
 });
 router.post("/social/connections", async (req, res, next) => {
-  try { return res.json({ success: true, authorizationUrl: social.authorizationUrl(req.user.id, req.body?.platform) }); } catch (error) { return next(error); }
+  try { return res.json({ success: true, authorizationUrl: await social.authorizationUrl(req.user.id, req.body?.platform) }); } catch (error) { return next(error); }
 });
 router.delete("/social/connections/:id", async (req, res, next) => {
   try { return res.json({ success: true, ...(await social.disconnect(req.user.id, req.params.id)) }); } catch (error) { return next(error); }
@@ -131,6 +168,7 @@ router.get("/social/relationships", async (req, res, next) => {
 });
 router.post("/social/relationships/:id/actions", async (req, res, next) => {
   try {
+    if (req.body?.confirmation !== true) return res.status(400).json({ success: false, code: "GOODBOOST_CONFIRMATION_REQUIRED", message: "Confirm this provider action before submitting it." });
     const relationship = await social.action(req.user.id, req.params.id, clean(req.body?.action, 20), clean(req.get("Idempotency-Key"), 200), req.body?.dailyLimit);
     return res.json({ success: true, relationship });
   } catch (error) { return next(error); }
@@ -143,7 +181,7 @@ router.get("/operations", async (req, res, next) => {
       database.query("SELECT * FROM goodboost_inbox_items WHERE user_id=$1 ORDER BY received_at DESC LIMIT 500", [req.user.id]),
       database.query("SELECT * FROM goodboost_metric_snapshots WHERE user_id=$1 ORDER BY recorded_at DESC LIMIT 1000", [req.user.id]),
     ]);
-    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: social.providers().some(provider => provider.available) });
+    return res.json({ success: true, posts: posts.rows.map(publicPost), inbox: inbox.rows.map(publicInboxItem), metrics: metrics.rows.map(publicMetric), providerConfigured: process.env.GOODBOOST_PUBLISHING_ENABLED === "true" });
   } catch (error) { return next(error); }
 });
 
@@ -154,9 +192,11 @@ router.post("/publishing/posts", async (req, res, next) => {
     if (!platform || content.length < 2 || !allowedStatuses.has(status) || !idempotencyKey) return res.status(400).json({ success: false, code: "GOODBOOST_POST_INVALID", message: "Platform, content, status, and Idempotency-Key are required." });
     const scheduledFor = req.body?.scheduledFor ? new Date(req.body.scheduledFor) : null;
     if (status === "scheduled" && (!scheduledFor || Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() <= Date.now())) return res.status(400).json({ success: false, code: "GOODBOOST_SCHEDULE_INVALID", message: "Scheduled posts require a future publishing time." });
-    const mediaUrls = Array.isArray(req.body?.mediaUrls) ? req.body.mediaUrls.map(value => clean(value, 2048)).filter(value => { try { return new URL(value).protocol === "https:"; } catch { return false; } }).slice(0, 20) : [];
+    if (status === "scheduled" && process.env.GOODBOOST_PUBLISHING_ENABLED !== "true") return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Provider publishing is not configured. Save this content as a draft instead." });
+    const mediaUrls = Array.isArray(req.body?.mediaUrls) ? req.body.mediaUrls.map(value => clean(value, 2048)).filter(safePublicHttpsUrl).slice(0, 20) : [];
     const accountId = req.body?.accountId || null;
-    if (accountId) { const account = await database.query("SELECT id FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status='active'", [accountId, req.user.id]); if (!account.rows[0]) return res.status(404).json({ success: false, code: "GOODBOOST_CONNECTION_NOT_FOUND", message: "Connected account not found." }); }
+    if (status !== "draft" && !accountId) return res.status(400).json({ success: false, code: "GOODBOOST_CONNECTION_REQUIRED", message: "Choose a connected account before submitting or scheduling content." });
+    if (accountId) { const account = await database.query("SELECT id,platform FROM goodboost_social_connections WHERE id=$1 AND user_id=$2 AND status='active'", [accountId, req.user.id]); if (!account.rows[0]) return res.status(404).json({ success: false, code: "GOODBOOST_CONNECTION_NOT_FOUND", message: "Connected account not found." }); if (String(account.rows[0].platform).toLowerCase() !== platform.toLowerCase().replace(/[^a-z0-9]/g, "_")) return res.status(400).json({ success: false, code: "GOODBOOST_PLATFORM_MISMATCH", message: "The selected account does not match the post platform." }); }
     const result = await database.query(`INSERT INTO goodboost_publishing_posts(user_id,connection_id,platform,content,media_urls,scheduled_for,status,idempotency_key) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8) ON CONFLICT(user_id,idempotency_key) DO UPDATE SET updated_at=NOW() RETURNING *`, [req.user.id, accountId, platform, content, JSON.stringify(mediaUrls), scheduledFor, status, idempotencyKey]);
     await logAudit({ userId: req.user.id, appId: "goodboost", action: "goodboost.post.create", entityType: "publishing_post", entityId: result.rows[0].id, ipAddress: req.ip, metadata: { platform, status } }).catch(() => {});
     return res.status(201).json({ success: true, post: publicPost(result.rows[0]) });
@@ -166,7 +206,9 @@ router.post("/publishing/posts", async (req, res, next) => {
 router.patch("/publishing/posts/:id", async (req, res, next) => {
   try {
     const found = await database.query("SELECT * FROM goodboost_publishing_posts WHERE id=$1 AND user_id=$2", [req.params.id, req.user.id]); if (!found.rows[0]) return res.status(404).json({ success: false, message: "Publishing post not found." });
-    const current = found.rows[0]; const status = req.body?.status ? clean(req.body.status, 30) : current.status; const allowed = new Set(["draft","pending_approval","scheduled","publishing","published","failed"]); if (!allowed.has(status)) return res.status(400).json({ success: false, message: "Publishing status is invalid." });
+    const current = found.rows[0]; const status = req.body?.status ? clean(req.body.status, 30) : current.status; const allowed = new Set(["draft","pending_approval","scheduled"]); if (!allowed.has(status)) return res.status(400).json({ success: false, message: "Publishing status is invalid." });
+    if (status === "scheduled" && process.env.GOODBOOST_PUBLISHING_ENABLED !== "true") return res.status(503).json({ success: false, code: "GOODBOOST_PUBLISHING_NOT_CONFIGURED", message: "Provider publishing is not configured. Keep this content as a draft." });
+    if (current.status === "pending_approval" && status !== "pending_approval" && !privileged(req.user)) return res.status(403).json({ success: false, code: "GOODBOOST_APPROVAL_REQUIRED", message: "An owner or administrator must approve this post." });
     const content = req.body?.content === undefined ? current.content : clean(req.body.content, 5000); const approvalNote = req.body?.approvalNote === undefined ? current.approval_note : clean(req.body.approvalNote, 1000); const scheduledFor = req.body?.scheduledFor === undefined ? current.scheduled_for : req.body.scheduledFor ? new Date(req.body.scheduledFor) : null;
     const result = await database.query("UPDATE goodboost_publishing_posts SET content=$1,scheduled_for=$2,status=$3,approval_note=$4,updated_at=NOW() WHERE id=$5 AND user_id=$6 RETURNING *", [content, scheduledFor, status, approvalNote, req.params.id, req.user.id]);
     return res.json({ success: true, post: publicPost(result.rows[0]) });

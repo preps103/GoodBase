@@ -192,6 +192,7 @@ function safeReturnTo(value) {
     const allowed = new Set([
       "https://goodos.app",
       "https://base.goodos.app",
+      "https://boost.goodos.app",
     ]);
 
     if (!allowed.has(target.origin)) {
@@ -517,6 +518,37 @@ router.get(
       });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+router.get(
+  "/providers",
+  async (_request, response, next) => {
+    try {
+      const result = await query(`
+        SELECT id, display_name, metadata_json
+        FROM backend_identity_providers
+        WHERE provider_type = 'oidc'
+          AND status = 'active'
+        ORDER BY display_name
+      `);
+      const supported = new Set(["google", "apple", "microsoft", "github", "facebook"]);
+      const providers = result.rows.map(provider => {
+        const metadata = providerMetadata(provider);
+        const providerType = String(metadata.providerType || metadata.provider || provider.display_name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "");
+        return {
+          id: provider.id,
+          provider_type: providerType,
+          display_name: provider.display_name,
+          available: supported.has(providerType),
+        };
+      }).filter(provider => provider.available);
+      return response.json({ success: true, providers });
+    } catch (error) {
+      return next(error);
     }
   }
 );

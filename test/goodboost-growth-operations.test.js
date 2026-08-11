@@ -27,4 +27,7 @@ test("GoodBoost exposes planner, inbox, analytics, and report routes", () => {
   ]) assert.equal(routes.includes(contract), true, `${contract} should exist`);
   assert.match(routes, /Idempotency-Key/);
   assert.match(routes, /Cache-Control", "private, no-store/);
+  assert.match(routes, /GOODBOOST_PUBLISHING_NOT_CONFIGURED/);
+  assert.match(routes, /safePublicHttpsUrl/);
+  assert.doesNotMatch(routes, /new Set\(\["draft","pending_approval","scheduled","publishing","published","failed"\]\)/);
 });

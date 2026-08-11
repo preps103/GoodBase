@@ -49,7 +49,16 @@ CREATE TABLE IF NOT EXISTS goodboost_social_actions (
   UNIQUE(user_id,idempotency_key)
 );
 
+CREATE TABLE IF NOT EXISTS goodboost_social_oauth_states (
+  nonce TEXT PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS goodboost_social_connections_user_idx ON goodboost_social_connections(user_id,status);
 CREATE INDEX IF NOT EXISTS goodboost_social_relationships_status_idx ON goodboost_social_relationships(connection_id,status);
 CREATE INDEX IF NOT EXISTS goodboost_social_actions_daily_idx ON goodboost_social_actions(user_id,created_at,action,status);
-
+CREATE INDEX IF NOT EXISTS goodboost_social_oauth_states_expiry_idx ON goodboost_social_oauth_states(expires_at,consumed_at);

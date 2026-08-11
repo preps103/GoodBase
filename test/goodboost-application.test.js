@@ -23,6 +23,7 @@ test("GoodBoost API is authenticated, origin-bound, and server-validates campaig
   assert.match(index, /router\.use\("\/api\/goodboost", goodboostRoutes\)/);
   assert.match(routes, /router\.use\(authRequired\)/);
   assert.match(routes, /GOODBOOST_ORIGIN_DENIED/);
+  assert.match(routes, /GOODBOOST_ACCESS_REQUIRED/);
   assert.match(routes, /X-Requested-With/);
   assert.match(routes, /url\.protocol !== "https:"/);
   assert.match(routes, /WHERE user_id=\$1/);
@@ -33,4 +34,11 @@ test("GoodBoost persists the current onboarding completion state", () => {
   const routes = read("src/routes/goodboost.routes.js");
   assert.match(routes, /onboardingCompleted: settings\.onboardingCompleted === true/);
   assert.match(routes, /onboardingVersion: settings\.onboardingCompleted === true \? 1 : 0/);
+});
+
+test("GoodBase exposes only active social OIDC login providers", () => {
+  const oidc = read("src/routes/oidc-login.routes.js");
+  assert.match(oidc, /"\/providers"/);
+  assert.match(oidc, /status = 'active'/);
+  assert.match(oidc, /https:\/\/boost\.goodos\.app/);
 });
