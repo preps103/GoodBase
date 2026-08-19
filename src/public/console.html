@@ -20583,6 +20583,8 @@ if (!window.__goodosGlobalSearchListenerInstalled) {
   }
 
   function fitConnectedCard(card) {
+    if (card.closest("#login")) return;
+
     card.classList.add("goodos-realtime-connected-card-fit-v111");
     card.style.height = "auto";
     card.style.maxHeight = "none";
@@ -20612,6 +20614,9 @@ if (!window.__goodosGlobalSearchListenerInstalled) {
 
   function applyRealtimeConnectedFix() {
     if (!document.body || !isRealtimeCorePage() || isRunningV111) return;
+
+    var loginView = document.getElementById("login");
+    if (loginView && !loginView.classList.contains("hidden")) return;
 
     isRunningV111 = true;
 
