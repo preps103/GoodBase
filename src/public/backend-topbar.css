@@ -579,6 +579,56 @@
   box-sizing: border-box !important;
 }
 
+[data-goodos-topbar-control="account"] .topbar-avatar-wrap {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  aspect-ratio: 1 / 1 !important;
+  flex: 0 0 32px !important;
+  overflow: visible !important;
+  border-radius: 50% !important;
+  box-sizing: border-box !important;
+}
+
+[data-goodos-topbar-control="account"] .topbar-avatar-wrap .account-pill-avatar,
+[data-goodos-topbar-control="account"] .topbar-avatar-wrap .goodos-avatar {
+  display: grid !important;
+  place-items: center !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  aspect-ratio: 1 / 1 !important;
+  flex: 0 0 32px !important;
+  overflow: hidden !important;
+  border-radius: 50% !important;
+  box-sizing: border-box !important;
+}
+
+[data-goodos-topbar-control="account"] .topbar-avatar-wrap .account-pill-avatar img,
+[data-goodos-topbar-control="account"] .topbar-avatar-wrap .goodos-avatar img {
+  display: block !important;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  max-height: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  object-position: center !important;
+}
+
 [data-goodos-topbar-control="account"] > button,
 [data-goodos-topbar-control="account"] > a,
 [data-goodos-topbar-controls] > :has(> [data-goodos-topbar-control="account"]) > [data-goodos-topbar-control="account"] {

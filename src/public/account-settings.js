@@ -139,7 +139,7 @@
     var name = user.displayName || user.fullName || fullName || user.email || "Account";
     var role = user.platformRole || "user";
     pill.innerHTML =
-      '<span style="position:relative;display:inline-flex">' +
+      '<span class="topbar-avatar-wrap">' +
       imageMarkup(user.avatarUrl, name, "account-pill-avatar") +
       '<span class="topbar-status-dot" aria-label="Online"></span></span>' +
       '<span class="topbar-user-copy"><span class="topbar-user-name" id="userPillName">' + esc(name) + '</span>' +

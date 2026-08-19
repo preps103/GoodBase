@@ -48,7 +48,7 @@ test("GoodBase implements the ordered shared top-bar zones", () => {
   assert.ok(search > identity);
   assert.ok(actions > search);
   assert.ok(controls > actions);
-  assert.match(consoleHtml, /href="\/backend-topbar\.css\?v=20260819-profile-1"/);
+  assert.match(consoleHtml, /href="\/backend-topbar\.css\?v=20260819-profile-2"/);
   assert.match(consoleHtml, /<option>Owner Workspace<\/option>/);
   assert.match(consoleHtml, /<ellipse cx="12" cy="5" rx="7\.5" ry="3"/);
   assert.match(consoleHtml, /data-goodos-topbar-account-layout="profile"/);
