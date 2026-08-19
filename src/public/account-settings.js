@@ -135,15 +135,18 @@
     var pill = document.getElementById("userPill");
     var user = state.user || {};
     if (!pill) return;
-    var name = user.displayName || user.email || "Account";
+    var fullName = [user.firstName, user.lastName].filter(Boolean).join(" ");
+    var name = user.displayName || user.fullName || fullName || user.email || "Account";
     var role = user.platformRole || "user";
     pill.innerHTML =
       '<span style="position:relative;display:inline-flex">' +
       imageMarkup(user.avatarUrl, name, "account-pill-avatar") +
       '<span class="topbar-status-dot" aria-label="Online"></span></span>' +
-      '<span class="topbar-user-copy"><span class="topbar-user-name">' + esc(name) + '</span>' +
-      '<span class="topbar-user-role">◇ ' + esc(role) + '</span></span>' +
+      '<span class="topbar-user-copy"><span class="topbar-user-name" id="userPillName">' + esc(name) + '</span>' +
+      '<span class="topbar-user-role" id="userPillRole">◇ ' + esc(String(role).toUpperCase()) + '</span></span>' +
       '<svg class="topbar-user-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    pill.setAttribute("aria-label", name + " account");
+    pill.title = name;
   };
 
   window.openAccountView = function openAccountView(view) {

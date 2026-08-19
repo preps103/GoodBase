@@ -11,6 +11,8 @@
   --goodos-topbar-control-size: 34px;
   --goodos-topbar-control-gap: 10px;
   --goodos-topbar-controls-width: 166px;
+  --goodos-topbar-profile-controls-width: 292px;
+  --goodos-topbar-profile-width: 160px;
   --goodos-topbar-surface: rgba(12, 17, 33, 0.98);
   --goodos-topbar-raised: rgba(24, 31, 56, 0.82);
   --goodos-topbar-border: rgba(148, 163, 184, 0.16);
@@ -378,6 +380,16 @@
 }
 
 /*
+ * Products that expose the signed-in identity may opt into the profile
+ * account layout. The three universal icon controls keep their canonical
+ * 34px slots while the account control receives enough room for the avatar,
+ * display name, role, and menu chevron.
+ */
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"] {
+  --goodos-topbar-controls-width: var(--goodos-topbar-profile-controls-width);
+}
+
+/*
  * Every React application mounts its header through GoodOSTopBarWidget. The
  * widget portals the bar to document.body, while this spacer preserves the
  * exact place the 77px bar occupied in the application's normal layout.
@@ -492,6 +504,13 @@
   margin: 0 !important;
 }
 
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  > [data-goodos-topbar-controls] {
+  grid-template-columns:
+    repeat(3, var(--goodos-topbar-control-size))
+    minmax(0, var(--goodos-topbar-profile-width)) !important;
+}
+
 [data-goodos-topbar-controls] > [data-goodos-topbar-control="theme"] {
   grid-column: 1 !important;
 }
@@ -571,6 +590,41 @@
   border-radius: 9999px !important;
 }
 
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  [data-goodos-topbar-controls] > :has(> [data-goodos-topbar-control="account"]),
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  [data-goodos-topbar-controls] > [data-goodos-topbar-control="account"],
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  [data-goodos-topbar-control="account"] {
+  width: var(--goodos-topbar-profile-width) !important;
+  min-width: var(--goodos-topbar-profile-width) !important;
+  max-width: var(--goodos-topbar-profile-width) !important;
+  border-radius: 11px !important;
+  overflow: visible !important;
+}
+
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  [data-goodos-topbar-control="account"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 9px !important;
+  padding: 0 5px !important;
+}
+
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  [data-goodos-topbar-control="account"] .topbar-user-copy {
+  display: block !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}
+
+[data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+  [data-goodos-topbar-control="account"] .topbar-user-chevron {
+  display: block !important;
+  flex: 0 0 auto !important;
+}
+
 [data-goodos-topbar-controls] > .topbar-divider,
 [data-goodos-topbar-controls] > .goodos-action-divider {
   display: none !important;
@@ -580,6 +634,38 @@
   :root {
     --goodos-topbar-edge-space: 24px;
     --goodos-topbar-gap: 14px;
+  }
+}
+
+@media (max-width: 1180px) {
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"] {
+    --goodos-topbar-controls-width: 166px;
+  }
+
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+    > [data-goodos-topbar-controls] {
+    grid-template-columns: repeat(4, var(--goodos-topbar-control-size)) !important;
+  }
+
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+    [data-goodos-topbar-controls] > :has(> [data-goodos-topbar-control="account"]),
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+    [data-goodos-topbar-controls] > [data-goodos-topbar-control="account"],
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+    [data-goodos-topbar-control="account"] {
+    width: var(--goodos-topbar-control-size) !important;
+    min-width: var(--goodos-topbar-control-size) !important;
+    max-width: var(--goodos-topbar-control-size) !important;
+    padding: 0 !important;
+    border-radius: 9999px !important;
+    overflow: hidden !important;
+  }
+
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+    [data-goodos-topbar-control="account"] .topbar-user-copy,
+  [data-goodos-topbar][data-goodos-topbar-account-layout="profile"]
+    [data-goodos-topbar-control="account"] .topbar-user-chevron {
+    display: none !important;
   }
 }
 
