@@ -6,6 +6,8 @@ const providerTypes = ["google", "apple", "microsoft"];
 
 const goodBaseExperience = {
   appName: "GoodBase",
+  accent: "#38bdf8",
+  accentInk: "#071e3d",
   subtitle: "Access your applications, infrastructure, users, and production workspace.",
   brandMark: "G",
   brandName: "GoodBase",
@@ -27,6 +29,8 @@ const goodBaseExperience = {
 
 const gPanelExperience = {
   appName: "GPanel",
+  accent: "#818cf8",
+  accentInk: "#111027",
   subtitle: "Access your applications, deployments, domains, settings, and operations workspace.",
   brandMark: "P",
   brandName: "GPanel",
@@ -55,6 +59,11 @@ function currentExperience() {
 function applyStory(experience) {
   const story = document.querySelector(".login-story");
   if (!story) return;
+
+  story.closest(".login")?.classList.toggle(
+    "login--gpanel",
+    experience.appName === "GPanel",
+  );
 
   story.setAttribute("aria-label", `${experience.appName} platform`);
   const auth = document.querySelector(".login-auth");
@@ -177,8 +186,8 @@ function GoodBaseConsoleLogin() {
   return React.createElement(GoodOSLoginWidget, {
     appName: experience.appName,
     subtitle: experience.subtitle,
-    accent: "#38bdf8",
-    accentInk: "#071e3d",
+    accent: experience.accent,
+    accentInk: experience.accentInk,
     email,
     password,
     onEmailChange: setEmail,
