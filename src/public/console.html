@@ -1445,9 +1445,9 @@
 
     .update-sites-link {
       position: fixed;
-      right: 22px;
-      bottom: 22px;
-      z-index: 20;
+      right: calc(var(--backend-ada-trigger-right, 24px) + 90px + 12px);
+      bottom: var(--backend-ada-trigger-bottom, 24px);
+      z-index: 49;
       padding: 11px 15px;
       border-radius: 10px;
       background: #2563eb;
