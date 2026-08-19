@@ -204,6 +204,11 @@ router.get("/console-v2.js", (req, res) => {
   res.sendFile(require("path").join(__dirname, "../public/console-v2.js"));
 });
 
+router.get("/goodbase-console-login.js", (req, res) => {
+  res.type("application/javascript");
+  res.sendFile(path.join(__dirname, "../public/goodbase-console-login.js"));
+});
+
 router.get("/account-settings.js", (req, res) => {
   res.type("application/javascript");
   res.sendFile(path.join(__dirname, "../public/account-settings.js"));

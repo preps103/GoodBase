@@ -330,6 +330,11 @@ app.get("/console-v2.js", (req, res) => {
   res.sendFile(require("path").join(__dirname, "public/console-v2.js"));
 });
 
+app.get("/goodbase-console-login.js", (req, res) => {
+  res.type("application/javascript");
+  res.sendFile(require("path").join(__dirname, "public/goodbase-console-login.js"));
+});
+
 const allowedOrigins = [
   "https://goodos.app",
   "https://base.goodos.app",
