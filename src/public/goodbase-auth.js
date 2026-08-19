@@ -56,7 +56,13 @@ nodes.confirmPasswordToggle.addEventListener("click", () => {
 const query = new URLSearchParams(location.search);
 const resetToken = query.get("reset_token") || "";
 const redirectTarget = query.get("redirect") || query.get("returnTo") || "/console";
-let mode = resetToken ? "reset" : location.pathname === "/register" ? "register" : "login";
+let mode = resetToken
+  ? "reset"
+  : location.pathname === "/register"
+    ? "register"
+    : query.get("mode") === "forgot"
+      ? "forgot"
+      : "login";
 
 function safeRedirect(value) {
   try {

@@ -1061,10 +1061,13 @@
     }
 
     .login {
-      min-height: 100vh;
+      height: 100vh;
+      height: 100dvh;
+      min-height: 0;
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(520px, .92fr);
-      background: #f5f7fb;
+      overflow: hidden;
+      background: #0f1115;
       color: #0f172a;
     }
 
@@ -1073,7 +1076,8 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      min-height: 100vh;
+      height: 100%;
+      min-height: 0;
       padding: 48px clamp(48px, 6vw, 96px);
       background:
         radial-gradient(circle at 78% 28%, rgba(14,165,233,.22), transparent 33%),
@@ -1202,10 +1206,30 @@
     }
 
     .login-auth {
-      display: flex;
-      min-height: 100vh;
-      padding: 36px clamp(34px, 5vw, 78px);
-      background: #f5f7fb;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #0f1115;
+    }
+
+    #goodbaseLoginWidget {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    #goodbaseLoginWidget .goodos-login-widget,
+    #goodbaseLoginWidget .goodos-login-widget__scroll {
+      height: 100%;
+      min-height: 0;
+    }
+
+    #goodbaseLoginWidget .goodos-login-widget__scroll {
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
 
     .login-card {
@@ -1408,13 +1432,13 @@
     @media (max-width: 980px) {
       .login { display: block; }
       .login-story { display: none; }
-      .login-auth { min-height: 100vh; padding: 24px; }
+      .login-auth { height: 100%; min-height: 0; padding: 0; }
       .login-card { max-width: 600px; padding: 20px 0 40px; }
       .login-mobile-brand { display: flex; }
     }
 
     @media (max-width: 520px) {
-      .login-auth { padding: 20px; }
+      .login-auth { padding: 0; }
       .login-card h2 { font-size: 38px; }
       .social-login { padding: 13px; }
     }
@@ -5654,36 +5678,8 @@
         <div class="login-story-card">✦<strong>One platform</strong><small>Complete operations</small></div>
       </div>
     </section>
-    <section class="login-auth">
-      <form class="login-card" id="loginForm">
-        <div class="login-mobile-brand"><div class="logo">G</div><span>GoodBase</span></div>
-        <p class="login-eyebrow" id="loginEyebrow">Welcome back</p>
-        <h2 id="loginTitle">Sign in to GoodBase</h2>
-        <p class="login-description" id="loginDescription">Access your applications, infrastructure, users, and production workspace.</p>
-        <div id="loginError" class="error"></div>
-        <div id="loginSuccess" class="success"></div>
-        <div id="socialLogins" class="social-logins">
-          <button class="social-login" type="button" data-social-provider="google"><span class="social-icon" style="color:#4285f4">G</span>Sign in with Google</button>
-          <button class="social-login" type="button" data-social-provider="apple"><span class="social-icon" style="color:#111827;font-size:21px">●</span>Sign in with Apple</button>
-          <button class="social-login" type="button" data-social-provider="microsoft">
-            <span class="microsoft-icon" aria-hidden="true"><i style="background:#f25022"></i><i style="background:#7fba00"></i><i style="background:#00a4ef"></i><i style="background:#ffb900"></i></span>
-            Sign in with Microsoft
-          </button>
-        </div>
-        <div id="loginDivider" class="auth-divider">OR USE EMAIL</div>
-        <label>Email address</label>
-        <input id="email" type="email" autocomplete="username" placeholder="you@company.com" required />
-        <div id="passwordGroup">
-          <div class="login-field-row">
-            <label>Password</label>
-            <button id="forgotPasswordBtn" class="forgot-link" type="button">Forgot your password?</button>
-          </div>
-          <input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" required />
-        </div>
-        <button class="primary" id="loginSubmitBtn" type="submit">Sign in securely →</button>
-        <button class="back-to-login hidden" id="backToLoginBtn" type="button">← Back to sign in</button>
-        <div class="login-trust"><span style="color:#10b981;font-size:18px">◇</span><span>Authentication and account security are managed securely through GoodBase.</span></div>
-      </form>
+    <section class="login-auth" aria-label="GoodBase sign in">
+      <div id="goodbaseLoginWidget"></div>
     </section>
   </div>
 
@@ -14470,117 +14466,6 @@ document.querySelectorAll("[data-view]").forEach(btn => {
   });
 });
 
-let loginRecoveryMode = false;
-let socialAuthProviders = [];
-
-function showLoginMessage(message, type = "error") {
-  const error = document.getElementById("loginError");
-  const success = document.getElementById("loginSuccess");
-  error.style.display = "none";
-  success.style.display = "none";
-  const target = type === "success" ? success : error;
-  target.textContent = message;
-  target.style.display = "block";
-}
-
-function setLoginRecoveryMode(enabled) {
-  loginRecoveryMode = enabled;
-  document.getElementById("socialLogins").classList.toggle("hidden", enabled);
-  document.getElementById("loginDivider").classList.toggle("hidden", enabled);
-  document.getElementById("passwordGroup").classList.toggle("hidden", enabled);
-  document.getElementById("backToLoginBtn").classList.toggle("hidden", !enabled);
-  document.getElementById("password").required = !enabled;
-  document.getElementById("loginEyebrow").textContent = enabled ? "Account recovery" : "Welcome back";
-  document.getElementById("loginTitle").textContent = enabled ? "Reset your password" : "Sign in to GoodBase";
-  document.getElementById("loginDescription").textContent = enabled
-    ? "Enter the email connected to your GoodOS account. We will send secure reset instructions."
-    : "Access your applications, infrastructure, users, and production workspace.";
-  document.getElementById("loginSubmitBtn").textContent = enabled ? "Send reset instructions →" : "Sign in securely →";
-  document.getElementById("loginError").style.display = "none";
-  document.getElementById("loginSuccess").style.display = "none";
-}
-
-function socialProviderAliases(type) {
-  if (type === "microsoft") return ["microsoft", "azure", "azure_ad", "entra", "entra_id"];
-  return [type];
-}
-
-function findSocialProvider(type) {
-  const aliases = socialProviderAliases(type);
-  return socialAuthProviders.find(provider =>
-    aliases.includes(String(provider.provider_type || "").toLowerCase())
-  );
-}
-
-async function loadSocialAuthProviders() {
-  try {
-    const payload = await request("/api/goodbase/v1/growth/auth/providers");
-    socialAuthProviders = Array.isArray(payload.providers) ? payload.providers : [];
-  } catch {
-    socialAuthProviders = [];
-  }
-}
-
-document.querySelectorAll("[data-social-provider]").forEach(button => {
-  button.addEventListener("click", () => {
-    const type = button.dataset.socialProvider;
-    const provider = findSocialProvider(type);
-    const name = type.charAt(0).toUpperCase() + type.slice(1);
-    if (!provider || provider.available !== true) {
-      showLoginMessage(`${name} sign-in is not enabled in GoodBase yet. Configure its provider credentials, then try again.`);
-      return;
-    }
-    const returnTo = encodeURIComponent(`${window.location.origin}/`);
-    window.location.assign(`/api/oidc/start/${encodeURIComponent(provider.id)}?returnTo=${returnTo}`);
-  });
-});
-
-document.getElementById("forgotPasswordBtn").addEventListener("click", () => {
-  setLoginRecoveryMode(true);
-  document.getElementById("email").focus();
-});
-
-document.getElementById("backToLoginBtn").addEventListener("click", () => {
-  setLoginRecoveryMode(false);
-});
-
-document.getElementById("loginForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const error = document.getElementById("loginError");
-  error.style.display = "none";
-
-  try {
-    if (loginRecoveryMode) {
-      const result = await request("/api/auth/password-reset/request", {
-        method: "POST",
-        body: JSON.stringify({
-          email: document.getElementById("email").value.trim().toLowerCase()
-        })
-      });
-      showLoginMessage(
-        result.message || "If an active account exists for that email, reset instructions are on the way.",
-        "success"
-      );
-      return;
-    }
-
-    await request("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({
-        email: document.getElementById("email").value,
-        password: document.getElementById("password").value
-      })
-    });
-
-    await checkSession();
-  } catch (err) {
-    error.textContent = err.message;
-    error.style.display = "block";
-  }
-});
-
-loadSocialAuthProviders();
-
 function openTopbarView(view) {
   state.view = view;
   document.querySelectorAll("[data-view]").forEach(button => {
@@ -22820,6 +22705,7 @@ if (!window.__goodosGlobalSearchListenerInstalled) {
 <script src="/backend-ada.js" defer></script>
 <script src="/backend-collapsible-sections.js?v=20260720-1236" defer></script>
 <script src="/app-notification-center.js?v=20260724" defer></script>
+<script src="/goodbase-console-login.js?v=20260819" defer></script>
 
 <!-- GOODOS_UPDATE_SITES_FLOATING_LINK -->
 <a class="update-sites-link" href="/update-sites">Update Sites</a>
