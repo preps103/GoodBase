@@ -1214,65 +1214,6 @@
       background: #0f1115;
     }
 
-    .login--gpanel .login-story {
-      background:
-        radial-gradient(circle at 76% 22%, rgba(129,140,248,.3), transparent 34%),
-        radial-gradient(circle at 34% 104%, rgba(124,58,237,.38), transparent 42%),
-        linear-gradient(145deg, #0d0a21 0%, #171341 54%, #100d2b 100%);
-    }
-
-    .login--gpanel .login-story-brand .logo {
-      background: linear-gradient(135deg, #a5b4fc, #6366f1 48%, #7c3aed);
-      box-shadow: 0 16px 40px rgba(76,29,149,.42);
-    }
-
-    .login--gpanel .login-kicker {
-      border-color: rgba(165,180,252,.3);
-      background: rgba(99,102,241,.12);
-      color: #c7d2fe;
-    }
-
-    .login--gpanel .login-benefit span {
-      background: rgba(129,140,248,.16);
-      color: #c7d2fe;
-    }
-
-    .login--gpanel .login-story-card {
-      border-color: rgba(165,180,252,.18);
-      background: rgba(43,38,88,.42);
-    }
-
-    .login--gpanel .login-auth {
-      background: #0d0a1c;
-    }
-
-    .login--gpanel #goodbaseLoginWidget .goodos-login-widget:not(.goodos-login-widget--light) {
-      --goodos-login-panel: #0d0a1c;
-      --goodos-login-card: #171428;
-      --goodos-login-surface: #100e20;
-      --goodos-login-tile: #1d1932;
-      --goodos-login-border: #3e3862;
-      --goodos-login-text: #faf9ff;
-      --goodos-login-muted: #aaa5bd;
-      --goodos-login-soft: #b8b3cb;
-    }
-
-    body.gpanel-console {
-      --nav-accent: #818cf8;
-      --indigo: #818cf8;
-      --cyan: #a78bfa;
-      background:
-        radial-gradient(circle at 18% 10%, rgba(99,102,241,.2), transparent 32%),
-        radial-gradient(circle at 88% 3%, rgba(139,92,246,.12), transparent 30%),
-        #090716;
-    }
-
-    body.gpanel-console .topbar-brand-mark,
-    body.gpanel-console .sidebar .brand .logo {
-      background: linear-gradient(135deg, #a5b4fc, #6366f1 48%, #7c3aed);
-      color: #fff;
-    }
-
     #goodbaseLoginWidget {
       width: 100%;
       height: 100%;
@@ -5839,68 +5780,6 @@
   </div>
 
 <script>
-const isGPanelConsole = ["gpanel.goodos.app", "panel.goodos.app"].includes(window.location.hostname);
-const consoleExperience = isGPanelConsole
-  ? {
-      name: "GPanel",
-      mark: "P",
-      title: "GPanel | GoodOS Control Center",
-      workspace: "Operations Workspace",
-      search: "Search applications, domains, deployments, and commands...",
-      dashboardTitle: "GPanel",
-      dashboardDescription: "Control applications, deployments, domains, access, and operational health from one secure workspace.",
-    }
-  : {
-      name: "GoodBase",
-      mark: "G",
-      title: "Goodbase Console",
-      workspace: "Owner Workspace",
-      search: "Search applications, tools, and commands...",
-      dashboardTitle: "Goodbase Console",
-      dashboardDescription: "Goodbase command center for live production modules, activity, readiness, logs, audit trail, and global search.",
-    };
-
-function applyConsoleExperience() {
-  if (!isGPanelConsole) return;
-
-  document.title = consoleExperience.title;
-  document.body.classList.add("gpanel-console");
-
-  const topbarBrand = document.querySelector("[data-goodos-topbar-brand]");
-  const topbarBrandName = topbarBrand?.querySelector("span:last-child");
-  const topbarBrandMark = document.querySelector("[data-goodos-topbar-brand-mark]");
-  if (topbarBrandName) topbarBrandName.textContent = consoleExperience.name;
-  if (topbarBrandMark) topbarBrandMark.textContent = consoleExperience.mark;
-
-  const workspace = document.getElementById("workspaceSelect");
-  if (workspace) {
-    workspace.setAttribute("title", `${consoleExperience.name} ${consoleExperience.workspace}`);
-    workspace.setAttribute("aria-label", `Current ${consoleExperience.name} workspace`);
-    if (workspace.options[0]) workspace.options[0].textContent = consoleExperience.workspace;
-  }
-
-  const search = document.getElementById("searchInput");
-  if (search) search.placeholder = consoleExperience.search;
-
-  const actions = document.querySelector("[data-goodos-topbar-actions]");
-  if (actions) actions.setAttribute("aria-label", `${consoleExperience.name} application actions`);
-
-  const notifications = document.querySelector("[data-goodos-notifications]");
-  if (notifications) notifications.dataset.goodosNotificationAppId = "gpanel";
-  const notificationsButton = document.getElementById("notificationsBtn");
-  if (notificationsButton) notificationsButton.setAttribute("aria-label", "GPanel notifications");
-
-  const sidebarBrand = document.querySelector(".sidebar .brand");
-  const sidebarLogo = sidebarBrand?.querySelector(".logo");
-  const sidebarName = sidebarBrand?.querySelector("h1");
-  const sidebarDescription = sidebarBrand?.querySelector("p");
-  if (sidebarLogo) sidebarLogo.textContent = consoleExperience.mark;
-  if (sidebarName) sidebarName.textContent = consoleExperience.name;
-  if (sidebarDescription) sidebarDescription.textContent = "GoodOS operations control panel";
-}
-
-applyConsoleExperience();
-
 const state = {
   user: null,
   overview: {},
@@ -7182,7 +7061,7 @@ function dashboard() {
   const generatedAt = activityCharts.generatedAt;
 
   return `
-    ${hero(consoleExperience.dashboardTitle, consoleExperience.dashboardDescription, state.overview?.status || "operational")}
+    ${hero("Goodbase Console", "Goodbase command center for live production modules, activity, readiness, logs, audit trail, and global search.", state.overview?.status || "operational")}
     <div class="section-head">
       <h3>Activity Center</h3>
       <div>
@@ -22831,7 +22710,7 @@ if (!window.__goodosGlobalSearchListenerInstalled) {
 <script src="/backend-ada.js" defer></script>
 <script src="/backend-collapsible-sections.js?v=20260720-1236" defer></script>
 <script src="/app-notification-center.js?v=20260724" defer></script>
-<script src="/goodbase-console-login.js?v=20260819-3" defer></script>
+<script src="/goodbase-console-login.js?v=20260819-2" defer></script>
 
 <!-- GOODOS_UPDATE_SITES_FLOATING_LINK -->
 <a class="update-sites-link" href="/update-sites">Update Sites</a>
