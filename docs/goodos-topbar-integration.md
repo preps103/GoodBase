@@ -120,8 +120,12 @@ The DOM order is the contract. Keep the four zones in this exact sequence:
 - Theme, notifications, help, and account occupy fixed 34 × 34 px slots in
   that order. Their coordinates do not change when an application has fewer
   actions or a longer product name.
-- The account slot is always a circular 34 × 34 px avatar or initials button.
-  User names and roles belong in the account popover, never in the bar itself.
+- The compact account slot is a circular 34 × 34 px avatar or initials button.
+  Administrative surfaces that need persistent operator context may add
+  `data-goodos-topbar-account-layout="profile"` to the header. That standard
+  layout keeps the same 77 px bar and 34 px universal controls while expanding
+  the account slot to show the avatar, display name, role, and menu chevron. It
+  collapses back to the compact avatar below 1180 px.
 
 ## Notification Center integration
 

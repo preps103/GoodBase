@@ -26,6 +26,8 @@ test("master top bar exposes the four ordered integration zones", () => {
   assert.match(styles, /--goodos-topbar-workspace-height:\s*34px\s*;/);
   assert.match(styles, /--goodos-topbar-search-width:\s*clamp\(360px,\s*34vw,\s*544px\)\s*;/);
   assert.match(styles, /--goodos-topbar-controls-width:\s*166px\s*;/);
+  assert.match(styles, /--goodos-topbar-profile-controls-width:\s*292px\s*;/);
+  assert.match(styles, /--goodos-topbar-profile-width:\s*160px\s*;/);
   assert.match(styles, /\[data-goodos-topbar\][\s\S]*width:\s*100vw\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar\][\s\S]*max-width:\s*100vw\s*!important\s*;/);
   assert.match(styles, /grid-template-columns:[\s\S]*var\(--goodos-topbar-identity-width\)[\s\S]*var\(--goodos-topbar-search-width\)[\s\S]*minmax\(0,\s*1fr\)[\s\S]*var\(--goodos-topbar-controls-width\)\s*!important\s*;/);
@@ -33,6 +35,23 @@ test("master top bar exposes the four ordered integration zones", () => {
   assert.match(styles, /\[data-goodos-topbar-search\][\s\S]*grid-column:\s*2\s*;/);
   assert.match(styles, /\[data-goodos-topbar-actions\][\s\S]*grid-column:\s*3\s*;/);
   assert.match(styles, /\[data-goodos-topbar-controls\][\s\S]*grid-column:\s*4\s*;/);
+});
+
+test("master top bar supports the standard signed-in profile layout", () => {
+  const styles = read("src/public/backend-topbar.css");
+  const contract = read("docs/goodos-topbar-integration.md");
+  const consoleHtml = read("src/public/console.html");
+  const accountSettings = read("src/public/account-settings.js");
+
+  assert.match(styles, /data-goodos-topbar-account-layout="profile"/);
+  assert.match(styles, /repeat\(3,\s*var\(--goodos-topbar-control-size\)\)/);
+  assert.match(styles, /@media \(max-width:\s*1180px\)/);
+  assert.match(styles, /\.topbar-avatar-wrap\s*\{[\s\S]*width:\s*32px\s*!important\s*;[\s\S]*height:\s*32px\s*!important\s*;[\s\S]*aspect-ratio:\s*1\s*\/\s*1\s*!important\s*;[\s\S]*flex:\s*0\s+0\s+32px\s*!important\s*;/);
+  assert.match(styles, /\.topbar-avatar-wrap\s+\.account-pill-avatar\s+img,[\s\S]*width:\s*100%\s*!important\s*;[\s\S]*height:\s*100%\s*!important\s*;[\s\S]*border-radius:\s*50%\s*!important\s*;[\s\S]*object-fit:\s*cover\s*!important\s*;/);
+  assert.match(consoleHtml, /class="topbar-avatar-wrap"/);
+  assert.match(consoleHtml, /backend-topbar\.css\?v=20260819-profile-2/);
+  assert.match(accountSettings, /class="topbar-avatar-wrap"/);
+  assert.match(contract, /data-goodos-topbar-account-layout="profile"/);
 });
 
 test("master top bar preserves the GoodBase desktop dimensions", () => {

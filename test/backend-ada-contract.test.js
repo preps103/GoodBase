@@ -25,6 +25,19 @@ test("backend console loads the themed ADA control", () => {
   );
 });
 
+test("Update Sites keeps a dedicated slot beside the ADA launcher", () => {
+  const consoleHtml = read("src/public/console.html");
+
+  assert.match(
+    consoleHtml,
+    /right:\s*calc\(var\(--backend-ada-trigger-right,\s*24px\)\s*\+\s*90px\s*\+\s*12px\)/,
+  );
+  assert.match(
+    consoleHtml,
+    /bottom:\s*var\(--backend-ada-trigger-bottom,\s*24px\)/,
+  );
+});
+
 test("ADA control preserves the GoodOS accessibility contract", () => {
   const client = read("src/public/backend-ada.js");
   const styles = read("src/public/backend-ada.css");

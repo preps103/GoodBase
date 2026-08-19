@@ -293,7 +293,7 @@
       --suite-search-width: clamp(360px, 34vw, 544px);
       --suite-search-height: 46px;
       --suite-control-size: 34px;
-      --suite-controls-width: 166px;
+      --suite-controls-width: 292px;
     }
 
     * { box-sizing: border-box; }
@@ -583,9 +583,9 @@
     .topbar-user-role { margin-top: 3px; color: #7f8797; font-size: 9px; font-weight: 950; letter-spacing: .16em; text-transform: uppercase; }
     .topbar-user-button .account-pill-avatar {
       position: relative;
-      width: 38px;
-      height: 38px;
-      flex: 0 0 38px;
+      width: 32px;
+      height: 32px;
+      flex: 0 0 32px;
       border: 1px solid rgba(255,255,255,.14);
       border-radius: 999px;
       font-size: 12px;
@@ -1445,9 +1445,9 @@
 
     .update-sites-link {
       position: fixed;
-      right: 22px;
-      bottom: 22px;
-      z-index: 20;
+      right: calc(var(--backend-ada-trigger-right, 24px) + 90px + 12px);
+      bottom: var(--backend-ada-trigger-bottom, 24px);
+      z-index: 49;
       padding: 11px 15px;
       border-radius: 10px;
       background: #2563eb;
@@ -5654,7 +5654,7 @@
 }
 </style>
 <link rel="stylesheet" href="/account-settings.css?v=752e8dd" />
-<link rel="stylesheet" href="/backend-topbar.css?v=20260725-widget-4" />
+<link rel="stylesheet" href="/backend-topbar.css?v=20260819-profile-2" />
 <link rel="stylesheet" href="/backend-ada.css" />
 <link rel="stylesheet" href="/backend-collapsible-sections.css?v=20260720-1236" />
 </head>
@@ -5684,7 +5684,7 @@
   </div>
 
   <div id="app" class="shell hidden">
-    <header class="topbar goodos-topbar" data-goodos-topbar>
+    <header class="topbar goodos-topbar" data-goodos-topbar data-goodos-topbar-account-layout="profile">
       <div class="topbar-left goodos-topbar__identity" data-goodos-topbar-identity>
         <div class="topbar-brand goodos-topbar__brand" data-goodos-topbar-brand>
           <span class="topbar-brand-mark goodos-topbar__brand-mark" data-goodos-topbar-brand-mark aria-hidden="true">
@@ -5721,7 +5721,15 @@
         <span class="topbar-divider"></span>
         <div class="topbar-user">
           <button class="topbar-user-button" data-goodos-topbar-control="account" id="userPill" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Account">
-            <span class="account-pill-avatar" id="userPillAvatar" aria-hidden="true">GB</span>
+            <span class="topbar-avatar-wrap">
+              <span class="account-pill-avatar" id="userPillAvatar" aria-hidden="true">GB</span>
+              <span class="topbar-status-dot" aria-label="Online"></span>
+            </span>
+            <span class="topbar-user-copy">
+              <span class="topbar-user-name" id="userPillName">Account</span>
+              <span class="topbar-user-role" id="userPillRole">◇ USER</span>
+            </span>
+            <svg class="topbar-user-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
           <div class="topbar-user-menu hidden" id="userMenu" role="menu">
             <button type="button" id="profileMenuBtn" role="menuitem">Profile settings</button>
@@ -5850,8 +5858,11 @@ function safeText(value) {
 window.goodosUpdateUserPill = function goodosUpdateUserPill() {
   const button = document.getElementById("userPill");
   const avatar = document.getElementById("userPillAvatar");
+  const name = document.getElementById("userPillName");
+  const role = document.getElementById("userPillRole");
   if (!button || !avatar || !state.user) return;
-  const displayName = state.user.displayName || state.user.fullName || state.user.email || "GoodBase account";
+  const fullName = [state.user.firstName, state.user.lastName].filter(Boolean).join(" ");
+  const displayName = state.user.displayName || state.user.fullName || fullName || state.user.email || "GoodBase account";
   const initials = displayName
     .split(/\s+/)
     .filter(Boolean)
@@ -5864,6 +5875,8 @@ window.goodosUpdateUserPill = function goodosUpdateUserPill() {
   avatar.style.backgroundImage = avatarUrl ? `url("${String(avatarUrl).replaceAll('"', "%22")}")` : "";
   avatar.style.backgroundSize = "cover";
   avatar.style.backgroundPosition = "center";
+  if (name) name.textContent = displayName;
+  if (role) role.textContent = `◇ ${String(state.user.platformRole || state.user.role || "user").toUpperCase()}`;
   button.setAttribute("aria-label", `${displayName} account`);
   button.title = displayName;
 };

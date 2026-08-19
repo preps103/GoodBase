@@ -19,7 +19,7 @@ test("GoodBase uses the shared GoodApps desktop top-bar sizing contract", () => 
     "--suite-search-width": "clamp(360px, 34vw, 544px)",
     "--suite-search-height": "46px",
     "--suite-control-size": "34px",
-    "--suite-controls-width": "166px",
+    "--suite-controls-width": "292px",
   };
 
   for (const [token, value] of Object.entries(expectedTokens)) {
@@ -48,9 +48,12 @@ test("GoodBase implements the ordered shared top-bar zones", () => {
   assert.ok(search > identity);
   assert.ok(actions > search);
   assert.ok(controls > actions);
-  assert.match(consoleHtml, /href="\/backend-topbar\.css\?v=20260725-widget-4"/);
+  assert.match(consoleHtml, /href="\/backend-topbar\.css\?v=20260819-profile-2"/);
   assert.match(consoleHtml, /<option>Owner Workspace<\/option>/);
   assert.match(consoleHtml, /<ellipse cx="12" cy="5" rx="7\.5" ry="3"/);
+  assert.match(consoleHtml, /data-goodos-topbar-account-layout="profile"/);
+  assert.match(consoleHtml, /id="userPillName"/);
+  assert.match(consoleHtml, /id="userPillRole"/);
 });
 
 test("GoodBase notifications remain explicitly application scoped", () => {

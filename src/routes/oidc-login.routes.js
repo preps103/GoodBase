@@ -175,6 +175,21 @@ function normalizeEmail(value) {
   return email;
 }
 
+function normalizeAvatarUrl(value) {
+  const candidate = String(value || "").trim();
+
+  if (!candidate || candidate.length > 2048) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function emailDomain(email) {
   return String(email)
     .split("@")
@@ -970,6 +985,13 @@ router.get(
         sub: idClaims.sub,
       };
 
+      const avatarUrl =
+        normalizeAvatarUrl(
+          claims.picture ||
+          claims.avatar_url ||
+          claims.profile_image_url
+        );
+
       const externalSubject =
         String(claims.sub);
 
@@ -1282,6 +1304,7 @@ router.get(
                   platform_role,
                   status,
                   email_verified,
+                  avatar_url,
                   auth_metadata_json
                 )
                 VALUES (
@@ -1293,14 +1316,17 @@ router.get(
                   $5,
                   'active',
                   true,
-                  jsonb_build_object(
+                  $6,
+                  jsonb_strip_nulls(jsonb_build_object(
                     'registrationSource',
                     'oidc_jit',
                     'providerId',
+                    $7,
+                    'picture',
                     $6,
                     'provisionedAt',
                     NOW()
-                  )
+                  ))
                 )
                 RETURNING *
               `,
@@ -1310,6 +1336,7 @@ router.get(
                 lastName,
                 displayName,
                 defaultRole,
+                avatarUrl,
                 transaction.provider_id,
               ]
             );
@@ -1713,20 +1740,30 @@ router.get(
           UPDATE users
           SET
             last_login_at = NOW(),
+            avatar_url =
+              CASE
+                WHEN avatar_file_name IS NULL
+                 AND NULLIF(BTRIM(avatar_url), '') IS NULL
+                THEN COALESCE($3, avatar_url)
+                ELSE avatar_url
+              END,
             auth_metadata_json =
-              auth_metadata_json ||
-              jsonb_build_object(
+              COALESCE(auth_metadata_json, '{}'::jsonb) ||
+              jsonb_strip_nulls(jsonb_build_object(
                 'lastAuthSource',
                 'oidc',
                 'lastProviderId',
-                $2
-              ),
+                $2,
+                'picture',
+                $3
+              )),
             updated_at = NOW()
           WHERE id = $1::uuid
         `,
         [
           account.id,
           transaction.provider_id,
+          avatarUrl,
         ]
       );
 

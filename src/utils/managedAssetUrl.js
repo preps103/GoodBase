@@ -22,11 +22,46 @@ function publicBackendUrl() {
   }
 }
 
+function providerAvatarUrl(row) {
+  const rawMetadata = row && row.auth_metadata_json;
+  let metadata = rawMetadata;
+
+  if (typeof rawMetadata === "string") {
+    try {
+      metadata = JSON.parse(rawMetadata);
+    } catch {
+      metadata = {};
+    }
+  }
+
+  if (!metadata || typeof metadata !== "object") {
+    metadata = {};
+  }
+
+  const candidate =
+    row.avatar_url ||
+    metadata.avatarUrl ||
+    metadata.avatar_url ||
+    metadata.profileImageUrl ||
+    metadata.picture ||
+    metadata.photoURL ||
+    null;
+
+  if (!candidate) return null;
+
+  try {
+    const parsed = new URL(String(candidate));
+    return parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function profileAvatarUrl(row) {
   if (!row) return null;
 
   if (!row.avatar_file_name || !row.id) {
-    return row.avatar_url || null;
+    return providerAvatarUrl(row);
   }
 
   const updatedAt = Date.parse(
@@ -45,5 +80,6 @@ function profileAvatarUrl(row) {
 module.exports = {
   DEFAULT_PUBLIC_BACKEND_URL,
   publicBackendUrl,
+  providerAvatarUrl,
   profileAvatarUrl
 };

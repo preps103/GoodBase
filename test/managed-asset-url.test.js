@@ -6,6 +6,7 @@ const test = require("node:test");
 const {
   DEFAULT_PUBLIC_BACKEND_URL,
   profileAvatarUrl,
+  providerAvatarUrl,
   publicBackendUrl
 } = require("../src/utils/managedAssetUrl");
 
@@ -43,6 +44,29 @@ test("external profile photos remain unchanged when no managed file exists", () 
       avatar_file_name: null
     }),
     "https://images.example/avatar.png"
+  );
+});
+
+test("secure social-provider photos backfill profiles without uploaded avatars", () => {
+  assert.equal(
+    providerAvatarUrl({
+      avatar_url: null,
+      auth_metadata_json: {
+        picture: "https://images.example/social-avatar.png"
+      }
+    }),
+    "https://images.example/social-avatar.png"
+  );
+});
+
+test("insecure social-provider photos are not exposed", () => {
+  assert.equal(
+    providerAvatarUrl({
+      auth_metadata_json: JSON.stringify({
+        picture: "http://images.example/social-avatar.png"
+      })
+    }),
+    null
   );
 });
 

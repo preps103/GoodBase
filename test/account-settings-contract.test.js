@@ -33,6 +33,16 @@ test("account settings client wires profile, logo, preferences, password, sessio
   }
 });
 
+test("account settings populate the expanded top-bar identity", () => {
+  const client = read("src/public/account-settings.js");
+
+  assert.match(client, /topbar-user-name/);
+  assert.match(client, /topbar-user-role/);
+  assert.match(client, /user\.avatarUrl/);
+  assert.match(client, /user\.firstName/);
+  assert.match(client, /user\.lastName/);
+});
+
 test("business profile migration includes managed logo and contact fields", () => {
   const migration = read("migrations/20260720_profile_business_settings.sql");
   for (const column of [
