@@ -1,4 +1,6 @@
+# Dependencies, environment files, and generated test/runtime data
 node_modules/
+coverage/
 .env
 .env.*
 !.env.example
@@ -6,30 +8,18 @@ node_modules/
 storage/
 backups/
 logs/
-*.log
-
-/root/
 tmp/
-.DS_Store
+/root/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# GOODOS_PHASE14_GENERATED_ARTIFACTS
-backups/
-coverage/
-node_modules/
-.env
-.env.*
-!.env.example
 *.bak
 *.bak.*
 *.before
 *.before-*
 *.backup
 *.backup-*
-npm-debug.log*
-yarn-error.log*
 .DS_Store
 
 # Runtime data belongs outside the source baseline

@@ -101,20 +101,26 @@ test("deployment PM2 control is restricted to the root-owned helper", () => {
   assert.doesNotMatch(sudoers, /\/bin\/sh|\/bin\/bash/);
 });
 
-test("canonical deployment mappings include every product and platform service", () => {
+test("canonical deployment mappings include every GoodBase-managed product and platform service", () => {
   delete require.cache[require.resolve("../src/services/site-deployment.service")];
   const deployment = require("../src/services/site-deployment.service");
   const sites = deployment.canonicalDeploymentSites();
 
-  assert.equal(sites.length, 17);
-  assert.equal(new Set(sites.map((site) => site.appId)).size, 17);
+  const manifest = require("../deploy/application-paths.json");
+  const managedIds = [...manifest.applications, ...manifest.platformServices]
+    .filter((entry) => entry.deploymentManaged !== false)
+    .map((entry) => entry.id);
+
+  assert.equal(sites.length, managedIds.length);
+  assert.equal(new Set(sites.map((site) => site.appId)).size, managedIds.length);
+  assert.deepEqual(sites.map((site) => site.appId).sort(), managedIds.sort());
   assert.deepEqual(
     sites.find((site) => site.appId === "goodvoice"),
     {
       appId: "goodvoice",
       name: "GoodVoice",
       domain: "voice.goodos.app",
-      repositoryUrl: "git@github.com:preps103/GoodVoice-v1.3.git",
+      repositoryUrl: "https://github.com/preps103/GoodVoice-v1.3.git",
       appPath: "/home/mgoodlo3/GoodVoice",
       processName: "goodvoice",
       branch: "main",
@@ -174,7 +180,7 @@ test("PM2 discovery separates the live runtime folder from the deployment source
   assert.equal(targets[0].appPath, "/home/mgoodlo3/GoodAds");
   assert.equal(
     targets[0].repositoryUrl,
-    "git@github.com:preps103/GoodAds-v1.2.git"
+    "https://github.com/preps103/GoodAds-v1.2.git"
   );
 });
 

@@ -36,22 +36,26 @@ const STAGED_PRESERVE_PATHS = [
 ];
 
 function canonicalDeploymentSites() {
-  const applications = deploymentManifest.applications.map((application) => ({
-    appId: application.id,
-    name: application.name,
-    domain: application.domain,
-    repositoryUrl: application.repositoryUrl,
-    appPath: application.productionPath,
-    processName: application.service,
-  }));
-  const platformServices = deploymentManifest.platformServices.map((service) => ({
-    appId: service.id,
-    name: service.name,
-    domain: service.domain,
-    repositoryUrl: service.repositoryUrl,
-    appPath: service.productionPath,
-    processName: service.services[0],
-  }));
+  const applications = deploymentManifest.applications
+    .filter((application) => application.deploymentManaged !== false)
+    .map((application) => ({
+      appId: application.id,
+      name: application.name,
+      domain: application.domain,
+      repositoryUrl: application.repositoryUrl,
+      appPath: application.productionPath,
+      processName: application.service,
+    }));
+  const platformServices = deploymentManifest.platformServices
+    .filter((service) => service.deploymentManaged !== false)
+    .map((service) => ({
+      appId: service.id,
+      name: service.name,
+      domain: service.domain,
+      repositoryUrl: service.repositoryUrl,
+      appPath: service.productionPath,
+      processName: service.services[0],
+    }));
 
   return [...applications, ...platformServices].map((site) => ({
     ...site,

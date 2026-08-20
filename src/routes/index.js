@@ -269,6 +269,18 @@ router.get("/packages/goodos-topbar-widget-3.0.0.tgz", (req, res) => {
   );
 });
 
+router.get("/packages/goodos-topbar-widget-4.1.0.tgz", (req, res) => {
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res.set("Cross-Origin-Resource-Policy", "cross-origin");
+  res.type("application/gzip");
+  res.sendFile(
+    path.join(
+      __dirname,
+      "../public/packages/goodos-topbar-widget-4.1.0.tgz",
+    ),
+  );
+});
+
 router.get("/backend-login.css", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Cross-Origin-Resource-Policy", "cross-origin");

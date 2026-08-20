@@ -11,6 +11,35 @@ import { createPortal } from "react-dom";
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
 export const GOODOS_LOGIN_WIDGET_VERSION = "1.1.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.0.0";
+export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
+
+export async function loadGoodOSIdentityProviders(origin = GOODOS_AUTH_ORIGIN) {
+  const response = await fetch(`${origin.replace(/\/$/, "")}/api/oidc/providers`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.success === false) {
+    throw new Error(payload.message || payload.error || "GoodBase provider discovery failed.");
+  }
+  const providers = payload.providers || payload.data?.providers || [];
+  return Array.isArray(providers)
+    ? providers.filter((provider) => provider?.available === true)
+    : [];
+}
+
+export function goodOSIdentityProviderUrl(providerId, redirect, origin = GOODOS_AUTH_ORIGIN) {
+  const url = new URL(`/api/oidc/start/${encodeURIComponent(providerId)}`, origin);
+  url.searchParams.set("returnTo", redirect);
+  return url.toString();
+}
+
+export function goodOSAccountUrl(mode, redirect, origin = GOODOS_AUTH_ORIGIN) {
+  const url = new URL("/auth/ui", origin);
+  if (mode && mode !== "login") url.searchParams.set("mode", mode);
+  url.searchParams.set("redirect", redirect);
+  return url.toString();
+}
 
 function classes(...values) {
   return values.filter(Boolean).join(" ");
@@ -154,9 +183,9 @@ const loginWidgetCss = String.raw`
 .goodos-login-shell__brand>*{width:100%;height:100%;min-height:100dvh}
 .goodos-login-shell__auth{display:flex}
 .goodos-login-shell__auth>.goodos-login-widget{flex:1 1 auto}
-.goodos-login-widget{--goodos-login-accent:#f47a2a;--goodos-login-accent-ink:#111318;--goodos-login-panel:#0f1115;--goodos-login-card:#17191e;--goodos-login-surface:#101216;--goodos-login-tile:#1b1d22;--goodos-login-border:#343842;--goodos-login-text:#f8fafc;--goodos-login-muted:#969ca8;--goodos-login-soft:#a4a9b3;position:relative;display:flex;width:100%;min-width:0;height:auto;min-height:100%;overflow:visible;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 8%,transparent),transparent 22rem),var(--goodos-login-panel);color:var(--goodos-login-text);font-family:inherit;box-sizing:border-box}
+.goodos-login-widget{--goodos-login-accent:#f47a2a;--goodos-login-accent-ink:#111318;--goodos-login-panel:#0f1115;--goodos-login-card:#17191e;--goodos-login-surface:#101216;--goodos-login-tile:#1b1d22;--goodos-login-border:#343842;--goodos-login-text:#f8fafc;--goodos-login-muted:#969ca8;--goodos-login-soft:#a4a9b3;position:relative;display:flex;width:100%;min-width:0;height:100dvh;min-height:0;overflow:hidden;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 8%,transparent),transparent 22rem),var(--goodos-login-panel);color:var(--goodos-login-text);font-family:inherit;box-sizing:border-box}
 .goodos-login-widget *{box-sizing:border-box}
-.goodos-login-widget__scroll{position:relative;display:flex;width:100%;min-width:0;min-height:100%;overflow-x:hidden;overflow-y:visible;padding:24px clamp(28px,5vw,80px) calc(24px + env(safe-area-inset-bottom))}
+.goodos-login-widget__scroll{position:relative;display:flex;width:100%;min-width:0;min-height:100dvh;overflow-x:hidden;overflow-y:auto;padding:24px clamp(28px,5vw,80px) calc(24px + env(safe-area-inset-bottom))}
 .goodos-login-widget__glow{pointer-events:none;position:fixed;inset:auto 0 0 50%;height:45vh;background:radial-gradient(circle at 96% 100%,color-mix(in srgb,var(--goodos-login-accent) 12%,transparent),transparent 58%)}
 .goodos-login-widget__column{position:relative;display:flex;width:100%;max-width:640px;min-width:0;min-height:calc(100dvh - 48px);flex-direction:column;margin:0 auto}
 .goodos-login-widget__header{display:flex;min-height:42px;flex:0 0 auto;align-items:center;justify-content:space-between;gap:18px}
@@ -371,6 +400,7 @@ export function GoodOSLoginWidget({
       },
       "data-goodos-login-widget": "",
       "data-goodos-login-widget-version": GOODOS_LOGIN_WIDGET_VERSION,
+      "data-goodbase-login": "",
     },
     createElement("style", { "data-goodos-login-widget-styles": "" }, loginWidgetCss),
     createElement("div", { className: "goodos-login-widget__glow", "aria-hidden": "true" }),
@@ -438,7 +468,7 @@ export function GoodOSLoginWidget({
             createElement("div", { className: "goodos-login-widget__divider" }, createElement("span", null, "OR USE EMAIL")),
             createElement(
               "label",
-              { className: "goodos-login-widget__label", htmlFor: emailId },
+              { className: "goodos-login-widget__label", htmlFor: emailId, "data-goodbase-login-field": "" },
               "Email Address",
               createElement(
                 "span",
@@ -459,7 +489,7 @@ export function GoodOSLoginWidget({
             ),
             createElement(
               "label",
-              { className: "goodos-login-widget__label", htmlFor: passwordId },
+              { className: "goodos-login-widget__label", htmlFor: passwordId, "data-goodbase-login-field": "" },
               createElement(
                 "span",
                 { className: "goodos-login-widget__label-row" },

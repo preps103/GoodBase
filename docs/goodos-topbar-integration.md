@@ -212,16 +212,24 @@ import { GoodOSTopBarWidget } from "@goodos/topbar-widget";
 </GoodOSTopBarWidget>
 ```
 
-The package source is versioned in the private
-`preps103/GoodOSUIWidgets` repository. GoodBase publishes an immutable package
+GoodBase is the authoritative source for the shared top-bar and login package
+at `vendor/goodos-topbar-widget`. GoodBase publishes an immutable package
 artifact at:
 
 ```text
-https://base.goodos.app/packages/goodos-topbar-widget-3.0.0.tgz
+https://base.goodos.app/packages/goodos-topbar-widget-4.1.0.tgz
 ```
 
-Product repositories must depend on that exact version and must not keep a
-local `GoodOSTopBarWidget.tsx` copy.
+Product repositories keep a generated vendored snapshot so clean production
+builds do not depend on registry or network availability. Run
+`npm run auth:widget:check` in GoodBase to detect drift, and
+`npm run auth:widget:sync` to refresh every available product repository. Do
+not maintain a separate `GoodOSTopBarWidget.tsx` or login-panel implementation.
+
+Use `GoodOSLoginShell` and `GoodOSLoginWidget` for product login pages. GoodBase
+remains responsible for identity, credentials, providers, sessions, MFA, and
+password recovery; products enforce only application-specific authorization
+after GoodBase authentication succeeds.
 
 Notification data remains application-scoped. Each product must mount its own
 notification center with its fixed application ID. GoodOS alone mounts the

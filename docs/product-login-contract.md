@@ -1,6 +1,6 @@
 # GoodBase product login contract
 
-GoodOS and every product application use the shared GoodBase authentication contract. Each application keeps its own branded left-hand panel and accent color; the right-hand authentication card is a single uniform surface.
+GoodOS and every product application use the shared GoodBase authentication contract. Each application keeps its own branded left-hand panel and accent color; the right-hand authentication card is a single uniform surface supplied by `GoodOSLoginShell` and `GoodOSLoginWidget` from the authoritative GoodBase `@goodos/topbar-widget` package.
 
 Load `https://base.goodos.app/backend-login.css` and render one `[data-goodbase-login]` root containing a product-owned `[data-goodbase-login-brand]` region and a standardized `[data-goodbase-login-auth]` region. The product may set the `--goodbase-login-*` color variables, but must not change auth-card geometry or order.
 

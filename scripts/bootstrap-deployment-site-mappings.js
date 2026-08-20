@@ -29,8 +29,8 @@ async function loadSites() {
 
 async function main() {
   const canonical = deployment.canonicalDeploymentSites();
-  if (canonical.length !== 17) {
-    throw new Error(`Expected 17 canonical sites; found ${canonical.length}.`);
+  if (canonical.length === 0) {
+    throw new Error("The deployment registry does not contain any GoodBase-managed sites.");
   }
 
   if (APPLY) {

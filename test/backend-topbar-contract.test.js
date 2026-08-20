@@ -84,8 +84,10 @@ test("top-bar widget owns viewport placement and preserves application notificat
   assert.match(styles, /\[data-goodos-topbar\]\s*\{[\s\S]*inset:\s*0 0 auto 0\s*!important\s*;/);
   assert.match(styles, /\.goodos-topbar-widget__spacer[\s\S]*height:\s*var\(--goodos-topbar-height\)\s*!important\s*;/);
   assert.match(contract, /@goodos\/topbar-widget/);
-  assert.match(contract, /preps103\/GoodOSUIWidgets/);
-  assert.match(contract, /must not keep a\s+local `GoodOSTopBarWidget\.tsx` copy/);
+  assert.match(contract, /GoodBase is the authoritative source/);
+  assert.match(contract, /vendor\/goodos-topbar-widget/);
+  assert.match(contract, /npm run auth:widget:check/);
+  assert.match(contract, /Do\s+not maintain a separate `GoodOSTopBarWidget\.tsx`/);
   assert.match(contract, /this application's own notification center/);
   assert.match(contract, /Notification data remains application-scoped/);
   assert.match(contract, /GoodOS alone mounts the\s+aggregated master notification center/);
@@ -122,15 +124,18 @@ test("master top bar stylesheet is delivered as a cross-origin shared asset", ()
   assert.match(routes, /public\/backend-topbar\.css/);
 });
 
-test("versioned top-bar widget package is delivered as an immutable shared asset", () => {
+test("versioned GoodOS UI widget packages are delivered as immutable shared assets", () => {
   const routes = read("src/routes/index.js");
-  const packagePath = path.join(
-    root,
-    "src/public/packages/goodos-topbar-widget-3.0.0.tgz",
+  const packagePaths = ["3.0.0", "4.1.0"].map((version) =>
+    path.join(
+      root,
+      `src/public/packages/goodos-topbar-widget-${version}.tgz`,
+    ),
   );
 
-  assert.ok(fs.statSync(packagePath).size > 0);
+  for (const packagePath of packagePaths) assert.ok(fs.statSync(packagePath).size > 0);
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-3\.0\.0\.tgz"/);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.1\.0\.tgz"/);
   assert.match(routes, /max-age=31536000, immutable/);
   assert.match(routes, /application\/gzip/);
 });

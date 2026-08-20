@@ -25,6 +25,8 @@
     "check": "npm run check:syntax && npm run check:openapi && npm test",
     "check:syntax": "find src scripts test bin -type f -name '*.js' -print0 | xargs -0 -n 1 node --check",
     "check:openapi": "node scripts/validate-openapi.js",
+    "auth:widget:check": "node scripts/sync-goodos-topbar-widget.js --check",
+    "auth:widget:sync": "node scripts/sync-goodos-topbar-widget.js --write",
     "check:goodscan": "node --test test/goodscan-credits.test.js test/goodscan.service.test.js test/goodscan.production-contract.test.js",
     "migrate:goodscan": "node scripts/apply-goodscan-migration.js",
     "readiness:goodscan": "node scripts/goodscan-production-readiness.js",
