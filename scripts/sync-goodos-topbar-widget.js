@@ -100,6 +100,7 @@ const accountFlowDrift = [];
 const protectedMarkupDrift = [];
 const protectedStyleDrift = [];
 const obsoleteAuthDrift = [];
+const authAuthorityDrift = [];
 let auditedApplications = 0;
 let canonicalSnapshots = 0;
 let canonicalIntegrations = 0;
@@ -211,6 +212,7 @@ for (const application of applications) {
 
   let hasProtectedMarkup = false;
   let hasProtectedStyles = false;
+  let hasNoncanonicalAuthAuthority = false;
   walk(repositoryRoot, (filePath) => {
     const extension = path.extname(filePath).toLowerCase();
     if (![".css", ".js", ".jsx", ".mjs", ".ts", ".tsx"].includes(extension)) return;
@@ -228,6 +230,11 @@ for (const application of applications) {
     if (/from\s+["'](?:firebase\/auth|@supabase\/|@auth0\/|@clerk\/)|require\(["'](?:firebase\/auth|@supabase\/|@auth0\/|@clerk\/)/.test(content)) {
       obsoleteAuthDrift.push(`${application.id}:${relative}`);
     }
+    for (const match of content.matchAll(/https:\/\/([a-z0-9-]+)\.goodos\.app\/api\/auth\b/gi)) {
+      if (match[1].toLowerCase() === "base") continue;
+      hasNoncanonicalAuthAuthority = true;
+      authAuthorityDrift.push(`${application.id}:${relative}:${match[0]}`);
+    }
   });
 
   if (integrationMatches) canonicalIntegrations += 1;
@@ -238,6 +245,7 @@ for (const application of applications) {
     themeMatches &&
     providerContractMatches &&
     accountFlowMatches &&
+    !hasNoncanonicalAuthAuthority &&
     !hasProtectedMarkup &&
     !hasProtectedStyles
   ) {
@@ -262,6 +270,7 @@ const allDrift = [
   ...protectedMarkupDrift,
   ...protectedStyleDrift,
   ...obsoleteAuthDrift,
+  ...authAuthorityDrift,
 ];
 const report = {
   discoveredApplications: applications.length,
@@ -281,6 +290,7 @@ const report = {
     protectedMarkup: protectedMarkupDrift,
     protectedStyles: protectedStyleDrift,
     obsoleteAuth: [...new Set(obsoleteAuthDrift)],
+    authAuthority: [...new Set(authAuthorityDrift)],
   },
 };
 
