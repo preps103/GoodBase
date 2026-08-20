@@ -2,7 +2,7 @@
 
 GoodOS and every product application use the shared GoodBase authentication contract. Each application keeps its own branded left-hand panel and accent color; the right-hand authentication card is a single uniform surface supplied by `GoodOSLoginShell` and `GoodOSLoginWidget` from the authoritative GoodBase `@goodos/topbar-widget` package.
 
-Load `https://base.goodos.app/backend-login.css` and render one `[data-goodbase-login]` root containing a product-owned `[data-goodbase-login-brand]` region and a standardized `[data-goodbase-login-auth]` region. The product may set the `--goodbase-login-*` color variables, but must not change auth-card geometry or order.
+Render `GoodOSLoginShell` and `GoodOSLoginWidget` from the vendored `@goodos/topbar-widget` package. The package supplies its own canonical styles, so products must not load the legacy `backend-login.css` asset or wrap the authentication surface in another card or width-limited container.
 
 The auth panel order is: heading, one two-by-two provider grid containing Google, Apple, Microsoft, and GoodOS, divider, email, password with preview and forgot-password controls, submit, create-account link, and security notice. On a narrow phone the provider grid becomes one column. Provider availability must come from GoodBase; a disabled provider remains visibly disabled and must not use a provider-owned public homepage as a substitute. Provider login, email login, recovery, account creation, MFA, and session completion remain GoodBase operations.
 

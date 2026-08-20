@@ -70,8 +70,24 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.1\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.2\.0"/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /--write/);
+});
+
+test("canonical login uses one full-width authentication surface", () => {
+  assert.match(sharedWidget, /\.goodos-login-widget__column\{[^}]*max-width:none/);
+  assert.match(sharedWidget, /\.goodos-login-widget__card\{[^}]*padding:0[^}]*border:0[^}]*background:transparent[^}]*box-shadow:none/);
+  assert.doesNotMatch(sharedWidget, /\.goodos-login-widget__card\{[^}]*border-radius:(?:20|24)px/);
+  assert.match(sharedWidget, /\.goodos-login-widget \.goodos-login-widget__input\{[^}]*padding:0!important[^}]*border:0!important[^}]*border-radius:0!important[^}]*background:transparent!important[^}]*box-shadow:none!important/);
+  assert.match(sharedWidget, /font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif/);
+  assert.match(sharedWidget, /\.goodos-login-widget__heading\{[^}]*min-height:138px/);
+  assert.match(sharedWidget, /\.goodos-login-widget__provider\{[^}]*height:var\(--goodos-login-control-height\)/);
+  assert.match(sharedWidget, /\.goodos-login-widget__input-shell\{[^}]*height:var\(--goodos-login-control-height\)/);
+  assert.match(sharedWidget, /\.goodos-login-widget__submit\{[^}]*height:54px/);
+  assert.match(sharedWidget, /\.goodos-login-widget__security\{[^}]*min-height:96px/);
+  assert.match(sharedWidget, /\.goodos-login-shell\.goodos-login-shell\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)!important/);
+  assert.match(sharedWidget, /\.goodos-login-shell>\.goodos-login-shell__auth\{[^}]*padding:0!important[^}]*background:transparent!important/);
+  assert.match(sharedWidget, /\.goodos-login-widget\.goodos-login-widget\{[^}]*display:flex!important[^}]*grid-template-columns:none!important/);
 });

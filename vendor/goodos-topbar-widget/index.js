@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.1.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.2.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.0.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 
@@ -177,17 +177,17 @@ export function GoodOSTopBarWidget(props) {
 }
 
 const loginWidgetCss = String.raw`
-.goodos-login-shell{display:grid;width:100%;height:100dvh;min-width:0;min-height:100vh;grid-template-columns:repeat(2,minmax(0,1fr));overflow:hidden;background:#0f1115}
+.goodos-login-shell.goodos-login-shell{display:grid!important;width:100%;height:100dvh;min-width:0;min-height:100vh;grid-template-columns:repeat(2,minmax(0,1fr))!important;overflow:hidden;background:#0f1115}
 .goodos-login-shell *{box-sizing:border-box}
 .goodos-login-shell__brand,.goodos-login-shell__auth{position:relative;min-width:0;min-height:0;overflow:hidden}
 .goodos-login-shell__brand>*{width:100%;height:100%;min-height:100dvh}
-.goodos-login-shell__auth{display:flex}
+.goodos-login-shell>.goodos-login-shell__auth{display:flex!important;place-items:normal!important;min-height:0!important;padding:0!important;overflow:hidden!important;background:transparent!important;color:inherit!important}
 .goodos-login-shell__auth>.goodos-login-widget{flex:1 1 auto}
-.goodos-login-widget{--goodos-login-accent:#f47a2a;--goodos-login-accent-ink:#111318;--goodos-login-panel:#0f1115;--goodos-login-card:#17191e;--goodos-login-surface:#101216;--goodos-login-tile:#1b1d22;--goodos-login-border:#343842;--goodos-login-text:#f8fafc;--goodos-login-muted:#969ca8;--goodos-login-soft:#a4a9b3;position:relative;display:flex;width:100%;min-width:0;height:100dvh;min-height:0;overflow:hidden;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 8%,transparent),transparent 22rem),var(--goodos-login-panel);color:var(--goodos-login-text);font-family:inherit;box-sizing:border-box}
+.goodos-login-widget.goodos-login-widget{--goodos-login-accent:#f47a2a;--goodos-login-accent-ink:#111318;--goodos-login-panel:#0f1115;--goodos-login-surface:#101216;--goodos-login-tile:#1b1d22;--goodos-login-border:#343842;--goodos-login-text:#f8fafc;--goodos-login-muted:#969ca8;--goodos-login-soft:#a4a9b3;--goodos-login-control-height:52px;position:relative;display:flex!important;width:100%;min-width:0;height:100dvh;min-height:0;grid-template-columns:none!important;overflow:hidden;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 8%,transparent),transparent 22rem),var(--goodos-login-panel);color:var(--goodos-login-text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;box-sizing:border-box}
 .goodos-login-widget *{box-sizing:border-box}
 .goodos-login-widget__scroll{position:relative;display:flex;width:100%;min-width:0;min-height:100dvh;overflow-x:hidden;overflow-y:auto;padding:24px clamp(28px,5vw,80px) calc(24px + env(safe-area-inset-bottom))}
 .goodos-login-widget__glow{pointer-events:none;position:fixed;inset:auto 0 0 50%;height:45vh;background:radial-gradient(circle at 96% 100%,color-mix(in srgb,var(--goodos-login-accent) 12%,transparent),transparent 58%)}
-.goodos-login-widget__column{position:relative;display:flex;width:100%;max-width:640px;min-width:0;min-height:calc(100dvh - 48px);flex-direction:column;margin:0 auto}
+.goodos-login-widget__column{position:relative;display:flex;width:100%;max-width:none;min-width:0;min-height:calc(100dvh - 48px);flex-direction:column;margin:0 auto}
 .goodos-login-widget__header{display:flex;min-height:42px;flex:0 0 auto;align-items:center;justify-content:space-between;gap:18px}
 .goodos-login-widget__home,.goodos-login-widget__theme{display:inline-flex;align-items:center;gap:8px;border:0;text-decoration:none;font:inherit}
 .goodos-login-widget__home{color:#8f96a4;font-size:14px;font-weight:650}
@@ -196,13 +196,13 @@ const loginWidgetCss = String.raw`
 .goodos-login-widget__theme-mark{color:#f5b800;font-size:18px;line-height:1}
 .goodos-login-widget__mobile-brand{display:none;margin:24px 0 0;color:var(--goodos-login-text)}
 .goodos-login-widget__inner{display:flex;width:100%;min-width:0;flex:1 0 auto;align-items:center;padding:clamp(28px,6vh,54px) 0}
-.goodos-login-widget__card{display:grid;width:100%;min-width:0;padding:clamp(30px,4vw,48px);border:1px solid #2c3038;border-radius:24px;background:var(--goodos-login-card);box-shadow:0 28px 70px rgba(0,0,0,.34)}
-.goodos-login-widget__heading{min-width:0;margin-bottom:30px}
+.goodos-login-widget__card{display:grid;width:100%;min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+.goodos-login-widget__heading{min-width:0;min-height:138px;margin-bottom:30px}
 .goodos-login-widget__eyebrow{display:block;margin-bottom:10px;color:var(--goodos-login-accent);font-size:14px;font-weight:800}
 .goodos-login-widget__title{margin:0;color:var(--goodos-login-text);font-size:clamp(34px,3vw,42px);font-weight:650;letter-spacing:-.045em;line-height:1.08;overflow-wrap:anywhere}
 .goodos-login-widget__subtitle{max-width:520px;margin:12px 0 0;color:var(--goodos-login-muted);font-size:16px;line-height:1.55}
-.goodos-login-widget__providers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.goodos-login-widget__provider{position:relative;display:flex;min-width:0;min-height:52px;align-items:center;justify-content:center;gap:12px;padding:8px 12px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-tile);color:var(--goodos-login-soft);cursor:pointer;font:inherit;font-size:14px;font-weight:700;text-align:center}
+.goodos-login-widget .goodos-login-widget__providers{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important;margin:0!important}
+.goodos-login-widget__provider{position:relative;display:flex;min-width:0;height:var(--goodos-login-control-height);min-height:var(--goodos-login-control-height);align-items:center;justify-content:center;gap:12px;padding:8px 12px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-tile);color:var(--goodos-login-soft);cursor:pointer;font:inherit;font-size:14px;font-weight:700;text-align:center}
 .goodos-login-widget__provider:disabled{cursor:not-allowed;opacity:.52}
 .goodos-login-widget__provider--goodos{color:var(--goodos-login-text)}
 .goodos-login-widget__provider--goodos:hover{border-color:var(--goodos-login-accent);background:color-mix(in srgb,var(--goodos-login-tile) 84%,var(--goodos-login-accent))}
@@ -214,33 +214,32 @@ const loginWidgetCss = String.raw`
 .goodos-login-widget__microsoft i{width:7px;height:7px}.goodos-login-widget__microsoft i:nth-child(1){background:#f25022}.goodos-login-widget__microsoft i:nth-child(2){background:#7fba00}.goodos-login-widget__microsoft i:nth-child(3){background:#00a4ef}.goodos-login-widget__microsoft i:nth-child(4){background:#ffb900}
 .goodos-login-widget__divider{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;margin:22px 0;color:#94a3b8;font-size:10px;font-weight:800;letter-spacing:.15em}
 .goodos-login-widget__divider:before,.goodos-login-widget__divider:after{height:1px;background:var(--goodos-login-border);content:""}
-.goodos-login-widget__label{display:grid;min-width:0;gap:8px;margin-bottom:18px;color:#e5e7eb;font-size:14px;font-weight:750}
+.goodos-login-widget .goodos-login-widget__label{display:grid!important;min-width:0;gap:8px!important;margin:0 0 18px!important;color:#e5e7eb!important;font-size:14px!important;font-weight:750!important;line-height:1.5!important}
 .goodos-login-widget__label-row{display:flex;align-items:center;justify-content:space-between;gap:14px}
 .goodos-login-widget__recovery{border:0;background:transparent;color:var(--goodos-login-accent);cursor:pointer;font:inherit;font-size:12px;font-weight:750}
-.goodos-login-widget__input-shell{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;min-height:52px;padding:0 15px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#94a3b8;transition:border-color 160ms ease,box-shadow 160ms ease}
+.goodos-login-widget__input-shell{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;height:var(--goodos-login-control-height);min-height:var(--goodos-login-control-height);padding:0 15px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#94a3b8;transition:border-color 160ms ease,box-shadow 160ms ease}
 .goodos-login-widget__input-shell:focus-within{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 18%,transparent)}
-.goodos-login-widget__input{width:100%;min-width:0;height:50px;border:0;outline:0;background:transparent;color:var(--goodos-login-text);font:inherit;font-size:16px}
+.goodos-login-widget .goodos-login-widget__input{appearance:none;width:100%!important;min-width:0!important;height:50px!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;outline:0!important;background:transparent!important;box-shadow:none!important;color:var(--goodos-login-text)!important;font:inherit;font-size:16px}
 .goodos-login-widget__input::placeholder{color:#737986}
 .goodos-login-widget__toggle{display:grid;width:34px;height:34px;place-items:center;border:0;border-radius:8px;background:transparent;color:#94a3b8;cursor:pointer;font:inherit;font-size:17px}
 .goodos-login-widget__error{margin:0 0 18px;padding:14px 16px;border:1px solid #ef9a9a;border-radius:12px;background:#3a171a;color:#fecaca;font-size:14px;font-weight:650;line-height:1.5}
-.goodos-login-widget__submit{display:flex;min-height:54px;align-items:center;justify-content:center;gap:9px;margin-top:7px;padding:0 18px;border:0;border-radius:12px;background:var(--goodos-login-accent);color:var(--goodos-login-accent-ink);cursor:pointer;font:inherit;font-size:15px;font-weight:800;box-shadow:0 10px 24px color-mix(in srgb,var(--goodos-login-accent) 20%,transparent)}
+.goodos-login-widget .goodos-login-widget__submit{display:flex!important;width:100%!important;height:54px!important;min-height:54px!important;align-items:center!important;justify-content:center!important;gap:9px!important;margin-top:7px!important;padding:0 18px!important;border:0!important;border-radius:12px!important;background:var(--goodos-login-accent)!important;color:var(--goodos-login-accent-ink)!important;cursor:pointer;font:inherit;font-size:15px!important;font-weight:800!important;box-shadow:0 10px 24px color-mix(in srgb,var(--goodos-login-accent) 20%,transparent)!important}
 .goodos-login-widget__submit:hover{filter:brightness(1.07);transform:translateY(-1px)}
 .goodos-login-widget__submit:disabled{cursor:not-allowed;opacity:.58;transform:none}
 .goodos-login-widget__access{margin:16px 0 0;color:#8f96a4;font-size:14px;text-align:center}
 .goodos-login-widget__create{border:0;background:transparent;color:var(--goodos-login-accent);cursor:pointer;font:inherit;font-weight:750}
-.goodos-login-widget__security{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;margin-top:24px;padding:16px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#10b981}
+.goodos-login-widget__security{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;min-height:96px;margin-top:24px;padding:16px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#10b981}
 .goodos-login-widget__security-copy{color:#9da3ae;font-size:14px;line-height:1.5}
 .goodos-login-widget__security-copy strong{display:block;margin-bottom:3px;color:#e5e7eb}
 .goodos-login-widget__status{width:8px;height:8px;margin-top:6px;border-radius:50%;background:#10b981}
 .goodos-login-widget__legal{flex:0 0 auto;width:100%;padding:8px 0 0;color:#7f8795;font-size:11px;line-height:1.6;text-align:center}
 .goodos-login-widget__legal a{color:inherit;font-weight:700;text-decoration:none}
-.goodos-login-widget--light{--goodos-login-panel:#f7f9fc;--goodos-login-card:#fff;--goodos-login-surface:#fff;--goodos-login-tile:#fff;--goodos-login-border:#dbe3ec;--goodos-login-text:#0f172a;--goodos-login-muted:#64748b;--goodos-login-soft:#64748b;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 10%,transparent),transparent 22rem),var(--goodos-login-panel)}
-.goodos-login-widget--light .goodos-login-widget__card{border-color:#dbe3ec;box-shadow:0 28px 70px rgba(15,23,42,.12)}
+.goodos-login-widget--light{--goodos-login-panel:#f7f9fc;--goodos-login-surface:#fff;--goodos-login-tile:#fff;--goodos-login-border:#dbe3ec;--goodos-login-text:#0f172a;--goodos-login-muted:#64748b;--goodos-login-soft:#64748b;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 10%,transparent),transparent 22rem),var(--goodos-login-panel)}
 .goodos-login-widget--light .goodos-login-widget__label{color:#1e293b}.goodos-login-widget--light .goodos-login-widget__security-copy strong{color:#1e293b}.goodos-login-widget--light .goodos-login-widget__error{background:#fff1f2;color:#be123c}
-@media(max-width:1024px){.goodos-login-shell{grid-template-columns:minmax(0,1fr)}.goodos-login-shell__brand{display:none}.goodos-login-shell__auth{grid-column:1}.goodos-login-widget__mobile-brand{display:block}.goodos-login-widget__scroll{padding-inline:32px}.goodos-login-widget__inner{padding:36px 0}}
-@media(max-width:620px){.goodos-login-widget__scroll{padding:18px 18px calc(22px + env(safe-area-inset-bottom))}.goodos-login-widget__column{min-height:calc(100dvh - 40px)}.goodos-login-widget__header{min-height:40px}.goodos-login-widget__theme{min-height:40px;padding-inline:11px}.goodos-login-widget__mobile-brand{margin-top:18px}.goodos-login-widget__inner{align-items:flex-start;padding:28px 0}.goodos-login-widget__card{padding:24px;border-radius:20px}.goodos-login-widget__heading{margin-bottom:24px}.goodos-login-widget__title{font-size:clamp(30px,9vw,38px)}.goodos-login-widget__subtitle{font-size:14px}.goodos-login-widget__providers{grid-template-columns:1fr}.goodos-login-widget__provider{min-height:50px}.goodos-login-widget__divider{margin:20px 0}.goodos-login-widget__security{padding:14px}.goodos-login-widget__security-copy{font-size:12px}.goodos-login-widget__access{font-size:12px}}
-@media(max-width:380px){.goodos-login-widget__scroll{padding-inline:12px}.goodos-login-widget__card{padding:20px 16px}.goodos-login-widget__home span,.goodos-login-widget__theme span:last-child{display:none}}
-@media(max-height:760px) and (min-width:621px){.goodos-login-widget__inner{align-items:flex-start;padding:26px 0}.goodos-login-widget__card{padding:28px}.goodos-login-widget__heading{margin-bottom:22px}.goodos-login-widget__security{margin-top:18px}}
+@media(max-width:1024px){.goodos-login-shell.goodos-login-shell{grid-template-columns:minmax(0,1fr)!important}.goodos-login-shell__brand{display:none}.goodos-login-shell__auth{grid-column:1}.goodos-login-widget__mobile-brand{display:block}.goodos-login-widget__scroll{padding-inline:32px}.goodos-login-widget__inner{padding:36px 0}}
+@media(max-width:620px){.goodos-login-widget__scroll{padding:18px 18px calc(22px + env(safe-area-inset-bottom))}.goodos-login-widget__column{min-height:calc(100dvh - 40px)}.goodos-login-widget__header{min-height:40px}.goodos-login-widget__theme{min-height:40px;padding-inline:11px}.goodos-login-widget__mobile-brand{margin-top:18px}.goodos-login-widget__inner{align-items:flex-start;padding:28px 0}.goodos-login-widget__heading{margin-bottom:24px}.goodos-login-widget__title{font-size:clamp(30px,9vw,38px)}.goodos-login-widget__subtitle{font-size:14px}.goodos-login-widget__providers{grid-template-columns:1fr}.goodos-login-widget__provider{min-height:50px}.goodos-login-widget__divider{margin:20px 0}.goodos-login-widget__security{padding:14px}.goodos-login-widget__security-copy{font-size:12px}.goodos-login-widget__access{font-size:12px}}
+@media(max-width:380px){.goodos-login-widget__scroll{padding-inline:12px}.goodos-login-widget__home span,.goodos-login-widget__theme span:last-child{display:none}}
+@media(max-height:760px) and (min-width:621px){.goodos-login-widget__inner{align-items:flex-start;padding:26px 0}.goodos-login-widget__heading{margin-bottom:22px}.goodos-login-widget__security{margin-top:18px}}
 `;
 
 /**

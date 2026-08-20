@@ -9,6 +9,9 @@ Use `GoodOSLoginShell` for the two-panel page structure and
 `GoodOSLoginWidget` for the authentication panel. Do not fork the panel markup
 or authentication behavior inside product repositories.
 
+The authentication side is intentionally a single full-width surface. Do not
+wrap the widget in another card or add an application-level width cap.
+
 Use `loadGoodOSIdentityProviders` to populate the widget's provider
 availability from GoodBase, `goodOSIdentityProviderUrl` to start a configured
 provider, and `goodOSAccountUrl` for shared sign-in, registration, and recovery
