@@ -94,6 +94,7 @@ test("GoodCustoms, GoodTrusts, and GoodSure use canonical singular domains", () 
   assert.equal(applications.get("goodcustoms").domain, "custom.goodos.app");
   assert.equal(applications.get("goodtrusts").domain, "trust.goodos.app");
   assert.equal(applications.get("goodsure").domain, "sure.goodos.app");
+  assert.equal(applications.get("supplyguyz").domain, "supply.goodos.app");
 
   const domainMigration = fs.readFileSync(
     path.join(root, "migrations/20260725_canonical_product_domains.sql"),

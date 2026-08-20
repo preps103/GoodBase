@@ -4,7 +4,8 @@
   "registrySources": [
     "migrations/20260726_goodos_application_registry_expansion.sql",
     "migrations/20260731_goodos_application_registry_sites_expansion.sql",
-    "migrations/20260819_rename_supplyguyz_to_goodsupply.sql"
+    "migrations/20260819_rename_supplyguyz_to_goodsupply.sql",
+    "migrations/20260820_align_goodos_application_domains.sql"
   ],
   "canonicalLogin": {
     "owner": "goodbase",
@@ -157,7 +158,7 @@
       "loginIntegration": "app/page.tsx", "theme": { "accent": "#c8fa3d", "accentInk": "#10110e" }
     },
     {
-      "id": "supplyguyz", "name": "GoodSupply", "domain": "supplyguyz.goodos.app", "status": "active", "classification": "product",
+      "id": "supplyguyz", "name": "GoodSupply", "domain": "supply.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/SupplyGuyz.git", "localDirectory": "goodsupply-source",
       "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "app/components/auth-gate.tsx", "theme": { "accent": "#2f6ff0", "accentInk": "#071a33" }
