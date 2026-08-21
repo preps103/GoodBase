@@ -70,16 +70,15 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.2\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.3\.0"/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /--write/);
 });
 
-test("canonical login uses one full-width authentication surface", () => {
-  assert.match(sharedWidget, /\.goodos-login-widget__column\{[^}]*max-width:none/);
-  assert.match(sharedWidget, /\.goodos-login-widget__card\{[^}]*padding:0[^}]*border:0[^}]*background:transparent[^}]*box-shadow:none/);
-  assert.doesNotMatch(sharedWidget, /\.goodos-login-widget__card\{[^}]*border-radius:(?:20|24)px/);
+test("canonical login preserves one exact card and rejects extra wrappers", () => {
+  assert.match(sharedWidget, /\.goodos-login-widget__column\{[^}]*max-width:640px/);
+  assert.match(sharedWidget, /\.goodos-login-widget__card\{[^}]*padding:clamp\(30px,4vw,48px\)[^}]*border:1px solid #2c3038[^}]*border-radius:24px[^}]*background:var\(--goodos-login-card\)[^}]*box-shadow:0 28px 70px rgba\(0,0,0,\.34\)/);
   assert.match(sharedWidget, /\.goodos-login-widget \.goodos-login-widget__input\{[^}]*padding:0!important[^}]*border:0!important[^}]*border-radius:0!important[^}]*background:transparent!important[^}]*box-shadow:none!important/);
   assert.match(sharedWidget, /font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif/);
   assert.match(sharedWidget, /\.goodos-login-widget__heading\{[^}]*min-height:138px/);
