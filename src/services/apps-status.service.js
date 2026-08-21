@@ -1,5 +1,7 @@
 "use strict";
 
+const path = require("node:path");
+
 const { query } =
   require("../config/database");
 
@@ -9,6 +11,39 @@ const {
   require(
     "./site-deployment.service"
   );
+
+const applicationManifest = require(
+  path.join(
+    __dirname,
+    "../../deploy/application-paths.json"
+  )
+);
+
+const PRODUCT_HOSTING_BY_REGISTRY_ID =
+  new Map();
+
+for (const application of
+  applicationManifest.applications || []) {
+  PRODUCT_HOSTING_BY_REGISTRY_ID.set(
+    application.id,
+    application
+  );
+}
+
+// Keep the long-lived database key compatible while exposing the canonical
+// GoodSupply product and Sites configuration everywhere else.
+if (
+  PRODUCT_HOSTING_BY_REGISTRY_ID.has(
+    "goodsupply"
+  )
+) {
+  PRODUCT_HOSTING_BY_REGISTRY_ID.set(
+    "supplyguyz",
+    PRODUCT_HOSTING_BY_REGISTRY_ID.get(
+      "goodsupply"
+    )
+  );
+}
 
 const CACHE_TTL_MS =
   Math.max(
@@ -315,6 +350,28 @@ function deriveStatus(
   }
 
   if (
+    app.deploymentType ===
+    "sites"
+  ) {
+    if (!health.url) {
+      return "setup_required";
+    }
+
+    if (!health.ok) {
+      return "offline";
+    }
+
+    return (
+      health.responseMs !==
+        null &&
+      health.responseMs >
+        1500
+    )
+      ? "degraded"
+      : "online";
+  }
+
+  if (
     [
       "queued",
       "running",
@@ -374,7 +431,8 @@ function deriveStatus(
 function statusReason(
   status,
   runtime,
-  health
+  health,
+  deploymentType
 ) {
   if (status === "online") {
     if (
@@ -382,6 +440,10 @@ function statusReason(
       health.httpStatus === 403
     ) {
       return `HTTP ${health.httpStatus}; access-controlled service reachable.`;
+    }
+
+    if (deploymentType === "sites") {
+      return `HTTP ${health.httpStatus}; Sites frontend reachable.`;
     }
 
     return runtime
@@ -488,8 +550,41 @@ async function buildLiveStatus() {
   const checkedAt =
     new Date().toISOString();
 
-  const apps =
+  const registryRows =
     await loadRegistryRows();
+
+  const apps =
+    registryRows.map((app) => {
+      const hosting =
+        PRODUCT_HOSTING_BY_REGISTRY_ID.get(
+          app.id
+        );
+
+      if (!hosting) {
+        return {
+          ...app,
+          deploymentType:
+            "vps",
+          hostingProjectId:
+            null,
+        };
+      }
+
+      return {
+        ...app,
+        name:
+          hosting.name ||
+          app.name,
+        domain:
+          hosting.domain ||
+          app.domain,
+        deploymentType:
+          hosting.deploymentType,
+        hostingProjectId:
+          hosting.hostingProjectId ||
+          null,
+      };
+    });
 
   let pm2Statuses =
     new Map();
@@ -522,6 +617,8 @@ async function buildLiveStatus() {
     apps.map(
       (app, index) => {
         const runtime =
+          app.deploymentType !==
+            "sites" &&
           app.processName
             ? pm2Statuses.get(
                 app.processName
@@ -554,7 +651,8 @@ async function buildLiveStatus() {
             statusReason(
               status,
               runtime,
-              health
+              health,
+              app.deploymentType
             ),
           responseMs:
             health.responseMs,
@@ -572,14 +670,26 @@ async function buildLiveStatus() {
               ?.restartCount ??
             null,
           deploymentStatus:
-            app.deploymentStatus ||
-            "setup_required",
+            app.deploymentType ===
+            "sites"
+              ? health.ok
+                ? "published"
+                : "unreachable"
+              : app.deploymentStatus ||
+                "setup_required",
           deploymentReady:
-            Boolean(
-              app.deploymentSiteId &&
-              app.processName &&
-              app.healthUrl
-            ),
+            app.deploymentType ===
+            "sites"
+              ? Boolean(
+                  app.hostingProjectId
+                )
+              : Boolean(
+                  app.deploymentSiteId &&
+                  app.processName &&
+                  app.healthUrl
+                ),
+          deploymentType:
+            app.deploymentType,
           lastRunStatus:
             app.lastRunStatus ||
             null,
@@ -674,7 +784,7 @@ async function buildLiveStatus() {
 
   return {
     source:
-      "database+pm2+https",
+      "database+sites+pm2+https",
     checkedAt,
     cacheTtlMs:
       CACHE_TTL_MS,
@@ -735,6 +845,7 @@ async function getLiveAppsStatus({
 }
 
 module.exports = {
+  deriveStatus,
   getLiveAppsStatus,
   isReachableHttpStatus,
 };

@@ -1348,6 +1348,13 @@ async function discoverServerApps() {
   for (const item of rows) {
     const runtimePath = item.pm2_env?.pm_cwd || null;
     const canonical = canonicalSiteByProcessName(item.name);
+
+    // Product frontends are deployed by Sites. Ignore any legacy PM2 copies
+    // so the server deployment console only manages platform services.
+    if (!canonical) {
+      continue;
+    }
+
     const deploymentPath = canonical?.appPath || runtimePath;
     let repositoryUrl = canonical?.repositoryUrl || null;
     let branch = canonical?.branch || null;

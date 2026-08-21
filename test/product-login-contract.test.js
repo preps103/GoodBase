@@ -70,7 +70,7 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.4\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.5\.0"/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /package-lock\.json/);
@@ -93,12 +93,33 @@ test("canonical login preserves one exact card and rejects extra wrappers", () =
   assert.match(sharedWidget, /\.goodos-login-widget\.goodos-login-widget\{[^}]*display:flex!important[^}]*grid-template-columns:none!important/);
 });
 
-test("canonical brand treatment follows each product accent without changing the auth card", () => {
+test("canonical brand treatment gives product stories distinct motion without changing the auth card", () => {
   assert.match(sharedWidget, /--goodos-login-brand-accent/);
   assert.match(sharedWidget, /children\.props\?\.accent/);
   assert.match(sharedWidget, /data-goodos-login-brand-accent/);
   assert.match(sharedWidget, /data-goodos-login-brand-motion/);
   assert.match(sharedWidget, /goodos-login-brand-sweep/);
   assert.match(sharedWidget, /goodos-login-brand-orbit/);
+  for (const motion of [
+    "gearhead-racing-line",
+    "core-boot-grid",
+    "ads-campaign-track",
+    "boost-rising-metrics",
+    "builder-block-assembly",
+    "customs-paint-pass",
+    "designer-prism-turn",
+    "editor-timeline-scrub",
+    "escrow-vault-pulse",
+    "fleet-route-drift",
+    "speech-waveform-flow",
+    "swapz-exchange-cross",
+    "trusts-network-bloom",
+    "voice-call-ripple",
+    "sure-shield-scan",
+    "panel-data-rain",
+    "mac-glass-float",
+    "supply-conveyor-flow",
+  ]) assert.match(sharedWidget, new RegExp(`goodos-${motion}`));
+  assert.match(sharedWidget, /url\("\/login\/brand-hero\.png"\)/);
   assert.match(sharedWidget, /@media\(prefers-reduced-motion:reduce\)/);
 });

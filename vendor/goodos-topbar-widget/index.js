@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
 export const GOODOS_LOGIN_WIDGET_VERSION = "1.4.0";
-export const GOODOS_LOGIN_SHELL_VERSION = "1.1.0";
+export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 
 export async function loadGoodOSIdentityProviders(origin = GOODOS_AUTH_ORIGIN) {
@@ -187,6 +187,46 @@ const loginWidgetCss = String.raw`
 .goodos-login-shell__brand:after{right:-13vw;bottom:-17vw;width:min(46vw,720px);aspect-ratio:1;border:1px solid color-mix(in srgb,var(--goodos-login-brand-accent) 34%,transparent);border-radius:50%;background:repeating-conic-gradient(from 0deg,color-mix(in srgb,var(--goodos-login-brand-accent) 46%,transparent) 0 1deg,transparent 1deg 18deg);opacity:.2;-webkit-mask:radial-gradient(circle,transparent 0 57%,#000 57.25% 57.7%,transparent 58% 70%,#000 70.25% 70.7%,transparent 71%);mask:radial-gradient(circle,transparent 0 57%,#000 57.25% 57.7%,transparent 58% 70%,#000 70.25% 70.7%,transparent 71%);animation:goodos-login-brand-orbit 38s linear infinite}
 @keyframes goodos-login-brand-sweep{0%,18%{background-position:center,-110% 0}55%,100%{background-position:center,130% 0}}
 @keyframes goodos-login-brand-orbit{to{transform:rotate(1turn)}}
+.goodos-login-shell:is(.gearhead-login,.goodos-login,.goodads-login,.goodboost-login,.goodbuilder-login-shell,.goodcustoms-login,.gooddesigner-login,.goodeditor-login,.goodescrow-login,.goodfleet-login,.goodspeech-login,.goodswapz-login,.goodtrusts-login,.goodvoice-login,.goodsure-login,.gpanel-login,.goodmac-login,.goodsupply-login)>.goodos-login-shell__brand{background-color:#080b10!important;background-image:linear-gradient(112deg,rgba(4,7,12,.42),rgba(4,7,12,.7)),url("/login/brand-hero.png")!important;background-position:center!important;background-size:cover!important}
+.goodos-login-shell:is(.gearhead-login,.goodos-login,.goodads-login,.goodboost-login,.goodbuilder-login-shell,.goodcustoms-login,.gooddesigner-login,.goodeditor-login,.goodescrow-login,.goodfleet-login,.goodspeech-login,.goodswapz-login,.goodtrusts-login,.goodvoice-login,.goodsure-login,.gpanel-login,.goodmac-login,.goodsupply-login)>.goodos-login-shell__brand>*{background-color:transparent!important;background-image:none!important}
+.goodos-login-shell:is(.gearhead-login,.goodos-login,.goodads-login,.goodboost-login,.goodbuilder-login-shell,.goodcustoms-login,.gooddesigner-login,.goodeditor-login,.goodescrow-login,.goodfleet-login,.goodspeech-login,.goodswapz-login,.goodtrusts-login,.goodvoice-login,.goodsure-login,.gpanel-login,.goodmac-login,.goodsupply-login)>.goodos-login-shell__brand:before{z-index:0;inset:-12%;opacity:.62}
+.goodos-login-shell:is(.gearhead-login,.goodos-login,.goodads-login,.goodboost-login,.goodbuilder-login-shell,.goodcustoms-login,.gooddesigner-login,.goodeditor-login,.goodescrow-login,.goodfleet-login,.goodspeech-login,.goodswapz-login,.goodtrusts-login,.goodvoice-login,.goodsure-login,.gpanel-login,.goodmac-login,.goodsupply-login)>.goodos-login-shell__brand:after{display:none}
+.gearhead-login>.goodos-login-shell__brand:before{background:repeating-linear-gradient(102deg,transparent 0 11%,color-mix(in srgb,var(--goodos-login-brand-accent) 22%,transparent) 11.4% 11.8%,transparent 12.2% 23%);animation:goodos-gearhead-racing-line 4.8s linear infinite}
+.goodos-login>.goodos-login-shell__brand:before{background:radial-gradient(circle at 50% 50%,color-mix(in srgb,var(--goodos-login-brand-accent) 30%,transparent),transparent 34%),linear-gradient(color-mix(in srgb,var(--goodos-login-brand-accent) 8%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--goodos-login-brand-accent) 8%,transparent) 1px,transparent 1px);background-size:auto,54px 54px,54px 54px;animation:goodos-core-boot-grid 8.2s ease-in-out infinite}
+.goodads-login>.goodos-login-shell__brand:before{background:linear-gradient(90deg,transparent 0 18%,color-mix(in srgb,var(--goodos-login-brand-accent) 20%,transparent) 20% 22%,transparent 24% 48%,color-mix(in srgb,var(--goodos-login-brand-accent) 13%,transparent) 50% 52%,transparent 54%);background-size:210% 100%;animation:goodos-ads-campaign-track 7.6s ease-in-out infinite}
+.goodboost-login>.goodos-login-shell__brand:before{background:repeating-linear-gradient(0deg,transparent 0 52px,color-mix(in srgb,var(--goodos-login-brand-accent) 18%,transparent) 53px 55px,transparent 56px 88px);animation:goodos-boost-rising-metrics 5.8s linear infinite}
+.goodbuilder-login-shell>.goodos-login-shell__brand:before{background:linear-gradient(45deg,color-mix(in srgb,var(--goodos-login-brand-accent) 14%,transparent) 25%,transparent 25% 75%,color-mix(in srgb,var(--goodos-login-brand-accent) 14%,transparent) 75%),linear-gradient(-45deg,color-mix(in srgb,var(--goodos-login-brand-accent) 9%,transparent) 25%,transparent 25% 75%,color-mix(in srgb,var(--goodos-login-brand-accent) 9%,transparent) 75%);background-size:74px 74px;animation:goodos-builder-block-assembly 10s linear infinite}
+.goodcustoms-login>.goodos-login-shell__brand:before{background:linear-gradient(118deg,transparent 20%,color-mix(in srgb,var(--goodos-login-brand-accent) 24%,transparent) 43%,rgba(255,255,255,.1) 50%,transparent 70%);background-size:230% 100%;animation:goodos-customs-paint-pass 9.4s ease-in-out infinite}
+.gooddesigner-login>.goodos-login-shell__brand:before{background:conic-gradient(from 15deg at 76% 28%,transparent,color-mix(in srgb,var(--goodos-login-brand-accent) 28%,transparent),transparent 24%,color-mix(in srgb,#ec4899 18%,transparent),transparent 52%);animation:goodos-designer-prism-turn 16s linear infinite}
+.goodeditor-login>.goodos-login-shell__brand:before{inset:0;background:linear-gradient(90deg,transparent 0 46%,color-mix(in srgb,var(--goodos-login-brand-accent) 48%,transparent) 49% 50%,transparent 53%),repeating-linear-gradient(90deg,transparent 0 46px,color-mix(in srgb,var(--goodos-login-brand-accent) 12%,transparent) 47px 48px);background-size:220% 100%,100% 22%;animation:goodos-editor-timeline-scrub 8.8s ease-in-out infinite}
+.goodescrow-login>.goodos-login-shell__brand:before{background:radial-gradient(circle at 50% 50%,transparent 0 18%,color-mix(in srgb,var(--goodos-login-brand-accent) 32%,transparent) 18.5% 19%,transparent 19.5% 31%,color-mix(in srgb,var(--goodos-login-brand-accent) 18%,transparent) 31.5% 32%,transparent 32.5%);animation:goodos-escrow-vault-pulse 6.6s ease-in-out infinite}
+.goodfleet-login>.goodos-login-shell__brand:before{background:radial-gradient(circle,color-mix(in srgb,var(--goodos-login-brand-accent) 42%,transparent) 0 3px,transparent 4px);background-size:88px 64px;animation:goodos-fleet-route-drift 12s linear infinite}
+.goodspeech-login>.goodos-login-shell__brand:before{inset:12% -12%;background:repeating-linear-gradient(90deg,transparent 0 15px,color-mix(in srgb,var(--goodos-login-brand-accent) 28%,transparent) 16px 21px,transparent 22px 36px);-webkit-mask:linear-gradient(0deg,transparent 8%,#000 30% 70%,transparent 92%);mask:linear-gradient(0deg,transparent 8%,#000 30% 70%,transparent 92%);animation:goodos-speech-waveform-flow 5.2s linear infinite}
+.goodswapz-login>.goodos-login-shell__brand:before{background:linear-gradient(135deg,transparent 30%,color-mix(in srgb,var(--goodos-login-brand-accent) 22%,transparent) 31% 34%,transparent 35% 64%,color-mix(in srgb,var(--goodos-login-brand-accent) 14%,transparent) 65% 68%,transparent 69%);background-size:180% 180%;animation:goodos-swapz-exchange-cross 7.2s ease-in-out infinite}
+.goodtrusts-login>.goodos-login-shell__brand:before{background:radial-gradient(circle at 22% 28%,color-mix(in srgb,var(--goodos-login-brand-accent) 32%,transparent) 0 4px,transparent 5px),radial-gradient(circle at 72% 38%,color-mix(in srgb,var(--goodos-login-brand-accent) 26%,transparent) 0 5px,transparent 6px),radial-gradient(circle at 46% 74%,color-mix(in srgb,var(--goodos-login-brand-accent) 22%,transparent) 0 6px,transparent 7px);animation:goodos-trusts-network-bloom 6.4s ease-in-out infinite}
+.goodvoice-login>.goodos-login-shell__brand:before{background:repeating-radial-gradient(circle at 58% 50%,transparent 0 46px,color-mix(in srgb,var(--goodos-login-brand-accent) 24%,transparent) 48px 50px,transparent 52px 84px);animation:goodos-voice-call-ripple 7s ease-out infinite}
+.goodsure-login>.goodos-login-shell__brand:before{inset:0;background:linear-gradient(180deg,transparent 0 38%,color-mix(in srgb,var(--goodos-login-brand-accent) 32%,transparent) 48% 50%,transparent 60%);background-size:100% 220%;animation:goodos-sure-shield-scan 7.8s ease-in-out infinite}
+.gpanel-login>.goodos-login-shell__brand:before{background:repeating-linear-gradient(90deg,transparent 0 52px,color-mix(in srgb,var(--goodos-login-brand-accent) 14%,transparent) 53px 54px),linear-gradient(180deg,color-mix(in srgb,var(--goodos-login-brand-accent) 16%,transparent),transparent 34%);background-size:100% 100%,100% 210%;animation:goodos-panel-data-rain 9s linear infinite}
+.goodmac-login>.goodos-login-shell__brand:before{inset:8%;border:1px solid color-mix(in srgb,var(--goodos-login-brand-accent) 26%,transparent);border-radius:42px;background:linear-gradient(140deg,rgba(255,255,255,.1),transparent 38%);box-shadow:0 28px 80px color-mix(in srgb,var(--goodos-login-brand-accent) 12%,transparent);animation:goodos-mac-glass-float 8.6s ease-in-out infinite}
+.goodsupply-login>.goodos-login-shell__brand:before{background:repeating-linear-gradient(90deg,transparent 0 72px,color-mix(in srgb,var(--goodos-login-brand-accent) 18%,transparent) 73px 76px,transparent 77px 142px);animation:goodos-supply-conveyor-flow 6.8s linear infinite}
+@keyframes goodos-gearhead-racing-line{from{transform:translateX(-18%)}to{transform:translateX(18%)}}
+@keyframes goodos-core-boot-grid{0%,100%{opacity:.34;background-size:auto,54px 54px,54px 54px}50%{opacity:.72;background-size:auto,62px 62px,62px 62px}}
+@keyframes goodos-ads-campaign-track{0%,100%{background-position:-90% 0}50%{background-position:90% 0}}
+@keyframes goodos-boost-rising-metrics{from{background-position:0 88px}to{background-position:0 0}}
+@keyframes goodos-builder-block-assembly{from{background-position:0 0,0 0}to{background-position:74px 74px,-74px 74px}}
+@keyframes goodos-customs-paint-pass{0%,100%{background-position:130% 0}50%{background-position:-60% 0}}
+@keyframes goodos-designer-prism-turn{to{transform:rotate(1turn) scale(1.08)}}
+@keyframes goodos-editor-timeline-scrub{0%,100%{background-position:-110% 0,0 0}50%{background-position:110% 0,0 0}}
+@keyframes goodos-escrow-vault-pulse{0%,100%{transform:scale(.82);opacity:.3}50%{transform:scale(1.08);opacity:.72}}
+@keyframes goodos-fleet-route-drift{from{background-position:0 0}to{background-position:176px 128px}}
+@keyframes goodos-speech-waveform-flow{from{background-position:0 0}to{background-position:144px 0}}
+@keyframes goodos-swapz-exchange-cross{0%,100%{background-position:0 0;transform:scale(1)}50%{background-position:100% 100%;transform:scale(1.08)}}
+@keyframes goodos-trusts-network-bloom{0%,100%{transform:scale(.92);opacity:.32}50%{transform:scale(1.1);opacity:.76}}
+@keyframes goodos-voice-call-ripple{0%{transform:scale(.62);opacity:.7}80%,100%{transform:scale(1.2);opacity:0}}
+@keyframes goodos-sure-shield-scan{0%,100%{background-position:0 -120%}50%{background-position:0 120%}}
+@keyframes goodos-panel-data-rain{from{background-position:0 0,0 -110%}to{background-position:0 0,0 110%}}
+@keyframes goodos-mac-glass-float{0%,100%{transform:translateY(0) rotate(-.4deg)}50%{transform:translateY(-18px) rotate(.6deg)}}
+@keyframes goodos-supply-conveyor-flow{from{background-position:0 0}to{background-position:284px 0}}
 .goodos-login-shell>.goodos-login-shell__auth{display:flex!important;place-items:normal!important;min-height:0!important;padding:0!important;overflow:hidden!important;background:transparent!important;color:inherit!important}
 .goodos-login-shell__auth>.goodos-login-widget{flex:1 1 auto}
 .goodos-login-widget.goodos-login-widget{--goodos-login-accent:#f47a2a;--goodos-login-accent-ink:#111318;--goodos-login-panel:#0f1115;--goodos-login-card:#17191e;--goodos-login-surface:#101216;--goodos-login-tile:#1b1d22;--goodos-login-border:#343842;--goodos-login-text:#f8fafc;--goodos-login-muted:#969ca8;--goodos-login-soft:#a4a9b3;--goodos-login-control-height:52px;position:relative;display:flex!important;width:100%;min-width:0;height:100dvh;min-height:0;grid-template-columns:none!important;overflow:hidden;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 8%,transparent),transparent 22rem),var(--goodos-login-panel);color:var(--goodos-login-text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;box-sizing:border-box}
@@ -270,6 +310,10 @@ export function GoodOSLoginShell({
     isValidElement(children) && typeof children.props?.accent === "string"
       ? children.props.accent
       : "#6555f5";
+  const brandMotion =
+    typeof className === "string" && className.trim()
+      ? className.trim().split(/\s+/)[0].replace(/-login(?:-shell)?$/, "")
+      : "accent-sweep-orbit";
 
   return createElement(
     "main",
@@ -279,7 +323,7 @@ export function GoodOSLoginShell({
       "data-goodos-login-shell": "",
       "data-goodos-login-shell-version": GOODOS_LOGIN_SHELL_VERSION,
       "data-goodos-login-brand-accent": brandAccent,
-      "data-goodos-login-brand-motion": "accent-sweep-orbit",
+      "data-goodos-login-brand-motion": brandMotion,
       "data-goodbase-login": "",
     },
     createElement("style", { "data-goodos-login-shell-styles": "" }, loginWidgetCss),

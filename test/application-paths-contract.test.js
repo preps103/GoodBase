@@ -37,7 +37,7 @@ test("the registry discovers active products without a fixed application count",
 test("every active product declares the canonical login integration and theme tokens", () => {
   assert.equal(manifest.canonicalLogin.owner, "goodbase");
   assert.equal(manifest.canonicalLogin.package, "@goodos/topbar-widget");
-  assert.equal(manifest.canonicalLogin.version, "4.4.0");
+  assert.equal(manifest.canonicalLogin.version, "4.5.0");
   assert.deepEqual(
     manifest.canonicalLogin.requiredComponents,
     ["GoodOSLoginShell", "GoodOSLoginWidget"]
@@ -52,24 +52,17 @@ test("every active product declares the canonical login integration and theme to
   }
 });
 
-test("GoodBase deployment management excludes Sites-hosted applications", () => {
-  const managed = manifest.applications.filter((application) => application.deploymentManaged);
-  const hosted = manifest.applications.filter((application) => !application.deploymentManaged);
-
-  assert.ok(managed.length > 0);
-  assert.ok(hosted.length > 0);
-  for (const application of managed) {
-    assert.equal(application.deploymentType, "vps");
-    assert.match(application.productionPath, /^\/home\/mgoodlo3\/Good[A-Za-z]+$/);
-    assert.ok(application.service);
-    assert.equal(application.productionPath.includes("-backup"), false);
-    assert.equal(application.productionPath.includes("-release"), false);
-  }
-  for (const application of hosted) {
+test("every product frontend is hosted identically on Sites", () => {
+  const projectIds = [];
+  for (const application of manifest.applications) {
     assert.equal(application.deploymentType, "sites");
+    assert.equal(application.deploymentManaged, false);
     assert.equal(Object.hasOwn(application, "productionPath"), false);
     assert.equal(Object.hasOwn(application, "service"), false);
+    assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
+    projectIds.push(application.hostingProjectId);
   }
+  assert.equal(new Set(projectIds).size, manifest.applications.length);
 });
 
 test("GoodBase, GoodID, and GoodMail Accounts have explicit authentication roles", () => {
@@ -94,7 +87,7 @@ test("GoodCustoms, GoodTrusts, and GoodSure use canonical singular domains", () 
   assert.equal(applications.get("goodcustoms").domain, "custom.goodos.app");
   assert.equal(applications.get("goodtrusts").domain, "trust.goodos.app");
   assert.equal(applications.get("goodsure").domain, "sure.goodos.app");
-  assert.equal(applications.get("supplyguyz").domain, "supply.goodos.app");
+  assert.equal(applications.get("goodsupply").domain, "supply.goodos.app");
 
   const domainMigration = fs.readFileSync(
     path.join(root, "migrations/20260725_canonical_product_domains.sql"),

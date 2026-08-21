@@ -7,7 +7,7 @@ import type {
 
 export declare const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
 export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.4.0";
-export declare const GOODOS_LOGIN_SHELL_VERSION = "1.1.0";
+export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 
 export interface GoodOSIdentityProviderRecord {

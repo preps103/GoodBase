@@ -101,7 +101,7 @@ test("deployment PM2 control is restricted to the root-owned helper", () => {
   assert.doesNotMatch(sudoers, /\/bin\/sh|\/bin\/bash/);
 });
 
-test("canonical deployment mappings include every GoodBase-managed product and platform service", () => {
+test("canonical server mappings include only VPS-managed platform services", () => {
   delete require.cache[require.resolve("../src/services/site-deployment.service")];
   const deployment = require("../src/services/site-deployment.service");
   const sites = deployment.canonicalDeploymentSites();
@@ -115,30 +115,20 @@ test("canonical deployment mappings include every GoodBase-managed product and p
   assert.equal(new Set(sites.map((site) => site.appId)).size, managedIds.length);
   assert.deepEqual(sites.map((site) => site.appId).sort(), managedIds.sort());
   assert.deepEqual(
-    sites.find((site) => site.appId === "goodvoice"),
-    {
-      appId: "goodvoice",
-      name: "GoodVoice",
-      domain: "voice.goodos.app",
-      repositoryUrl: "https://github.com/preps103/GoodVoice-v1.3.git",
-      appPath: "/home/mgoodlo3/GoodVoice",
-      processName: "goodvoice",
-      branch: "main",
-      processManager: "pm2",
-      healthUrl: "https://voice.goodos.app",
-    }
+    sites.map((site) => site.appId).sort(),
+    ["goodbase", "goodid"]
   );
   assert.equal(
-    sites.find((site) => site.appId === "goodbuilder").appPath,
-    "/home/mgoodlo3/GoodBuilder"
+    sites.some((site) => site.appId === "goodvoice"),
+    false
   );
   assert.equal(
-    sites.find((site) => site.appId === "goodcustoms").domain,
-    "custom.goodos.app"
+    sites.some((site) => site.appId === "goodbuilder"),
+    false
   );
 });
 
-test("PM2 discovery separates the live runtime folder from the deployment source folder", async (context) => {
+test("PM2 discovery ignores legacy product copies and keeps platform runtime paths separate", async (context) => {
   const childProcess = require("node:child_process");
   const originalSpawn = childProcess.spawn;
 
@@ -151,8 +141,17 @@ test("PM2 discovery separates the live runtime folder from the deployment source
         "data",
         JSON.stringify([
           {
-            name: "goodads",
+            name: "goodbase-api",
             pid: 123,
+            pm2_env: {
+              status: "online",
+              pm_cwd: "/var/www/GoodBase/dist",
+              env: {},
+            },
+          },
+          {
+            name: "goodads",
+            pid: 456,
             pm2_env: {
               status: "online",
               pm_cwd: "/home/mgoodlo3/GoodAds/dist",
@@ -175,12 +174,12 @@ test("PM2 discovery separates the live runtime folder from the deployment source
   const targets = await deployment.discoverServerApps();
 
   assert.equal(targets.length, 1);
-  assert.equal(targets[0].runtimePath, "/home/mgoodlo3/GoodAds/dist");
-  assert.equal(targets[0].deploymentPath, "/home/mgoodlo3/GoodAds");
-  assert.equal(targets[0].appPath, "/home/mgoodlo3/GoodAds");
+  assert.equal(targets[0].runtimePath, "/var/www/GoodBase/dist");
+  assert.equal(targets[0].deploymentPath, "/var/www/GoodBase");
+  assert.equal(targets[0].appPath, "/var/www/GoodBase");
   assert.equal(
     targets[0].repositoryUrl,
-    "https://github.com/preps103/GoodAds-v1.2.git"
+    "https://github.com/preps103/GoodBase.git"
   );
 });
 

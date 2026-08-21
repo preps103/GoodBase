@@ -10,7 +10,7 @@
   "canonicalLogin": {
     "owner": "goodbase",
     "package": "@goodos/topbar-widget",
-    "version": "4.4.0",
+    "version": "4.5.0",
     "sourceDirectory": "vendor/goodos-topbar-widget",
     "requiredComponents": ["GoodOSLoginShell", "GoodOSLoginWidget"],
     "allowedThemeProps": ["accent", "accentInk", "initialMode", "mobileBrand"]
@@ -18,149 +18,149 @@
   "applications": [
     {
       "id": "goodos", "name": "GoodOS", "domain": "goodos.app", "status": "active", "classification": "product",
-      "service": "goodos", "repositoryUrl": "https://github.com/preps103/GoodOS.git", "localDirectory": "goodos-source",
-      "productionPath": "/home/mgoodlo3/GoodOS", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodOS.git", "localDirectory": "goodos-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c3a0f30881918d7eb01aae2f4dc6",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
       "theme": { "accent": "#06b6d4", "accentInk": "#071e3d" }
     },
     {
       "id": "goodads", "name": "GoodAds", "domain": "ads.goodos.app", "status": "active", "classification": "product",
-      "service": "goodads", "repositoryUrl": "https://github.com/preps103/GoodAds-v1.2.git", "localDirectory": "goodads-source",
-      "productionPath": "/home/mgoodlo3/GoodAds", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodAds-v1.2.git", "localDirectory": "goodads-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c3c572f481919ad8137ab405c830",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodBaseAuthGate.tsx",
       "theme": { "accent": "#38bdf8", "accentInk": "#06182b" }
     },
     {
       "id": "goodboost", "name": "GoodBoost", "domain": "boost.goodos.app", "status": "active", "classification": "product",
-      "service": "goodboost", "repositoryUrl": "https://github.com/preps103/GoodBoost.git", "localDirectory": "goodboost-source",
-      "productionPath": "/home/mgoodlo3/GoodBoost", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodBoost.git", "localDirectory": "goodboost-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c3dbb1008191a3084eff17254408",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "pages/Auth.tsx",
       "theme": { "accent": "#38bdf8", "accentInk": "#082342" }
     },
     {
       "id": "goodbuilder", "name": "GoodBuilder", "domain": "builder.goodos.app", "status": "active", "classification": "product",
-      "service": "goodbuilder", "repositoryUrl": "https://github.com/preps103/goodbuilder.git", "localDirectory": "goodbuilder-source",
-      "productionPath": "/home/mgoodlo3/GoodBuilder", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/goodbuilder.git", "localDirectory": "goodbuilder-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a645d21c9548191b2c819fb540e8dae",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "WordPressApp.tsx",
       "theme": { "accent": "#8b5cf6", "accentInk": "#ffffff" }
     },
     {
       "id": "goodcustoms", "name": "GoodCustoms", "domain": "custom.goodos.app", "status": "active", "classification": "product",
-      "service": "goodcustoms", "repositoryUrl": "https://github.com/preps103/Goodloe-Customs.git", "localDirectory": "goodcustoms-source",
-      "productionPath": "/home/mgoodlo3/GoodCustoms", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/Goodloe-Customs.git", "localDirectory": "goodcustoms-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c3be5380819189e724303f9af3de",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodBaseLogin.tsx",
       "theme": { "accent": "#c9f65b", "accentInk": "#091015" }
     },
     {
       "id": "gooddesigner", "name": "GoodDesigner", "domain": "designer.goodos.app", "status": "active", "classification": "product",
-      "service": "gooddesigner", "repositoryUrl": "https://github.com/preps103/GoodDesigner.git", "localDirectory": "gooddesigner-source",
-      "productionPath": "/home/mgoodlo3/GoodDesigner", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodDesigner.git", "localDirectory": "gooddesigner-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c41d18ec81918c48fe6f0f8af0fa",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "components/LoginPage.tsx",
       "theme": { "accent": "#0ea5e9", "accentInk": "#ffffff" }
     },
     {
       "id": "goodeditor", "name": "GoodEditor", "domain": "editor.goodos.app", "status": "active", "classification": "product",
-      "service": "goodeditor", "repositoryUrl": "https://github.com/preps103/GoodEditor.git", "localDirectory": "goodeditor-source",
-      "productionPath": "/home/mgoodlo3/GoodEditor", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodEditor.git", "localDirectory": "goodeditor-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c404a29c8191915affa1b6f4c045",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "components/GoodOSLogin.tsx",
       "theme": { "accent": "#d946ef", "accentInk": "#ffffff" }
     },
     {
       "id": "goodescrow", "name": "GoodEscrow", "domain": "escrow.goodos.app", "status": "active", "classification": "product",
-      "service": "goodescrow", "repositoryUrl": "https://github.com/preps103/GoodEscrow.git", "localDirectory": "goodescrow-source",
-      "productionPath": "/home/mgoodlo3/GoodEscrow", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodEscrow.git", "localDirectory": "goodescrow-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c423fa608191afb0fe36c99e2b84",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "components/LoginScreen.tsx",
       "theme": { "accent": "#10b981", "accentInk": "#052e2b" }
     },
     {
       "id": "goodfleet", "name": "GoodFleet", "domain": "fleet.goodos.app", "status": "active", "classification": "product",
-      "service": "goodfleet", "repositoryUrl": "https://github.com/preps103/GoodFleet-v2.52.git", "localDirectory": "goodfleet-source",
-      "productionPath": "/home/mgoodlo3/GoodFleet", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodFleet-v2.52.git", "localDirectory": "goodfleet-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c3b6a4c081919527b63948900f72",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/Login.tsx",
       "theme": { "accent": "#0ea5e9", "accentInk": "#071827" }
     },
     {
       "id": "goodqr", "name": "GoodQR", "domain": "qr.goodos.app", "status": "active", "classification": "product",
-      "service": "goodqr", "repositoryUrl": "https://github.com/preps103/GoodQR.git", "localDirectory": "goodqr-worker",
-      "productionPath": "/home/mgoodlo3/GoodQR", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodQR.git", "localDirectory": "goodqr-worker",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c44dc24c8191a3383862a7260754",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "components/Login.tsx",
       "theme": { "accent": "#F58426", "accentInk": "#081b31" }
     },
     {
       "id": "goodscan", "name": "GoodScan", "domain": "scan.goodos.app", "status": "active", "classification": "product",
-      "service": "goodscan", "repositoryUrl": "https://github.com/preps103/GoodScan-3D.git", "localDirectory": "goodscan-source",
-      "productionPath": "/home/mgoodlo3/GoodScan", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodScan-3D.git", "localDirectory": "goodscan-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c45489fc81918557c2ae46a8934b",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/auth/GoodOSLogin.tsx",
       "theme": { "accent": "#ffb31a", "accentInk": "#111827" }
     },
     {
       "id": "goodspeech", "name": "GoodSpeech", "domain": "speech.goodos.app", "status": "active", "classification": "product",
-      "service": "goodspeech", "repositoryUrl": "https://github.com/preps103/GoodSpeech.git", "localDirectory": "goodspeech-source",
-      "productionPath": "/home/mgoodlo3/GoodSpeech", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodSpeech.git", "localDirectory": "goodspeech-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c4c6ba508191ba8f6129d48d3b78",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "components/AuthGate.tsx",
       "theme": { "accent": "#0ea5e9", "accentInk": "#ffffff" }
     },
     {
       "id": "goodswapz", "name": "GoodSwapz", "domain": "swapz.goodos.app", "status": "active", "classification": "product",
-      "service": "goodswapz", "repositoryUrl": "https://github.com/preps103/GoodSwapz.git", "localDirectory": "goodswapz-source",
-      "productionPath": "/home/mgoodlo3/GoodSwapz", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodSwapz.git", "localDirectory": "goodswapz-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c47a8d00819196fa12a8bc94d17f",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "components/AuthModal.tsx",
       "theme": { "accent": "#10b981", "accentInk": "#04170f" }
     },
     {
       "id": "goodtrusts", "name": "GoodTrusts", "domain": "trust.goodos.app", "status": "active", "classification": "product",
-      "service": "goodtrusts", "repositoryUrl": "https://github.com/preps103/GoodTrusts-v1.7.git", "localDirectory": "goodtrusts-source",
-      "productionPath": "/home/mgoodlo3/GoodTrusts", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodTrusts-v1.7.git", "localDirectory": "goodtrusts-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6002a664c48191a35b7f03d34a6491",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/Login.tsx",
       "theme": { "accent": "#6366f1", "accentInk": "#ffffff" }
     },
     {
       "id": "goodvoice", "name": "GoodVoice", "domain": "voice.goodos.app", "status": "active", "classification": "product",
-      "service": "goodvoice", "repositoryUrl": "https://github.com/preps103/GoodVoice-v1.3.git", "localDirectory": "goodvoice-source",
-      "productionPath": "/home/mgoodlo3/GoodVoice", "deploymentType": "vps", "deploymentManaged": true,
+      "repositoryUrl": "https://github.com/preps103/GoodVoice-v1.3.git", "localDirectory": "goodvoice-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c4813888819186fb0710e92cd9b0",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSLogin.tsx",
       "theme": { "accent": "#2563eb", "accentInk": "#ffffff" }
     },
     {
       "id": "gearheadracing", "name": "GearHead Racing", "domain": "gearhead.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/Gearhead-Card-Racing.git", "localDirectory": "gearhead-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a66b6b4b5e48191a9ebd70aae06ff50", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "src/components/GoodOSLogin.tsx", "theme": { "accent": "#ef4444", "accentInk": "#111827" }
     },
     {
       "id": "buyblack", "name": "BuyBlack", "domain": "buyblack.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/BuyBlack.git", "localDirectory": "buyblack-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a66aae473108191b0c8f3f60d23cfea", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "src/components/AuthModal.tsx", "theme": { "accent": "#c9a227", "accentInk": "#090909" }
     },
     {
       "id": "goodsure", "name": "GoodSure", "domain": "sure.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/GoodSure.git", "localDirectory": "goodsure-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a66ae5710f081919545a08768d3c21c", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "src/components/GoodOSLogin.tsx", "theme": { "accent": "#f59e0b", "accentInk": "#111827" }
     },
     {
       "id": "gpanel", "name": "GoodPanel", "loginAppName": "GPanel", "domain": "panel.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://git.chatgpt-team.site/f01f092c-4387-440f-95cb-864b4c7f069e/appgprj_6a6476de0a4481919dd14946d47d20ba.git", "localDirectory": "gpanel-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6476de0a4481919dd14946d47d20ba", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "app/gpanel-app.tsx", "theme": { "accent": "#f47a2a", "accentInk": "#111318" }
     },
     {
       "id": "goodmac", "name": "GoodMac", "domain": "mac.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://git.chatgpt-team.site/f01f092c-4387-440f-95cb-864b4c7f069e/appgprj_6a6a4df8aaa081919eb5bcc895b5744d.git", "localDirectory": "goodmac-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6a4df8aaa081919eb5bcc895b5744d", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "app/page.tsx", "theme": { "accent": "#356df3", "accentInk": "#ffffff" }
     },
     {
       "id": "goodtrading", "name": "GoodTrading", "domain": "trading.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://git.chatgpt-team.site/f01f092c-4387-440f-95cb-864b4c7f069e/appgprj_6a6a9c6d8be4819199921c775525d553.git", "localDirectory": "goodtrading-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6a9c6d8be4819199921c775525d553", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "app/page.tsx", "theme": { "accent": "#c8fa3d", "accentInk": "#10110e" }
     },
     {
-      "id": "supplyguyz", "name": "GoodSupply", "domain": "supply.goodos.app", "status": "active", "classification": "product",
+      "id": "goodsupply", "name": "GoodSupply", "domain": "supply.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/SupplyGuyz.git", "localDirectory": "goodsupply-source",
-      "deploymentType": "sites", "deploymentManaged": false, "authEnabled": true, "canonicalLoginRequired": true,
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6a5ef33e5881918b6130a53e8c389a", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "app/components/auth-gate.tsx", "theme": { "accent": "#2f6ff0", "accentInk": "#071a33" }
     }
   ],

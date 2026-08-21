@@ -1,0 +1,11 @@
+{
+  "name": "@goodos/sites-hosting",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "prepare-sites.mjs",
+    "sites-worker.js",
+    "README.md"
+  ]
+}

@@ -27,6 +27,8 @@
     "check:openapi": "node scripts/validate-openapi.js",
     "auth:widget:check": "node scripts/sync-goodos-topbar-widget.js --check",
     "auth:widget:sync": "node scripts/sync-goodos-topbar-widget.js --write",
+    "hosting:sites:check": "node scripts/sync-goodos-sites-hosting.js --check",
+    "hosting:sites:sync": "node scripts/sync-goodos-sites-hosting.js --write",
     "check:goodscan": "node --test test/goodscan-credits.test.js test/goodscan.service.test.js test/goodscan.production-contract.test.js",
     "migrate:goodscan": "node scripts/apply-goodscan-migration.js",
     "migrate:applications": "node scripts/apply-goodsupply-rename-migration.js && node scripts/apply-goodos-application-domain-migration.js",
