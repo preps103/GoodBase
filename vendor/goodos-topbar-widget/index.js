@@ -9,8 +9,8 @@ import {
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.3.0";
-export const GOODOS_LOGIN_SHELL_VERSION = "1.0.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.4.0";
+export const GOODOS_LOGIN_SHELL_VERSION = "1.1.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 
 export async function loadGoodOSIdentityProviders(origin = GOODOS_AUTH_ORIGIN) {
@@ -180,7 +180,13 @@ const loginWidgetCss = String.raw`
 .goodos-login-shell.goodos-login-shell{display:grid!important;width:100%;height:100dvh;min-width:0;min-height:100vh;grid-template-columns:repeat(2,minmax(0,1fr))!important;overflow:hidden;background:#0f1115}
 .goodos-login-shell *{box-sizing:border-box}
 .goodos-login-shell__brand,.goodos-login-shell__auth{position:relative;min-width:0;min-height:0;overflow:hidden}
-.goodos-login-shell__brand>*{width:100%;height:100%;min-height:100dvh}
+.goodos-login-shell__brand{isolation:isolate;background:#0a0d13}
+.goodos-login-shell__brand>*{position:relative;z-index:1;width:100%;height:100%;min-height:100dvh}
+.goodos-login-shell__brand:before,.goodos-login-shell__brand:after{position:absolute;z-index:2;pointer-events:none;content:""}
+.goodos-login-shell__brand:before{inset:-10%;background:radial-gradient(circle at 76% 22%,color-mix(in srgb,var(--goodos-login-brand-accent) 20%,transparent),transparent 24%),linear-gradient(112deg,transparent 28%,color-mix(in srgb,var(--goodos-login-brand-accent) 9%,transparent) 46%,transparent 64%);background-position:center,-110% 0;background-size:auto,220% 100%;opacity:.72;animation:goodos-login-brand-sweep 13s ease-in-out infinite}
+.goodos-login-shell__brand:after{right:-13vw;bottom:-17vw;width:min(46vw,720px);aspect-ratio:1;border:1px solid color-mix(in srgb,var(--goodos-login-brand-accent) 34%,transparent);border-radius:50%;background:repeating-conic-gradient(from 0deg,color-mix(in srgb,var(--goodos-login-brand-accent) 46%,transparent) 0 1deg,transparent 1deg 18deg);opacity:.2;-webkit-mask:radial-gradient(circle,transparent 0 57%,#000 57.25% 57.7%,transparent 58% 70%,#000 70.25% 70.7%,transparent 71%);mask:radial-gradient(circle,transparent 0 57%,#000 57.25% 57.7%,transparent 58% 70%,#000 70.25% 70.7%,transparent 71%);animation:goodos-login-brand-orbit 38s linear infinite}
+@keyframes goodos-login-brand-sweep{0%,18%{background-position:center,-110% 0}55%,100%{background-position:center,130% 0}}
+@keyframes goodos-login-brand-orbit{to{transform:rotate(1turn)}}
 .goodos-login-shell>.goodos-login-shell__auth{display:flex!important;place-items:normal!important;min-height:0!important;padding:0!important;overflow:hidden!important;background:transparent!important;color:inherit!important}
 .goodos-login-shell__auth>.goodos-login-widget{flex:1 1 auto}
 .goodos-login-widget.goodos-login-widget{--goodos-login-accent:#f47a2a;--goodos-login-accent-ink:#111318;--goodos-login-panel:#0f1115;--goodos-login-card:#17191e;--goodos-login-surface:#101216;--goodos-login-tile:#1b1d22;--goodos-login-border:#343842;--goodos-login-text:#f8fafc;--goodos-login-muted:#969ca8;--goodos-login-soft:#a4a9b3;--goodos-login-control-height:52px;position:relative;display:flex!important;width:100%;min-width:0;height:100dvh;min-height:0;grid-template-columns:none!important;overflow:hidden;background:radial-gradient(circle at 80% 8%,color-mix(in srgb,var(--goodos-login-accent) 8%,transparent),transparent 22rem),var(--goodos-login-panel);color:var(--goodos-login-text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;box-sizing:border-box}
@@ -241,6 +247,7 @@ const loginWidgetCss = String.raw`
 @media(max-width:620px){.goodos-login-widget__scroll{padding:18px 18px calc(22px + env(safe-area-inset-bottom))}.goodos-login-widget__column{min-height:calc(100dvh - 40px)}.goodos-login-widget__header{min-height:40px}.goodos-login-widget__theme{min-height:40px;padding-inline:11px}.goodos-login-widget__mobile-brand{margin-top:18px}.goodos-login-widget__inner{align-items:flex-start;padding:28px 0}.goodos-login-widget__card{padding:24px;border-radius:20px}.goodos-login-widget__heading{margin-bottom:24px}.goodos-login-widget__title{font-size:clamp(30px,9vw,38px)}.goodos-login-widget__subtitle{font-size:14px}.goodos-login-widget__providers{grid-template-columns:1fr}.goodos-login-widget__provider{min-height:50px}.goodos-login-widget__divider{margin:20px 0}.goodos-login-widget__security{padding:14px}.goodos-login-widget__security-copy{font-size:12px}.goodos-login-widget__access{font-size:12px}}
 @media(max-width:380px){.goodos-login-widget__scroll{padding-inline:12px}.goodos-login-widget__card{padding:20px 16px}.goodos-login-widget__home span,.goodos-login-widget__theme span:last-child{display:none}}
 @media(max-height:760px) and (min-width:621px){.goodos-login-widget__inner{align-items:flex-start;padding:26px 0}.goodos-login-widget__card{padding:28px}.goodos-login-widget__heading{margin-bottom:22px}.goodos-login-widget__security{margin-top:18px}}
+@media(prefers-reduced-motion:reduce){.goodos-login-shell__brand:before,.goodos-login-shell__brand:after{animation:none}.goodos-login-widget__submit{transition:none}}
 `;
 
 /**
@@ -259,13 +266,20 @@ export function GoodOSLoginShell({
   if (!brandPanel) throw new Error("GoodOSLoginShell requires brandPanel.");
   if (!children) throw new Error("GoodOSLoginShell requires a login widget child.");
 
+  const brandAccent =
+    isValidElement(children) && typeof children.props?.accent === "string"
+      ? children.props.accent
+      : "#6555f5";
+
   return createElement(
     "main",
     {
       className: classes("goodos-login-shell", className),
-      style,
+      style: { "--goodos-login-brand-accent": brandAccent, ...style },
       "data-goodos-login-shell": "",
       "data-goodos-login-shell-version": GOODOS_LOGIN_SHELL_VERSION,
+      "data-goodos-login-brand-accent": brandAccent,
+      "data-goodos-login-brand-motion": "accent-sweep-orbit",
       "data-goodbase-login": "",
     },
     createElement("style", { "data-goodos-login-shell-styles": "" }, loginWidgetCss),

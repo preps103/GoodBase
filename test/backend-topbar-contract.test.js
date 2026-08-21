@@ -126,7 +126,7 @@ test("master top bar stylesheet is delivered as a cross-origin shared asset", ()
 
 test("versioned GoodOS UI widget packages are delivered as immutable shared assets", () => {
   const routes = read("src/routes/index.js");
-  const packagePaths = ["3.0.0", "4.1.0", "4.2.0", "4.3.0"].map((version) =>
+  const packagePaths = ["3.0.0", "4.1.0", "4.2.0", "4.3.0", "4.4.0"].map((version) =>
     path.join(
       root,
       `src/public/packages/goodos-topbar-widget-${version}.tgz`,
@@ -138,6 +138,7 @@ test("versioned GoodOS UI widget packages are delivered as immutable shared asse
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.1\.0\.tgz"/);
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.2\.0\.tgz"/);
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.3\.0\.tgz"/);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.4\.0\.tgz"/);
   assert.match(routes, /max-age=31536000, immutable/);
   assert.match(routes, /application\/gzip/);
 });

@@ -1,6 +1,6 @@
 # GoodBase product login contract
 
-GoodOS and every product application use the shared GoodBase authentication contract. Each application keeps its own branded left-hand panel and accent color; the right-hand authentication card is one identical width-limited, bordered, rounded surface supplied by `GoodOSLoginShell` and `GoodOSLoginWidget` from the authoritative GoodBase `@goodos/topbar-widget` package.
+GoodOS and every product application use the shared GoodBase authentication contract. Each application keeps its own branded left-hand panel, copy, logo, artwork, and accent color; the right-hand authentication card is one identical width-limited, bordered, rounded surface supplied by `GoodOSLoginShell` and `GoodOSLoginWidget` from the authoritative GoodBase `@goodos/topbar-widget` package. The shell derives its ambient brand animation from the application's widget accent and disables the animation under `prefers-reduced-motion`.
 
 Render `GoodOSLoginShell` and `GoodOSLoginWidget` from the vendored `@goodos/topbar-widget` package. The package supplies the canonical 640-pixel card, its padding, border, radius, and control sizing. Products must not load the legacy `backend-login.css` asset, remove the canonical card, or wrap it in another card or width-limited container.
 

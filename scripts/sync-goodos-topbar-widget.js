@@ -92,6 +92,9 @@ const knownDirectories = new Set([
 ]);
 const missingRepositories = [];
 const snapshotDrift = [];
+const packageLockDrift = [];
+const updatedSnapshots = [];
+const updatedPackageLocks = [];
 const integrationDrift = [];
 const packageDependencyDrift = [];
 const themeDrift = [];
@@ -123,11 +126,13 @@ for (const application of applications) {
     if (matches) continue;
 
     snapshotMatches = false;
-    snapshotDrift.push(`${application.id}:vendor/goodos-topbar-widget/${fileName}`);
     if (mode === "write") {
       fs.mkdirSync(targetRoot, { recursive: true });
       fs.writeFileSync(targetPath, canonicalContent);
+      updatedSnapshots.push(`${application.id}:vendor/goodos-topbar-widget/${fileName}`);
       snapshotMatches = true;
+    } else {
+      snapshotDrift.push(`${application.id}:vendor/goodos-topbar-widget/${fileName}`);
     }
   }
   if (snapshotMatches) canonicalSnapshots += 1;
@@ -152,6 +157,26 @@ for (const application of applications) {
     }
   } else {
     packageDependencyDrift.push(`${application.id}: package.json is missing`);
+  }
+
+  const packageLockPath = path.join(repositoryRoot, "package-lock.json");
+  if (!fs.existsSync(packageLockPath)) {
+    packageLockDrift.push(`${application.id}: package-lock.json is missing`);
+  } else {
+    const packageLock = JSON.parse(readText(packageLockPath));
+    const lockKey = "vendor/goodos-topbar-widget";
+    const lockedPackage = packageLock.packages?.[lockKey];
+    if (lockedPackage?.version !== canonicalPackage.version) {
+      if (mode === "write" && lockedPackage) {
+        lockedPackage.version = canonicalPackage.version;
+        fs.writeFileSync(packageLockPath, `${JSON.stringify(packageLock, null, 2)}\n`);
+        updatedPackageLocks.push(`${application.id}:package-lock.json`);
+      } else {
+        packageLockDrift.push(
+          `${application.id}: package-lock.json must lock ${manifest.canonicalLogin.package}@${canonicalPackage.version}`
+        );
+      }
+    }
   }
 
   const integrationPath = path.join(repositoryRoot, application.loginIntegration);
@@ -264,6 +289,7 @@ const allDrift = [
   ...snapshotDrift,
   ...integrationDrift,
   ...packageDependencyDrift,
+  ...packageLockDrift,
   ...themeDrift,
   ...providerContractDrift,
   ...accountFlowDrift,
@@ -280,10 +306,15 @@ const report = {
   themeOnlyApplications,
   missingRepositories,
   unknownIntegrations,
+  updated: {
+    snapshots: updatedSnapshots,
+    packageLocks: updatedPackageLocks,
+  },
   drift: {
     snapshots: snapshotDrift,
     integrations: integrationDrift,
     dependencies: packageDependencyDrift,
+    packageLocks: packageLockDrift,
     themes: themeDrift,
     providers: providerContractDrift,
     accountFlows: accountFlowDrift,

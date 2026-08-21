@@ -9,6 +9,11 @@ Use `GoodOSLoginShell` for the two-panel page structure and
 `GoodOSLoginWidget` for the authentication panel. Do not fork the panel markup
 or authentication behavior inside product repositories.
 
+The shell automatically carries the widget `accent` into the branded half and
+adds the shared ambient sweep and orbit treatment. Product panels still own
+their logo, copy, artwork, and base palette. Motion is disabled when the user
+requests reduced motion.
+
 The authentication side contains one canonical, width-limited login card. The
 card belongs to `GoodOSLoginWidget`; applications must not wrap it in another
 card, add a second width cap, or restyle its controls.

@@ -10,7 +10,7 @@
   "canonicalLogin": {
     "owner": "goodbase",
     "package": "@goodos/topbar-widget",
-    "version": "4.3.0",
+    "version": "4.4.0",
     "sourceDirectory": "vendor/goodos-topbar-widget",
     "requiredComponents": ["GoodOSLoginShell", "GoodOSLoginWidget"],
     "allowedThemeProps": ["accent", "accentInk", "initialMode", "mobileBrand"]
