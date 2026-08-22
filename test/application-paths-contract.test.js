@@ -8,7 +8,7 @@ const manifest = JSON.parse(
   fs.readFileSync(path.join(root, "deploy/application-paths.json"), "utf8")
 );
 const cleanupMigration = fs.readFileSync(
-  path.join(root, "migrations/20260725_remove_retired_goodhub.sql"),
+  path.join(root, "migrations/20260725_remove_retired_goodbackend.sql"),
   "utf8"
 );
 
@@ -100,10 +100,9 @@ test("GoodCustoms, GoodTrusts, and GoodSure use canonical singular domains", () 
 test("retired applications and legacy repositories remain classified", () => {
   assert.deepEqual(
     manifest.retired.map(({ id }) => id),
-    ["goodhub", "goodbackend"]
+    ["goodbackend"]
   );
   assert.ok(manifest.repositoryAliases.length > 0);
-  assert.match(cleanupMigration, /DELETE FROM apps[\s\S]*'goodhub'/);
   assert.match(cleanupMigration, /DELETE FROM apps[\s\S]*'goodbackend'/);
   assert.match(cleanupMigration, /backend\.goodos\.app/);
   assert.match(cleanupMigration, /base\.goodos\.app/);

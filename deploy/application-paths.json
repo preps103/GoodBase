@@ -190,10 +190,6 @@
   ],
   "retired": [
     {
-      "id": "goodhub", "status": "retired", "repositoryUrl": "https://github.com/preps103/GoodHub.git",
-      "forbiddenDomains": ["hub.goodos.app"]
-    },
-    {
       "id": "goodbackend", "status": "retired", "repositoryUrl": "https://github.com/preps103/GoodOSAppBackEnd-1.1.git",
       "forbiddenDomains": ["backend.goodos.app"]
     }

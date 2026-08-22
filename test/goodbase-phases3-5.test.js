@@ -70,7 +70,7 @@ test("canonical Goodbase assets no longer depend on the retired backend hostname
   const retiredHost = ["backend", "goodos", "app"].join(".");
   const allowedRetirementAssets = new Set([
     "migrations/20260724_goodbackend_to_goodbase.sql",
-    "migrations/20260725_remove_retired_goodhub.sql",
+    "migrations/20260725_remove_retired_goodbackend.sql",
     "deploy/application-paths.json",
     "test/goodbase-phases3-5.test.js"
   ]);

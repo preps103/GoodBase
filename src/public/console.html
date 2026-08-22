@@ -1066,10 +1066,13 @@
       min-height: 0;
       display: grid;
       grid-template-columns: minmax(0, 1.08fr) minmax(520px, .92fr);
+      grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
       background: #0f1115;
       color: #0f172a;
     }
+
+    .login > .goodos-project-settings-chart-v107 { display: none !important; }
 
     .login-story {
       position: relative;
@@ -1081,9 +1084,9 @@
       min-height: 0;
       padding: 48px clamp(48px, 6vw, 96px);
       background:
-        linear-gradient(90deg, rgba(2,11,25,.96), rgba(2,11,25,.7) 49%, rgba(2,11,25,.12)),
-        linear-gradient(180deg, rgba(2,11,25,.16), rgba(2,11,25,.42)),
-        url("/login/brand-hero.png") right center / cover no-repeat,
+        radial-gradient(circle at 82% 22%, rgba(34,211,238,.28), transparent 32%),
+        radial-gradient(circle at 22% 86%, rgba(99,102,241,.3), transparent 42%),
+        linear-gradient(145deg, rgba(2,11,25,.98), rgba(4,32,60,.88)),
         #04172f;
       color: #fff;
     }
@@ -1243,6 +1246,12 @@
     #goodbaseLoginWidget .goodos-login-widget__scroll {
       overflow-y: auto;
       overscroll-behavior: contain;
+    }
+
+    #goodbaseLoginWidget .goodos-login-widget__provider {
+      gap: 8px !important;
+      padding-inline: 10px !important;
+      font-size: 12px !important;
     }
 
     .login-card {
@@ -1469,6 +1478,12 @@
       font-size: 14px;
       font-weight: 700;
       box-shadow: 0 10px 30px rgba(0,0,0,.3);
+    }
+
+    .login:not(.hidden) ~ .update-sites-link { display: none; }
+
+    @media (max-width: 440px) {
+      #goodbaseLoginWidget .goodos-login-widget__provider { font-size: 11px !important; }
     }
 
     @media (max-width: 1180px) {
@@ -22736,7 +22751,7 @@ if (!window.__goodosGlobalSearchListenerInstalled) {
 <script src="/backend-ada.js" defer></script>
 <script src="/backend-collapsible-sections.js?v=20260720-1236" defer></script>
 <script src="/app-notification-center.js?v=20260724" defer></script>
-<script src="/goodbase-console-login.js?v=20260820-brand-440" defer></script>
+<script src="/goodbase-console-login.js?v=20260822-brand-442" defer></script>
 
 <!-- GOODOS_UPDATE_SITES_FLOATING_LINK -->
 <a class="update-sites-link" href="/update-sites">Update Sites</a>

@@ -15,8 +15,10 @@ function findProvider(providers, type) {
 }
 
 function installGoodBaseStory() {
-  const brand = document.querySelector("[data-goodbase-login-brand]");
+  const brand = document.querySelector("[data-goodbase-login-brand], .login-story");
   if (!brand) return;
+
+  brand.classList.add("goodbase-story-host");
 
   if (!document.getElementById("goodbase-login-story-css")) {
     const link = document.createElement("link");
@@ -54,6 +56,8 @@ function installGoodBaseStory() {
             <path class="goodbase-network__line goodbase-network__line--two" d="M210 210 C278 150, 320 118, 357 91" />
             <path class="goodbase-network__line goodbase-network__line--three" d="M210 210 C147 270, 105 306, 68 347" />
             <path class="goodbase-network__line goodbase-network__line--four" d="M210 210 C278 270, 319 306, 353 347" />
+            <path class="goodbase-network__line goodbase-network__line--five" d="M210 210 C210 145, 210 88, 210 28" />
+            <path class="goodbase-network__line goodbase-network__line--six" d="M210 210 C210 276, 210 332, 210 392" />
           </svg>
 
           <div class="goodbase-network__core">
@@ -68,6 +72,8 @@ function installGoodBaseStory() {
           <div class="goodbase-network__node goodbase-network__node--scan"><b>3D</b><div><strong>GoodScan</strong><small>Authorized</small></div></div>
           <div class="goodbase-network__node goodbase-network__node--voice"><b>VO</b><div><strong>GoodVoice</strong><small>Authorized</small></div></div>
           <div class="goodbase-network__node goodbase-network__node--trust"><b>TR</b><div><strong>GoodTrusts</strong><small>Authorized</small></div></div>
+          <div class="goodbase-network__node goodbase-network__node--boost"><b>BO</b><div><strong>GoodBoost</strong><small>Realtime connected</small></div></div>
+          <div class="goodbase-network__node goodbase-network__node--fleet"><b>FL</b><div><strong>GoodFleet</strong><small>API connected</small></div></div>
 
           <span class="goodbase-network__pulse goodbase-network__pulse--one"></span>
           <span class="goodbase-network__pulse goodbase-network__pulse--two"></span>
@@ -189,6 +195,12 @@ function GoodBaseConsoleLogin() {
     loading,
     error,
     initialMode: "dark",
+    mobileBrand: React.createElement(
+      "div",
+      { className: "goodbase-mobile" },
+      React.createElement("span", null, "GB"),
+      React.createElement("b", null, "GoodBase", React.createElement("small", null, "Auth · data · APIs")),
+    ),
   });
 }
 

@@ -25,8 +25,8 @@ manifest, plus the GoodBase and GoodID platform services.
 | GoodTrusts | `preps103/GoodTrusts-v1.7` |
 | GoodVoice | `preps103/GoodVoice-v1.3` |
 
-GoodHub and GoodBackend were identified as retired records and are not deployment
-targets. They were not modified or deleted.
+GoodBackend was identified as a retired record and is not a deployment target.
+It was not modified or deleted.
 
 ## Findings
 
@@ -96,4 +96,3 @@ Each application must satisfy all of the following:
 6. The application production build succeeds.
 7. Existing repository tests succeed.
 8. The deployed page exposes a single top-bar widget and a single ADA root.
-

@@ -2,7 +2,7 @@
 
 ## Executive result
 
-The GoodOS hub, GoodBase platform, identity boundary, application registry,
+The GoodOS workspace, GoodBase platform, identity boundary, application registry,
 application-scoped notification API, shared UI assets, database, worker, and all
 14 public product domains are online.
 
@@ -36,7 +36,6 @@ only their compiled output.
 
 - All product, GoodOS, GoodID, GoodBase API, GoodBase HA API, and GoodBase worker
   PM2 processes are online.
-- GoodHub is absent from PM2.
 - All 14 product domains, GoodOS, GoodBase, and GoodID return HTTP `200` with
   valid TLS.
 - GoodBase `/health` and `/api/health` return `200`.
@@ -83,16 +82,13 @@ only their compiled output.
   payloads.
 - Ten legacy notifications without an explicit application ID are safely
   normalized to `goodos`, keeping them in the GoodOS master scope.
-- GoodHub remains disabled for historical integrity and has zero memberships.
-- GoodOS displays 14 product cards and excludes both GoodOS and GoodHub from its
-  own application catalog.
+- GoodOS displays 14 product cards and excludes GoodOS from its own application
+  catalog.
 - The GoodOS master notification center is live and aggregates only accessible
   application data.
 
 ## Remediation performed during this audit
 
-- Removed the remaining `hub.goodos.app` Nginx route and TLS certificate.
-- Removed the remaining disabled-GoodHub membership.
 - Corrected GoodOS's public static deployment target; the verified build is now
   served by Nginx.
 - Corrected the GoodOS CSP so `base.goodos.app` can provide the shared ADA
@@ -122,8 +118,8 @@ callback configuration are installed.
 
 ### Retired DNS records
 
-Origin routes and certificates for the retired backend and GoodHub hostnames
-are retired, but the DNS records still resolve through Cloudflare. They must be
+Origin routes and certificates for the retired backend hostname are retired,
+but the DNS record still resolves through Cloudflare. It must be
 deleted at the DNS provider to complete domain retirement.
 
 ## Post-deployment verification
