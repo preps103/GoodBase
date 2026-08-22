@@ -41,6 +41,13 @@ async function api(path, options = {}) {
   return body.data || body;
 }
 
+function accountUrl(mode) {
+  const url = new URL("/auth/ui", window.location.origin);
+  if (mode !== "login") url.searchParams.set("mode", mode);
+  url.searchParams.set("redirect", `${window.location.origin}/`);
+  return url.toString();
+}
+
 function GoodBaseConsoleLogin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -101,19 +108,13 @@ function GoodBaseConsoleLogin() {
     onPasswordChange: setPassword,
     onSubmit: submit,
     onProviderSignIn: startProvider,
-    onGoodOSSignIn: () => {
-      const returnTo = encodeURIComponent(`${window.location.origin}/`);
-      window.location.assign(`https://goodos.app/?returnTo=${returnTo}`);
-    },
+    onGoodOSSignIn: () => window.location.assign(accountUrl("login")),
     providerAvailability,
-    onForgotPassword: () => window.location.assign("/auth/ui?mode=forgot"),
-    onCreateAccount: () => window.location.assign("/register?returnTo=%2F"),
+    onForgotPassword: () => window.location.assign(accountUrl("forgot")),
+    onCreateAccount: () => window.location.assign(accountUrl("register")),
     loading,
     error,
     initialMode: "dark",
-    emailPlaceholder: "you@company.com",
-    securityTitle: "Authentication and account security are managed through GoodBase.",
-    securityDescription: "Use the same GoodOS identity across GoodBase and every approved GoodOS application.",
   });
 }
 
