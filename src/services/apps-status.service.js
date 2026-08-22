@@ -111,6 +111,28 @@ function approvedHealthUrl(value) {
   return url.toString();
 }
 
+function applicationHealthUrl(app) {
+  // Sites applications are considered available when their published,
+  // canonical frontend is reachable. Database health URLs can outlive an old
+  // deployment and must not make a healthy Sites frontend appear offline.
+  if (
+    app.deploymentType ===
+      "sites" &&
+    app.domain
+  ) {
+    return `https://${app.domain}`;
+  }
+
+  return (
+    app.healthUrl ||
+    (
+      app.domain
+        ? `https://${app.domain}`
+        : ""
+    )
+  );
+}
+
 function parsePm2Payload(rawValue) {
   const raw =
     String(rawValue || "")
@@ -603,11 +625,8 @@ async function buildLiveStatus() {
     await Promise.all(
       apps.map((app) =>
         checkHealth(
-          app.healthUrl ||
-          (
-            app.domain
-              ? `https://${app.domain}`
-              : ""
+          applicationHealthUrl(
+            app
           )
         )
       )
@@ -845,6 +864,7 @@ async function getLiveAppsStatus({
 }
 
 module.exports = {
+  applicationHealthUrl,
   deriveStatus,
   getLiveAppsStatus,
   isReachableHttpStatus,

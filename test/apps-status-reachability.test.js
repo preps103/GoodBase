@@ -4,9 +4,30 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  applicationHealthUrl,
   deriveStatus,
   isReachableHttpStatus,
 } = require("../src/services/apps-status.service");
+
+test("Sites health checks use the canonical published application URL", () => {
+  assert.equal(
+    applicationHealthUrl({
+      deploymentType: "sites",
+      domain: "supply.goodos.app",
+      healthUrl: "https://supply.goodos.app/api/ready",
+    }),
+    "https://supply.goodos.app"
+  );
+
+  assert.equal(
+    applicationHealthUrl({
+      deploymentType: "sites",
+      domain: "trust.goodos.app",
+      healthUrl: "https://trust.goodos.app/api/ready",
+    }),
+    "https://trust.goodos.app"
+  );
+});
 
 test("health monitoring treats authentication gates as reachable", () => {
   assert.equal(isReachableHttpStatus(200), true);
