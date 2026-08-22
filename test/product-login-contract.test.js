@@ -123,3 +123,11 @@ test("canonical brand treatment gives product stories distinct motion without ch
   assert.match(sharedWidget, /url\("\/login\/brand-hero\.png"\)/);
   assert.match(sharedWidget, /@media\(prefers-reduced-motion:reduce\)/);
 });
+
+test("GoodBase console login uses its updated static platform artwork", () => {
+  const consoleHtml = fs.readFileSync(path.join(__dirname, "..", "src/public/console.html"), "utf8");
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "src/public/login/brand-hero.png")), true);
+  assert.match(consoleHtml, /url\("\/login\/brand-hero\.png"\) right center \/ cover no-repeat/);
+  assert.match(authUi, /url\("\/login\/brand-hero\.png"\) right center\/cover no-repeat/);
+  assert.doesNotMatch(consoleHtml, /login-story[^}]*animation:/);
+});
