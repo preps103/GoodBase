@@ -14,6 +14,76 @@ function findProvider(providers, type) {
   return providers.find((provider) => aliases.includes(String(provider.provider_type || "").toLowerCase()));
 }
 
+function installGoodBaseStory() {
+  const brand = document.querySelector("[data-goodbase-login-brand]");
+  if (!brand) return;
+
+  if (!document.getElementById("goodbase-login-story-css")) {
+    const link = document.createElement("link");
+    link.id = "goodbase-login-story-css";
+    link.rel = "stylesheet";
+    link.href = "/goodbase-login-story.css";
+    document.head.appendChild(link);
+  }
+
+  brand.innerHTML = `
+    <section class="goodbase-story" aria-label="GoodBase platform overview">
+      <div class="goodbase-story__grid" aria-hidden="true"></div>
+      <header class="goodbase-story__brand">
+        <span class="goodbase-story__brand-mark">GB</span>
+        <div><strong>GoodBase</strong><small>GoodOS infrastructure</small></div>
+        <span class="goodbase-story__goodos">Core platform</span>
+      </header>
+
+      <div class="goodbase-story__body">
+        <div class="goodbase-story__copy">
+          <div class="goodbase-story__eyebrow">Platform control plane</div>
+          <h1>One secure foundation. <span>Every GoodOS application connected.</span></h1>
+          <p>Identity, application access, APIs, data services, and production operations all meet in GoodBase.</p>
+          <div class="goodbase-story__proof-list">
+            <span><i></i> Shared GoodOS authentication</span>
+            <span><i></i> Application authorization and sessions</span>
+            <span><i></i> Production data and service control</span>
+          </div>
+        </div>
+
+        <div class="goodbase-network" aria-hidden="true">
+          <div class="goodbase-network__halo"></div>
+          <svg class="goodbase-network__lines" viewBox="0 0 420 420" preserveAspectRatio="none">
+            <path class="goodbase-network__line goodbase-network__line--one" d="M210 210 C145 150, 105 120, 64 92" />
+            <path class="goodbase-network__line goodbase-network__line--two" d="M210 210 C278 150, 320 118, 357 91" />
+            <path class="goodbase-network__line goodbase-network__line--three" d="M210 210 C147 270, 105 306, 68 347" />
+            <path class="goodbase-network__line goodbase-network__line--four" d="M210 210 C278 270, 319 306, 353 347" />
+          </svg>
+
+          <div class="goodbase-network__core">
+            <div class="goodbase-network__core-ring"></div>
+            <span class="goodbase-network__core-mark">GB</span>
+            <strong>GoodBase</strong>
+            <small>Auth · Data · APIs</small>
+            <div class="goodbase-network__status"><i></i> Systems online</div>
+          </div>
+
+          <div class="goodbase-network__node goodbase-network__node--qr"><b>QR</b><div><strong>GoodQR</strong><small>Authorized</small></div></div>
+          <div class="goodbase-network__node goodbase-network__node--scan"><b>3D</b><div><strong>GoodScan</strong><small>Authorized</small></div></div>
+          <div class="goodbase-network__node goodbase-network__node--voice"><b>VO</b><div><strong>GoodVoice</strong><small>Authorized</small></div></div>
+          <div class="goodbase-network__node goodbase-network__node--trust"><b>TR</b><div><strong>GoodTrusts</strong><small>Authorized</small></div></div>
+
+          <span class="goodbase-network__pulse goodbase-network__pulse--one"></span>
+          <span class="goodbase-network__pulse goodbase-network__pulse--two"></span>
+          <span class="goodbase-network__pulse goodbase-network__pulse--three"></span>
+        </div>
+      </div>
+
+      <footer class="goodbase-story__footer">
+        <div><strong>Identity</strong><small>Shared sign-in</small></div>
+        <div><strong>Authorization</strong><small>App access</small></div>
+        <div><strong>Infrastructure</strong><small>Production core</small></div>
+      </footer>
+    </section>
+  `;
+}
+
 async function api(path, options = {}) {
   const requestOptions = {
     ...options,
@@ -54,6 +124,10 @@ function GoodBaseConsoleLogin() {
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    installGoodBaseStory();
+  }, []);
 
   useEffect(() => {
     let active = true;
