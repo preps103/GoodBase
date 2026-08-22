@@ -235,7 +235,35 @@ async function loadPm2Statuses() {
   );
 }
 
-async function checkHealth(value) {
+function healthProbeUrl(
+  healthUrl,
+  {
+    cacheBust = true,
+  } = {}
+) {
+  const probeUrl =
+    new URL(healthUrl);
+
+  // Some static Sites frontends intentionally serve only the canonical root
+  // URL and return 404 when an arbitrary query string is added. The no-cache
+  // request header is enough for those published frontends; API health routes
+  // keep the timestamp query so their responses cannot be reused by a proxy.
+  if (cacheBust) {
+    probeUrl.searchParams.set(
+      "_goodos_status",
+      String(Date.now())
+    );
+  }
+
+  return probeUrl;
+}
+
+async function checkHealth(
+  value,
+  {
+    cacheBust = true,
+  } = {}
+) {
   const healthUrl =
     approvedHealthUrl(value);
 
@@ -251,12 +279,10 @@ async function checkHealth(value) {
   }
 
   const probeUrl =
-    new URL(healthUrl);
-
-  probeUrl.searchParams.set(
-    "_goodos_status",
-    String(Date.now())
-  );
+    healthProbeUrl(
+      healthUrl,
+      { cacheBust }
+    );
 
   const controller =
     new AbortController();
@@ -627,7 +653,12 @@ async function buildLiveStatus() {
         checkHealth(
           applicationHealthUrl(
             app
-          )
+          ),
+          {
+            cacheBust:
+              app.deploymentType !==
+              "sites",
+          }
         )
       )
     );
@@ -867,5 +898,6 @@ module.exports = {
   applicationHealthUrl,
   deriveStatus,
   getLiveAppsStatus,
+  healthProbeUrl,
   isReachableHttpStatus,
 };

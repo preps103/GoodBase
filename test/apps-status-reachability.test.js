@@ -6,6 +6,7 @@ const test = require("node:test");
 const {
   applicationHealthUrl,
   deriveStatus,
+  healthProbeUrl,
   isReachableHttpStatus,
 } = require("../src/services/apps-status.service");
 
@@ -26,6 +27,23 @@ test("Sites health checks use the canonical published application URL", () => {
       healthUrl: "https://trust.goodos.app/api/ready",
     }),
     "https://trust.goodos.app"
+  );
+});
+
+test("Sites probes preserve the exact canonical URL", () => {
+  assert.equal(
+    healthProbeUrl(
+      "https://trust.goodos.app",
+      { cacheBust: false }
+    ).toString(),
+    "https://trust.goodos.app/"
+  );
+
+  assert.match(
+    healthProbeUrl(
+      "https://base.goodos.app/api/health/ready"
+    ).search,
+    /^\?_goodos_status=\d+$/
   );
 });
 
