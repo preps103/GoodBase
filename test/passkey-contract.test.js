@@ -18,6 +18,9 @@ test("GoodBase exposes durable, user-verified passkey ceremonies", () => {
   assert.match(routes, /\/passkeys\/authentication\/options/);
   assert.match(routes, /\/passkeys\/authentication\/verify/);
   assert.match(service, /residentKey:\s*"required"/);
+  assert.match(service, /authenticatorAttachment:\s*"platform"/);
+  assert.match(service, /timeout:\s*60_000/);
+  assert.match(service, /https:\/\/voice\.goodos\.app/);
   assert.match(service, /userVerification:\s*"required"/);
   assert.match(service, /requireUserVerification:\s*true/);
   assert.match(service, /consumed_at = NOW\(\)/);

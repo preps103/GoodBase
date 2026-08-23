@@ -10,12 +10,14 @@ const {
 const RP_ID = String(process.env.GOODOS_PASSKEY_RP_ID || "goodos.app").trim().toLowerCase();
 const RP_NAME = "GoodOS";
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-const EXPECTED_ORIGINS = String(
-  process.env.GOODOS_PASSKEY_ORIGINS || "https://goodos.app"
-)
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
+const EXPECTED_ORIGINS = Array.from(new Set([
+  "https://goodos.app",
+  "https://voice.goodos.app",
+  ...String(process.env.GOODOS_PASSKEY_ORIGINS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+]));
 
 let webAuthnModule;
 
@@ -86,6 +88,7 @@ async function registrationOptions(user) {
   const options = await generateRegistrationOptions({
     rpID: RP_ID,
     rpName: RP_NAME,
+    timeout: 60_000,
     userID: Buffer.from(user.id, "utf8"),
     userName: user.email,
     userDisplayName: user.displayName || user.email,
@@ -96,6 +99,7 @@ async function registrationOptions(user) {
       transports: credential.transports_json || [],
     })),
     authenticatorSelection: {
+      authenticatorAttachment: "platform",
       residentKey: "required",
       userVerification: "required",
     },
