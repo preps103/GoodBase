@@ -194,7 +194,7 @@ function GoodBaseConsoleLogin() {
     onCreateAccount: () => window.location.assign(accountUrl("register")),
     loading,
     error,
-    initialMode: "dark",
+    initialMode: "light",
     mobileBrand: React.createElement(
       "div",
       { className: "goodbase-mobile" },
