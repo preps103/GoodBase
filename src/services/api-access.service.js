@@ -1474,6 +1474,96 @@ async function revokeKeyForUser(
   );
 }
 
+async function deleteRevokedKeyForUser(
+  userId,
+  keyId,
+  requestMeta = {}
+) {
+  const context =
+    await requireManageContext(
+      userId
+    );
+
+  const current =
+    await findManagedKey(
+      context.organizationId,
+      keyId
+    );
+
+  if (
+    effectiveStatus(current) !==
+    "revoked"
+  ) {
+    throw serviceError(
+      "Only a revoked API key can be permanently deleted.",
+      409
+    );
+  }
+
+  const result =
+    await dbQuery(
+      `
+        DELETE FROM backend_api_keys
+
+        WHERE id = $1
+
+          AND COALESCE(
+            organization_id,
+            'org_goodos'
+          ) = $2
+
+          AND (
+            status = 'revoked'
+            OR revoked_at IS NOT NULL
+          )
+
+        RETURNING
+          id,
+          name,
+          key_prefix AS "keyPrefix"
+      `,
+      [
+        keyId,
+        context.organizationId,
+      ]
+    );
+
+  if (!result.rows[0]) {
+    throw serviceError(
+      "Revoked API key was not found.",
+      404
+    );
+  }
+
+  await logAudit({
+    userId,
+    appId: "goodos",
+    action:
+      "api_key.deleted",
+    entityType:
+      "api_key",
+    entityId: keyId,
+    ipAddress:
+      requestMeta.ipAddress ||
+      null,
+    metadata: {
+      organizationId:
+        context.organizationId,
+      name:
+        result.rows[0].name,
+      keyPrefix:
+        result.rows[0].keyPrefix,
+      previousStatus:
+        "revoked",
+    },
+  });
+
+  return {
+    id: result.rows[0].id,
+    name: result.rows[0].name,
+  };
+}
+
 async function rotateKeyForUser(
   userId,
   keyId,
@@ -1703,5 +1793,6 @@ module.exports = {
   createKeyForUser,
   updateKeyForUser,
   revokeKeyForUser,
+  deleteRevokedKeyForUser,
   rotateKeyForUser,
 };

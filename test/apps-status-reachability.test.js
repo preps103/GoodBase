@@ -83,6 +83,19 @@ test("Sites frontends are evaluated by HTTPS instead of a PM2 process", () => {
       app,
       null,
       {
+        url: "https://scan.goodos.app/",
+        ok: true,
+        responseMs: 5076,
+      }
+    ),
+    "online",
+    "a single successful Sites cold start must not create a degraded alert"
+  );
+  assert.equal(
+    deriveStatus(
+      app,
+      null,
+      {
         url: "https://supply.goodos.app/",
         ok: false,
         responseMs: 120,

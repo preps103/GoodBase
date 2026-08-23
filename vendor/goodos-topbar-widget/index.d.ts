@@ -6,7 +6,7 @@ import type {
 } from "react";
 
 export declare const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.4.0";
+export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.5.0";
 export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 
@@ -88,6 +88,9 @@ export interface GoodOSLoginWidgetProps extends SharedProps {
   onSubmit?: (event: FormEvent<HTMLFormElement>) => void;
   onProviderSignIn?: (provider: GoodOSIdentityProvider) => void;
   onGoodOSSignIn?: () => void;
+  passkeyAvailable?: boolean;
+  passkeyLoading?: boolean;
+  onPasskeySignIn?: () => void;
   providerAvailability?: Partial<Record<GoodOSIdentityProvider, boolean>>;
   onForgotPassword?: () => void;
   onCreateAccount?: () => void;

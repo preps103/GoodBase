@@ -300,6 +300,43 @@ router.post(
   }
 );
 
+router.delete(
+  "/keys/:keyId",
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const apiKey =
+        await apiAccessService
+          .deleteRevokedKeyForUser(
+            req.user.id,
+            String(
+              req.params.keyId
+            ),
+            {
+              ipAddress:
+                req.ip,
+            }
+          );
+
+      return ok(res, {
+        apiKey,
+        message:
+          "Revoked API key permanently deleted.",
+      });
+    } catch (
+      requestError
+    ) {
+      return fail(
+        res,
+        requestError,
+        "Failed to delete revoked API key."
+      );
+    }
+  }
+);
+
 router.post(
   "/keys/:keyId/rotate",
   async (

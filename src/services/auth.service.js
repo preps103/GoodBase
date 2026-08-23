@@ -125,7 +125,13 @@ async function createSession({ userId, token, ipAddress, userAgent }) {
   return result.rows[0];
 }
 
-async function issueSessionForUser({ user, ipAddress, userAgent, authMethod = "password" }) {
+async function issueSessionForUser({
+  user,
+  ipAddress,
+  userAgent,
+  authMethod = "password",
+  mfaVerified = false,
+}) {
   if (!user || user.status !== "active" || !user.email_verified) {
     const err = new Error("Account is not eligible for sign in.");
     err.statusCode = 403;
@@ -146,7 +152,10 @@ async function issueSessionForUser({ user, ipAddress, userAgent, authMethod = "p
     { expiresIn: env.jwtExpiresIn }
   );
   const session = await createSession({ userId: user.id, token, ipAddress, userAgent });
-  await query(`UPDATE sessions SET auth_level=$2 WHERE id=$1`, [session.id, authMethod]);
+  await query(
+    `UPDATE sessions SET auth_level=$2, mfa_verified=$3 WHERE id=$1`,
+    [session.id, authMethod, Boolean(mfaVerified)]
+  );
   await query(`UPDATE users SET last_login_at=NOW() WHERE id=$1`, [user.id]);
 
   return {
@@ -155,7 +164,7 @@ async function issueSessionForUser({ user, ipAddress, userAgent, authMethod = "p
       id: session.id,
       expiresAt: session.expires_at,
       authLevel: authMethod,
-      mfaVerified: session.mfa_verified
+      mfaVerified: Boolean(mfaVerified || session.mfa_verified)
     },
     user: publicUser(user),
     apps: await getUserApps(user.id)

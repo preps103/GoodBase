@@ -196,6 +196,44 @@ router.get(
   }
 );
 
+router.put(
+  "/application-access/:targetUserId",
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const access =
+        await rolesService
+          .replaceApplicationAccessForUser(
+            req.user.id,
+            String(
+              req.params.targetUserId
+            ),
+            req.body || {},
+            {
+              ipAddress:
+                req.ip,
+            }
+          );
+
+      return ok(res, {
+        access,
+        message:
+          "Application access saved.",
+      });
+    } catch (
+      requestError
+    ) {
+      return fail(
+        res,
+        requestError,
+        "Failed to save application access."
+      );
+    }
+  }
+);
+
 router.post(
   "/roles",
   async (

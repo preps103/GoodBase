@@ -3,13 +3,13 @@ import {
   cloneElement,
   createElement,
   isValidElement,
-  useId,
+  useEffect,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.4.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.5.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 
@@ -162,6 +162,15 @@ export function GoodOSTopBarWidget(props) {
     typeof document === "undefined"
       ? instrumentedBar
       : createPortal(instrumentedBar, document.body);
+  const mountedProfile =
+    typeof document === "undefined"
+      ? null
+      : createPortal(
+          createElement(UniversalProfileMenu, {
+            appName: props.appName || "GoodOS",
+          }),
+          document.body,
+        );
 
   return createElement(
     Fragment,
@@ -173,6 +182,97 @@ export function GoodOSTopBarWidget(props) {
       "aria-hidden": "true",
     }),
     mountedBar,
+    mountedProfile,
+  );
+}
+
+const profileMenuCss = String.raw`
+.goodos-universal-profile{position:fixed;z-index:2147483002;top:19px;right:20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e5e7eb}
+.goodos-universal-profile__trigger{display:grid;width:42px;height:42px;padding:0;overflow:hidden;place-items:center;border:2px solid rgba(255,255,255,.86);border-radius:50%;background:linear-gradient(135deg,#6366f1,#06b6d4);color:#fff;cursor:pointer;font:inherit;font-size:13px;font-weight:850;box-shadow:0 4px 14px rgba(15,23,42,.28)}
+.goodos-universal-profile__trigger img{width:100%;height:100%;object-fit:cover}
+.goodos-universal-profile__menu{position:absolute;top:50px;right:0;width:250px;padding:10px;border:1px solid rgba(148,163,184,.24);border-radius:16px;background:rgba(15,23,42,.98);box-shadow:0 24px 64px rgba(0,0,0,.38);backdrop-filter:blur(18px)}
+.goodos-universal-profile__identity{display:block;padding:10px 10px 12px;border-bottom:1px solid rgba(148,163,184,.16)}
+.goodos-universal-profile__identity strong,.goodos-universal-profile__identity span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.goodos-universal-profile__identity strong{font-size:14px}.goodos-universal-profile__identity span{margin-top:3px;color:#94a3b8;font-size:11px}
+.goodos-universal-profile__signout{display:flex;width:100%;min-height:42px;align-items:center;gap:9px;margin-top:8px;padding:0 11px;border:0;border-radius:10px;background:transparent;color:#fca5a5;cursor:pointer;font:inherit;font-size:13px;font-weight:800;text-align:left}.goodos-universal-profile__signout:hover{background:rgba(239,68,68,.12)}.goodos-universal-profile__signout:disabled{cursor:wait;opacity:.6}
+@media(max-width:620px){.goodos-universal-profile{top:15px;right:14px}.goodos-universal-profile__trigger{width:38px;height:38px}.goodos-universal-profile__menu{top:46px;width:min(250px,calc(100vw - 28px))}}
+`;
+
+function UniversalProfileMenu({ appName }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [profile, setProfile] = useState(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cached = null;
+    for (const key of ["goodos_current_user", "goodtrusts_user"]) {
+      try {
+        cached = JSON.parse(window.localStorage.getItem(key) || "null");
+      } catch {
+        cached = null;
+      }
+      if (cached?.email) break;
+    }
+    if (cached) setProfile(cached);
+
+    const token = ["goodos_token", "goodos_auth_token", "auth_token", "goodtrusts_token", "token"]
+      .map((key) => window.localStorage.getItem(key))
+      .find(Boolean);
+    void fetch(`${GOODOS_AUTH_ORIGIN}/api/auth/me`, {
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => payload?.user && setProfile(payload.user))
+      .catch(() => {});
+  }, []);
+
+  const displayName = profile?.displayName || [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.email || appName;
+  const initials = String(displayName || "G").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+  const avatarUrl = profile?.avatarUrl || profile?.avatar_url || null;
+
+  const signOut = async () => {
+    if (typeof window === "undefined") return;
+    setBusy(true);
+    const token = ["goodos_token", "goodos_auth_token", "auth_token", "goodtrusts_token", "token"]
+      .map((key) => window.localStorage.getItem(key))
+      .find(Boolean);
+    try {
+      await fetch(`${GOODOS_AUTH_ORIGIN}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+    } catch {
+      // Local credentials are still removed so a failed network cannot trap the user.
+    }
+    for (const key of ["goodos_token", "goodos_auth_token", "goodos_current_user", "goodos_current_apps", "auth_token", "goodtrusts_token", "goodtrusts_user", "token", "isAuthenticated"]) {
+      window.localStorage.removeItem(key);
+    }
+    window.location.replace(`${window.location.origin}/?signed_out=1`);
+  };
+
+  return createElement(
+    "div",
+    { className: "goodos-universal-profile", "data-goodos-profile-menu": "" },
+    createElement("style", null, profileMenuCss),
+    createElement(
+      "button",
+      { type: "button", className: "goodos-universal-profile__trigger", onClick: () => setOpen((value) => !value), "aria-label": "Open user profile menu", "aria-expanded": open },
+      avatarUrl ? createElement("img", { src: avatarUrl, alt: "" }) : initials,
+    ),
+    open && createElement(
+      "div",
+      { className: "goodos-universal-profile__menu", role: "menu" },
+      createElement("span", { className: "goodos-universal-profile__identity" }, createElement("strong", null, displayName), createElement("span", null, profile?.email || "GoodOS account")),
+      createElement("button", { type: "button", role: "menuitem", className: "goodos-universal-profile__signout", disabled: busy, onClick: signOut }, createElement("span", { "aria-hidden": "true" }, "↪"), busy ? "Signing out…" : "Sign out"),
+    ),
   );
 }
 
@@ -252,10 +352,13 @@ const loginWidgetCss = String.raw`
 .goodos-login-widget__provider:disabled{cursor:not-allowed;opacity:.52}
 .goodos-login-widget__provider--goodos{color:var(--goodos-login-text)}
 .goodos-login-widget__provider--goodos:hover{border-color:var(--goodos-login-accent);background:color-mix(in srgb,var(--goodos-login-tile) 84%,var(--goodos-login-accent))}
+.goodos-login-widget__provider--passkey{grid-column:1/-1;border-color:color-mix(in srgb,var(--goodos-login-accent) 42%,var(--goodos-login-border));background:color-mix(in srgb,var(--goodos-login-tile) 91%,var(--goodos-login-accent));color:var(--goodos-login-text)}
+.goodos-login-widget__provider--passkey:hover{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 12%,transparent)}
 .goodos-login-widget__provider-mark{display:grid;width:28px;height:28px;flex:0 0 28px;place-items:center;border:1px solid #e2e8f0;border-radius:8px;background:#fff;font-size:15px;font-weight:850}
 .goodos-login-widget__provider-mark--google{color:#4285f4}
 .goodos-login-widget__provider-mark--apple{color:#475569;font-size:12px}
 .goodos-login-widget__provider-mark--goodos{border:0;background:transparent;color:var(--goodos-login-accent);font-size:22px}
+.goodos-login-widget__provider-mark--passkey{border-color:color-mix(in srgb,var(--goodos-login-accent) 45%,#e2e8f0);color:var(--goodos-login-accent);font-size:18px}
 .goodos-login-widget__microsoft{display:grid;grid-template-columns:repeat(2,7px);grid-template-rows:repeat(2,7px);gap:2px}
 .goodos-login-widget__microsoft i{width:7px;height:7px}.goodos-login-widget__microsoft i:nth-child(1){background:#f25022}.goodos-login-widget__microsoft i:nth-child(2){background:#7fba00}.goodos-login-widget__microsoft i:nth-child(3){background:#00a4ef}.goodos-login-widget__microsoft i:nth-child(4){background:#ffb900}
 .goodos-login-widget__divider{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;margin:22px 0;color:#94a3b8;font-size:10px;font-weight:800;letter-spacing:.15em}
@@ -364,7 +467,7 @@ function ProviderMark({ provider }) {
     );
   }
 
-  const label = provider === "google" ? "G" : provider === "apple" ? "●" : "◇";
+  const label = provider === "google" ? "G" : provider === "apple" ? "●" : provider === "passkey" ? "◎" : "◇";
   return createElement(
     "span",
     {
@@ -375,7 +478,7 @@ function ProviderMark({ provider }) {
   );
 }
 
-function ProviderButton({ provider, label, disabled, onClick, goodos = false }) {
+function ProviderButton({ provider, label, disabled, onClick, goodos = false, passkey = false }) {
   return createElement(
     "button",
     {
@@ -383,6 +486,7 @@ function ProviderButton({ provider, label, disabled, onClick, goodos = false }) 
       className: classes(
         "goodos-login-widget__provider",
         goodos && "goodos-login-widget__provider--goodos",
+        passkey && "goodos-login-widget__provider--passkey",
       ),
       disabled,
       onClick,
@@ -409,6 +513,9 @@ export function GoodOSLoginWidget({
   onSubmit,
   onProviderSignIn,
   onGoodOSSignIn,
+  passkeyAvailable = false,
+  passkeyLoading = false,
+  onPasskeySignIn,
   providerAvailability = {},
   onForgotPassword,
   onCreateAccount,
@@ -429,8 +536,9 @@ export function GoodOSLoginWidget({
   if (!appName) throw new Error("GoodOSLoginWidget requires appName.");
   const [mode, setMode] = useState(initialMode);
   const [showPassword, setShowPassword] = useState(false);
-  const emailId = useId();
-  const passwordId = useId();
+  const loginId = `${String(appName).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-goodos-login`;
+  const emailId = `${loginId}-username`;
+  const passwordId = `${loginId}-password`;
   const isLight = mode === "light";
   const providerLabels = {
     google: "Sign in with Google",
@@ -495,7 +603,15 @@ export function GoodOSLoginWidget({
           { className: "goodos-login-widget__inner" },
           createElement(
             "form",
-            { className: "goodos-login-widget__card", onSubmit: submit, "data-goodbase-login-card": "" },
+            {
+              id: loginId,
+              name: loginId,
+              method: "post",
+              autoComplete: "on",
+              className: "goodos-login-widget__card",
+              onSubmit: submit,
+              "data-goodbase-login-card": "",
+            },
             createElement(
               "div",
               { className: "goodos-login-widget__heading" },
@@ -505,7 +621,14 @@ export function GoodOSLoginWidget({
             ),
             createElement(
               "div",
-              { className: "goodos-login-widget__providers", "data-goodbase-login-providers": "", "aria-label": "Social sign-in providers" },
+              { className: "goodos-login-widget__providers", "data-goodbase-login-providers": "", "aria-label": "Sign-in options" },
+              passkeyAvailable && createElement(ProviderButton, {
+                provider: "passkey",
+                label: passkeyLoading ? "Waiting for your passkey…" : "Use Touch ID or passkey",
+                disabled: loading || passkeyLoading,
+                passkey: true,
+                onClick: onPasskeySignIn,
+              }),
               ...["google", "apple", "microsoft"].map((provider) =>
                 createElement(ProviderButton, {
                   key: provider,
@@ -534,9 +657,14 @@ export function GoodOSLoginWidget({
                 createElement("span", { "aria-hidden": "true" }, "✉"),
                 createElement("input", {
                   id: emailId,
+                  name: "username",
                   className: "goodos-login-widget__input",
                   type: "email",
-                  autoComplete: "email",
+                  inputMode: "email",
+                  autoComplete: "username",
+                  autoCapitalize: "none",
+                  spellCheck: false,
+                  enterKeyHint: "next",
                   value: email,
                   onChange: (event) => onEmailChange?.(event.target.value, event),
                   placeholder: emailPlaceholder,
@@ -560,9 +688,11 @@ export function GoodOSLoginWidget({
                 createElement("span", { "aria-hidden": "true" }, "▣"),
                 createElement("input", {
                   id: passwordId,
+                  name: "password",
                   className: "goodos-login-widget__input",
                   type: showPassword ? "text" : "password",
                   autoComplete: "current-password",
+                  enterKeyHint: "go",
                   value: password,
                   onChange: (event) => onPasswordChange?.(event.target.value, event),
                   placeholder: passwordPlaceholder,

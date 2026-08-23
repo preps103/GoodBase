@@ -409,14 +409,10 @@ function deriveStatus(
       return "offline";
     }
 
-    return (
-      health.responseMs !==
-        null &&
-      health.responseMs >
-        1500
-    )
-      ? "degraded"
-      : "online";
+    // A published Sites frontend is healthy when its canonical HTTPS URL is
+    // reachable. A single edge cold start is still recorded in responseMs,
+    // but must not turn a successful HTTP probe into a false outage signal.
+    return "online";
   }
 
   if (

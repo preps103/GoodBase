@@ -16,6 +16,13 @@ const {
   revokeAllUserSessions,
   listUserSessions
 } = require("../services/auth.service");
+const {
+  authenticationOptions: passkeyAuthenticationOptions,
+  listPasskeys,
+  registrationOptions: passkeyRegistrationOptions,
+  verifyAuthentication: verifyPasskeyAuthentication,
+  verifyRegistration: verifyPasskeyRegistration,
+} = require("../services/passkey.service");
 const { logAudit } = require("../services/audit.service");
 const authRequired = require("../middleware/authRequired");
 const database = require("../config/database");
@@ -338,6 +345,17 @@ const loginLimiter = rateLimit({
   message: {
     success: false,
     message: "Too many login attempts. Please try again later."
+  }
+});
+
+const passkeyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many passkey attempts. Please try again later."
   }
 });
 
@@ -1101,6 +1119,93 @@ router.post("/login", loginLimiter, async (req, res) => {
     });
 
     return error(res, err.message || "Login failed", err.statusCode || 500);
+  }
+});
+
+router.get("/passkeys", authRequired, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const passkeys = await listPasskeys(req.user.id);
+    return success(res, { passkeys, count: passkeys.length });
+  } catch (err) {
+    console.error("Passkey listing failed:", err.message);
+    return error(res, "Passkeys could not be loaded.", 500);
+  }
+});
+
+router.post("/passkeys/registration/options", passkeyLimiter, authRequired, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    return success(res, await passkeyRegistrationOptions(req.user));
+  } catch (err) {
+    console.error("Passkey registration options failed:", err.message);
+    return error(res, err.message || "Passkey setup could not begin.", err.statusCode || 500);
+  }
+});
+
+router.post("/passkeys/registration/verify", passkeyLimiter, authRequired, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const passkey = await verifyPasskeyRegistration({
+      user: req.user,
+      challengeId: req.body?.challengeId,
+      response: req.body?.response,
+      label: req.body?.label,
+    });
+    await logAudit({
+      userId: req.user.id,
+      action: "auth.passkey_registered",
+      entityType: "passkey",
+      entityId: passkey.id,
+      ipAddress: req.ip,
+      metadata: { label: passkey.label, backedUp: passkey.backedUp },
+    }).catch(() => {});
+    return success(res, { verified: true, passkey });
+  } catch (err) {
+    console.error("Passkey registration verification failed:", err.message);
+    return error(res, err.message || "Passkey could not be saved.", err.statusCode || 400);
+  }
+});
+
+router.post("/passkeys/authentication/options", passkeyLimiter, async (_req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    return success(res, await passkeyAuthenticationOptions());
+  } catch (err) {
+    console.error("Passkey authentication options failed:", err.message);
+    return error(res, "Passkey sign-in could not begin.", 500);
+  }
+});
+
+router.post("/passkeys/authentication/verify", passkeyLimiter, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const result = await verifyPasskeyAuthentication({
+      challengeId: req.body?.challengeId,
+      response: req.body?.response,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+    setAuthCookie(res, result.token);
+    await logAudit({
+      userId: result.user.id,
+      action: "auth.passkey_login",
+      entityType: "session",
+      entityId: result.session.id,
+      ipAddress: req.ip,
+      metadata: { userAgent: req.headers["user-agent"] || null },
+    }).catch(() => {});
+    return success(res, {
+      message: "Passkey verified",
+      verified: true,
+      token: result.token,
+      session: result.session,
+      user: result.user,
+      apps: result.apps,
+    });
+  } catch (err) {
+    console.error("Passkey authentication verification failed:", err.message);
+    return error(res, "Passkey could not be verified. Use your password for recovery.", err.statusCode || 401);
   }
 });
 

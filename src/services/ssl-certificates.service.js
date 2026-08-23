@@ -18,6 +18,26 @@ const {
   query,
 } = require("../config/database");
 
+const applicationManifest =
+  require("../../deploy/application-paths.json");
+
+const DEPLOYMENT_TYPE_BY_APP_ID =
+  new Map(
+    applicationManifest.applications.map(
+      (app) => [
+        String(app.id || "")
+          .trim()
+          .toLowerCase(),
+        String(
+          app.deploymentType ||
+          "vps"
+        )
+          .trim()
+          .toLowerCase(),
+      ]
+    )
+  );
+
 const execFileAsync =
   promisify(execFile);
 
@@ -182,6 +202,27 @@ function unavailableCertificate(error) {
     issuer: null,
     issuerCommonName: null,
     issuerOrganization: null,
+    validFrom: null,
+    validTo: null,
+    daysRemaining: null,
+    serialNumber: null,
+    fingerprint256: null,
+    subjectAlternativeName: null,
+  };
+}
+
+function managedCertificate() {
+  return {
+    available: true,
+    authorized: true,
+    hostnameValid: true,
+    state: "managed",
+    error: null,
+    commonName: null,
+    subject: null,
+    issuer: "GoodOS Sites managed TLS",
+    issuerCommonName: null,
+    issuerOrganization: "GoodOS Sites",
     validFrom: null,
     validTo: null,
     daysRemaining: null,
@@ -411,6 +452,115 @@ async function inspectOriginCertificate(
   } catch (error) {
     return unavailableCertificate(error);
   }
+}
+
+function inspectLocalOriginCertificate(domain) {
+  return new Promise((resolve) => {
+    let finished = false;
+    let socket = null;
+
+    const finish = (result) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+
+      if (socket) {
+        socket.destroy();
+      }
+
+      resolve(result);
+    };
+
+    socket = tls.connect({
+      host: "127.0.0.1",
+      port: 443,
+      servername: domain,
+      rejectUnauthorized: false,
+      timeout: TLS_TIMEOUT_MS,
+    });
+
+    socket.once("secureConnect", () => {
+      const certificate =
+        socket.getPeerCertificate(true);
+
+      if (
+        !certificate ||
+        Object.keys(certificate).length === 0
+      ) {
+        finish(
+          unavailableCertificate(
+            new Error(
+              "No local origin certificate was returned."
+            )
+          )
+        );
+        return;
+      }
+
+      const hostnameError =
+        tls.checkServerIdentity(
+          domain,
+          certificate
+        );
+      const hostnameValid = !hostnameError;
+      const validTo =
+        certificate.valid_to || null;
+
+      finish({
+        available: true,
+        authorized: null,
+        hostnameValid,
+        state: certificateState(
+          validTo,
+          hostnameValid
+        ),
+        error:
+          hostnameError?.message || null,
+        commonName:
+          certificate.subject?.CN || null,
+        subject:
+          distinguishedName(
+            certificate.subject
+          ),
+        issuer:
+          distinguishedName(
+            certificate.issuer
+          ),
+        issuerCommonName:
+          certificate.issuer?.CN || null,
+        issuerOrganization:
+          certificate.issuer?.O || null,
+        validFrom:
+          certificate.valid_from || null,
+        validTo,
+        daysRemaining:
+          daysRemaining(validTo),
+        serialNumber:
+          certificate.serialNumber || null,
+        fingerprint256:
+          certificate.fingerprint256 ||
+          null,
+        subjectAlternativeName:
+          certificate.subjectaltname || null,
+      });
+    });
+
+    socket.once("timeout", () => {
+      finish(
+        unavailableCertificate(
+          new Error(
+            `Local TLS inspection timed out after ${TLS_TIMEOUT_MS}ms.`
+          )
+        )
+      );
+    });
+
+    socket.once("error", (error) => {
+      finish(unavailableCertificate(error));
+    });
+  });
 }
 
 function parseProperties(value) {
@@ -649,6 +799,12 @@ async function loadApplications() {
   return result.rows
     .map((app) => ({
       ...app,
+      deploymentType:
+        DEPLOYMENT_TYPE_BY_APP_ID.get(
+          String(app.id || "")
+            .trim()
+            .toLowerCase()
+        ) || "vps",
       domain:
         approvedDomain(app.domain),
     }))
@@ -707,11 +863,19 @@ async function buildSnapshot() {
     await Promise.all(
       applications.map(
         async (app) => {
+          const platformManaged =
+            app.deploymentType ===
+            "sites";
+
           const nginx =
-            nginxIndex.mappings.get(
-              app.domain
-            ) ||
-            null;
+            platformManaged
+              ? null
+              : (
+                  nginxIndex.mappings.get(
+                    app.domain
+                  ) ||
+                  null
+                );
 
           const fallbackPath =
             path.join(
@@ -721,16 +885,20 @@ async function buildSnapshot() {
             );
 
           const originPath =
-            approvedCertificatePath(
-              nginx?.certificatePath
-            ) ||
-            (
-              fs.existsSync(
-                fallbackPath
-              )
-                ? fallbackPath
-                : null
-            );
+            platformManaged
+              ? null
+              : (
+                  approvedCertificatePath(
+                    nginx?.certificatePath
+                  ) ||
+                  (
+                    fs.existsSync(
+                      fallbackPath
+                    )
+                      ? fallbackPath
+                      : null
+                  )
+                );
 
           const [
             publicTls,
@@ -746,17 +914,36 @@ async function buildSnapshot() {
               ),
             ]);
 
+          const hostingTls =
+            platformManaged
+              ? managedCertificate()
+              : (
+                  originTls.available
+                    ? originTls
+                    : await inspectLocalOriginCertificate(
+                        app.domain
+                      )
+                );
+
           return {
             appId: app.id,
             appName: app.name,
             domain: app.domain,
             registryStatus:
               app.status,
+            deploymentType:
+              app.deploymentType,
             publicTls,
-            originTls,
+            originTls:
+              hostingTls,
             nginx: {
               configured:
+                platformManaged ||
                 Boolean(nginx),
+              managedBy:
+                platformManaged
+                  ? "sites"
+                  : "nginx",
               siteFile:
                 nginx?.siteFile ||
                 null,
@@ -828,19 +1015,30 @@ async function buildSnapshot() {
         "valid"
     ).length;
 
+  const platformManaged =
+    certificates.filter(
+      (item) =>
+        item.originTls.state ===
+        "managed"
+    ).length;
+
   const attention =
     certificates.filter(
       (item) =>
         item.publicTls.state !==
           "valid" ||
-        item.originTls.state !==
-          "valid" ||
+        ![
+          "valid",
+          "managed",
+        ].includes(
+          item.originTls.state
+        ) ||
         !item.nginx.configured
     ).length;
 
   return {
     source:
-      "apps+public-tls+origin-x509+nginx+systemd",
+      "apps+hosting-classification+public-tls+origin-x509+nginx+systemd",
     checkedAt,
     cacheTtlMs:
       CACHE_TTL_MS,
@@ -849,6 +1047,7 @@ async function buildSnapshot() {
         certificates.length,
       publicValid,
       originValid,
+      platformManaged,
       attention,
       aliases:
         aliases.length,

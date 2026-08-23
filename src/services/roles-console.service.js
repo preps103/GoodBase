@@ -437,6 +437,7 @@ async function getOverviewForUser(
     auditResult,
     teamsResult,
     appsResult,
+    appMembershipsResult,
   ] = await Promise.all([
     dbQuery(
       `
@@ -900,6 +901,48 @@ async function getOverviewForUser(
         ORDER BY name
       `
     ),
+
+    dbQuery(
+      `
+        SELECT
+          membership.id::text,
+          membership.user_id::text
+            AS "userId",
+          membership.app_id
+            AS "appId",
+          membership.role,
+          membership.status,
+          membership.updated_at
+            AS "updatedAt"
+
+        FROM app_memberships membership
+
+        JOIN backend_organization_memberships
+             organization_membership
+          ON organization_membership.user_id =
+             membership.user_id
+
+         AND organization_membership.organization_id =
+             $1
+
+         AND organization_membership.status =
+             'active'
+
+        JOIN apps application
+          ON application.id =
+             membership.app_id
+
+         AND application.status =
+             'active'
+
+        ORDER BY
+          membership.user_id,
+          application.name
+      `,
+      [
+        context.organizationId,
+      ]
+    ),
   ]);
 
   const roles =
@@ -976,6 +1019,9 @@ async function getOverviewForUser(
     applications:
       appsResult.rows,
 
+    appMemberships:
+      appMembershipsResult.rows,
+
     stats: {
       totalRoles:
         roles.length,
@@ -1003,6 +1049,216 @@ async function getOverviewForUser(
 
       pendingRequests,
     },
+  };
+}
+
+async function replaceApplicationAccessForUser(
+  userId,
+  targetUserId,
+  input = {},
+  requestMeta = {}
+) {
+  const context =
+    await requireContext(
+      userId,
+      true
+    );
+
+  const targetId =
+    cleanText(
+      targetUserId,
+      100
+    );
+
+  const targetResult =
+    await dbQuery(
+      `
+        SELECT account.id
+        FROM users account
+        JOIN backend_organization_memberships membership
+          ON membership.user_id = account.id
+        WHERE account.id = $1::uuid
+          AND membership.organization_id = $2
+          AND membership.status = 'active'
+          AND account.status = 'active'
+        LIMIT 1
+      `,
+      [
+        targetId,
+        context.organizationId,
+      ]
+    );
+
+  if (!targetResult.rows[0]) {
+    throw serviceError(
+      "Active organization user was not found.",
+      404
+    );
+  }
+
+  const requestedIds =
+    uniqueStrings(
+      input.appIds
+    );
+
+  const appResult =
+    await dbQuery(
+      `
+        SELECT id
+        FROM apps
+        WHERE status = 'active'
+        ORDER BY id
+      `
+    );
+
+  const activeIds =
+    appResult.rows.map(
+      (app) => app.id
+    );
+
+  const activeIdSet =
+    new Set(activeIds);
+
+  if (
+    requestedIds.some(
+      (appId) =>
+        !activeIdSet.has(appId)
+    )
+  ) {
+    throw serviceError(
+      "One or more selected applications are invalid."
+    );
+  }
+
+  if (
+    targetId === userId &&
+    activeIdSet.has("goodos") &&
+    !requestedIds.includes("goodos")
+  ) {
+    requestedIds.push("goodos");
+  }
+
+  const role =
+    [
+      "admin",
+      "manager",
+      "member",
+      "viewer",
+    ].includes(
+      cleanText(
+        input.role || "member",
+        30
+      ).toLowerCase()
+    )
+      ? cleanText(
+          input.role || "member",
+          30
+        ).toLowerCase()
+      : "member";
+
+  const pool = getPool();
+  const client =
+    await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+        UPDATE app_memberships
+        SET status = 'revoked',
+            updated_at = NOW()
+        WHERE user_id = $1::uuid
+          AND app_id = ANY($2::text[])
+          AND NOT (
+            app_id = ANY($3::text[])
+          )
+      `,
+      [
+        targetId,
+        activeIds,
+        requestedIds,
+      ]
+    );
+
+    for (const appId of requestedIds) {
+      await client.query(
+        `
+          INSERT INTO app_memberships (
+            user_id,
+            app_id,
+            role,
+            status,
+            organization_id,
+            project_id,
+            environment_id
+          )
+          VALUES (
+            $1::uuid,
+            $2,
+            $3,
+            'active',
+            $4,
+            'proj_goodos_platform',
+            'env_goodos_production'
+          )
+          ON CONFLICT (user_id, app_id)
+          DO UPDATE SET
+            role = CASE
+              WHEN app_memberships.role = 'owner'
+                THEN 'owner'
+              ELSE EXCLUDED.role
+            END,
+            status = 'active',
+            organization_id =
+              EXCLUDED.organization_id,
+            project_id =
+              EXCLUDED.project_id,
+            environment_id =
+              EXCLUDED.environment_id,
+            updated_at = NOW()
+        `,
+        [
+          targetId,
+          appId,
+          role,
+          context.organizationId,
+        ]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  await logAudit({
+    userId,
+    appId: "goodos",
+    action:
+      "application_access.replaced",
+    entityType:
+      "user",
+    entityId: targetId,
+    ipAddress:
+      requestMeta.ipAddress ||
+      null,
+    metadata: {
+      organizationId:
+        context.organizationId,
+      targetUserId: targetId,
+      appIds: requestedIds,
+      role,
+    },
+  });
+
+  return {
+    userId: targetId,
+    appIds: requestedIds,
+    role,
   };
 }
 
@@ -2733,6 +2989,7 @@ async function updateSettingsForUser(
 
 module.exports = {
   getOverviewForUser,
+  replaceApplicationAccessForUser,
   createRoleForUser,
   updateRoleForUser,
   archiveRoleForUser,
