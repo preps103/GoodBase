@@ -16,6 +16,7 @@ test("Sites applications use platform-managed TLS instead of VPS Certbot checks"
   assert.match(service, /state:\s*"managed"/);
   assert.match(service, /platformManaged/);
   assert.match(service, /hosting-classification/);
+  assert.match(service, /DEPLOYMENT_TYPE_BY_DOMAIN/);
   assert.match(service, /inspectLocalOriginCertificate/);
   assert.match(service, /host:\s*"127\.0\.0\.1"/);
   assert.match(service, /tls\.checkServerIdentity/);

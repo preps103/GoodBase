@@ -38,6 +38,23 @@ const DEPLOYMENT_TYPE_BY_APP_ID =
     )
   );
 
+const DEPLOYMENT_TYPE_BY_DOMAIN =
+  new Map(
+    applicationManifest.applications.map(
+      (app) => [
+        String(app.domain || "")
+          .trim()
+          .toLowerCase(),
+        String(
+          app.deploymentType ||
+          "vps"
+        )
+          .trim()
+          .toLowerCase(),
+      ]
+    )
+  );
+
 const execFileAsync =
   promisify(execFile);
 
@@ -797,17 +814,25 @@ async function loadApplications() {
     `);
 
   return result.rows
-    .map((app) => ({
-      ...app,
-      deploymentType:
-        DEPLOYMENT_TYPE_BY_APP_ID.get(
-          String(app.id || "")
-            .trim()
-            .toLowerCase()
-        ) || "vps",
-      domain:
-        approvedDomain(app.domain),
-    }))
+    .map((app) => {
+      const domain =
+        approvedDomain(app.domain);
+
+      return {
+        ...app,
+        deploymentType:
+          DEPLOYMENT_TYPE_BY_APP_ID.get(
+            String(app.id || "")
+              .trim()
+              .toLowerCase()
+          ) ||
+          DEPLOYMENT_TYPE_BY_DOMAIN.get(
+            domain
+          ) ||
+          "vps",
+        domain,
+      };
+    })
     .filter(
       (app) =>
         Boolean(app.domain)
