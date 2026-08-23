@@ -4,6 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Pool } = require("pg");
 
+require("dotenv").config({
+  path: path.join(__dirname, "..", ".env"),
+});
+
 const MIGRATION_PATHS = [
   "20260810_goodscan_production_workspace.sql",
   "20260810_goodscan_credit_billing.sql",
