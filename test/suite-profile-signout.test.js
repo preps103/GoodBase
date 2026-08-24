@@ -14,7 +14,11 @@ const widget = fs.readFileSync(
 test("canonical top bar exposes a profile-image sign-out menu", () => {
   assert.match(widget, /UniversalProfileMenu/);
   assert.match(widget, /data-goodos-profile-menu/);
-  assert.match(widget, /Open user profile menu/);
+  assert.match(widget, /data-goodos-topbar-control": "account"/);
+  assert.match(widget, /width:34px!important/);
+  assert.match(widget, /aspect-ratio:1\/1!important/);
+  assert.match(widget, /object-fit:cover!important/);
+  assert.match(widget, /onError: \(\) => setAvatarFailed\(true\)/);
   assert.match(widget, /api\/auth\/logout/);
   assert.match(widget, /Sign out/);
   assert.match(widget, /credentials:\s*"include"/);

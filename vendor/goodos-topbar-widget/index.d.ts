@@ -115,9 +115,6 @@ export interface GoodOSLoginWidgetProps extends SharedProps {
   mobileBrand?: ReactNode;
   emailPlaceholder?: string;
   passwordPlaceholder?: string;
-  securityTitle?: string;
-  securityDescription?: string;
-  showSecurityNotice?: boolean;
   termsHref?: string;
   privacyHref?: string;
 }

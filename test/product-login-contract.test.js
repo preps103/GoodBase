@@ -74,7 +74,7 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.6\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.7\.0"/);
   assert.match(sharedWidget, /goodOSPasskeyHandoffUrl/);
   assert.match(sharedWidget, /Use Touch ID or passkey/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);

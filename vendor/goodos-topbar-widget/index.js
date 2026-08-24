@@ -203,20 +203,21 @@ export function GoodOSTopBarWidget(props) {
 }
 
 const profileMenuCss = String.raw`
-.goodos-universal-profile{position:fixed;z-index:2147483002;top:19px;right:20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e5e7eb}
-.goodos-universal-profile__trigger{display:grid;width:42px;height:42px;padding:0;overflow:hidden;place-items:center;border:2px solid rgba(255,255,255,.86);border-radius:50%;background:linear-gradient(135deg,#6366f1,#06b6d4);color:#fff;cursor:pointer;font:inherit;font-size:13px;font-weight:850;box-shadow:0 4px 14px rgba(15,23,42,.28)}
-.goodos-universal-profile__trigger img{width:100%;height:100%;object-fit:cover}
-.goodos-universal-profile__menu{position:absolute;top:50px;right:0;width:250px;padding:10px;border:1px solid rgba(148,163,184,.24);border-radius:16px;background:rgba(15,23,42,.98);box-shadow:0 24px 64px rgba(0,0,0,.38);backdrop-filter:blur(18px)}
+.goodos-universal-profile{position:fixed;z-index:2147483002;top:21px;right:20px;width:34px;height:34px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e5e7eb}
+.goodos-universal-profile__trigger{display:grid!important;width:34px!important;min-width:34px!important;max-width:34px!important;height:34px!important;min-height:34px!important;max-height:34px!important;aspect-ratio:1/1!important;padding:0!important;overflow:hidden!important;place-items:center;border:1.5px solid rgba(255,255,255,.9)!important;border-radius:50%!important;background:linear-gradient(135deg,#6366f1,#06b6d4);color:#fff;cursor:pointer;font:inherit;font-size:12px;font-weight:850;line-height:1;box-shadow:0 4px 14px rgba(15,23,42,.28)}
+.goodos-universal-profile__trigger img{display:block!important;width:100%!important;min-width:100%!important;max-width:100%!important;height:100%!important;min-height:100%!important;max-height:100%!important;aspect-ratio:1/1!important;border-radius:50%!important;object-fit:cover!important;object-position:center!important}
+.goodos-universal-profile__menu{position:absolute;top:42px;right:0;width:250px;padding:10px;border:1px solid rgba(148,163,184,.24);border-radius:16px;background:rgba(15,23,42,.98);box-shadow:0 24px 64px rgba(0,0,0,.38);backdrop-filter:blur(18px)}
 .goodos-universal-profile__identity{display:block;padding:10px 10px 12px;border-bottom:1px solid rgba(148,163,184,.16)}
 .goodos-universal-profile__identity strong,.goodos-universal-profile__identity span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.goodos-universal-profile__identity strong{font-size:14px}.goodos-universal-profile__identity span{margin-top:3px;color:#94a3b8;font-size:11px}
 .goodos-universal-profile__signout{display:flex;width:100%;min-height:42px;align-items:center;gap:9px;margin-top:8px;padding:0 11px;border:0;border-radius:10px;background:transparent;color:#fca5a5;cursor:pointer;font:inherit;font-size:13px;font-weight:800;text-align:left}.goodos-universal-profile__signout:hover{background:rgba(239,68,68,.12)}.goodos-universal-profile__signout:disabled{cursor:wait;opacity:.6}
-@media(max-width:620px){.goodos-universal-profile{top:15px;right:14px}.goodos-universal-profile__trigger{width:38px;height:38px}.goodos-universal-profile__menu{top:46px;width:min(250px,calc(100vw - 28px))}}
+@media(max-width:620px){.goodos-universal-profile{top:15px;right:14px}.goodos-universal-profile__menu{top:42px;width:min(250px,calc(100vw - 28px))}}
 `;
 
 function UniversalProfileMenu({ appName }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [profile, setProfile] = useState(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -248,7 +249,14 @@ function UniversalProfileMenu({ appName }) {
 
   const displayName = profile?.displayName || [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.email || appName;
   const initials = String(displayName || "G").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
-  const avatarUrl = profile?.avatarUrl || profile?.avatar_url || null;
+  const rawAvatarUrl = profile?.avatarUrl || profile?.avatar_url || null;
+  const avatarUrl = rawAvatarUrl && !/^(?:https?:|data:|blob:)/i.test(rawAvatarUrl)
+    ? `${GOODOS_AUTH_ORIGIN}${rawAvatarUrl.startsWith("/") ? "" : "/"}${rawAvatarUrl}`
+    : rawAvatarUrl;
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUrl]);
 
   const signOut = async () => {
     if (typeof window === "undefined") return;
@@ -276,12 +284,12 @@ function UniversalProfileMenu({ appName }) {
 
   return createElement(
     "div",
-    { className: "goodos-universal-profile", "data-goodos-profile-menu": "" },
+    { className: "goodos-universal-profile", "data-goodos-profile-menu": "", "data-goodos-topbar-account-layout": "profile" },
     createElement("style", null, profileMenuCss),
     createElement(
       "button",
-      { type: "button", className: "goodos-universal-profile__trigger", onClick: () => setOpen((value) => !value), "aria-label": "Open user profile menu", "aria-expanded": open },
-      avatarUrl ? createElement("img", { src: avatarUrl, alt: "" }) : initials,
+      { type: "button", className: "goodos-universal-profile__trigger", onClick: () => setOpen((value) => !value), "aria-label": `Open ${displayName} profile menu`, "aria-expanded": open, "data-goodos-topbar-control": "account" },
+      avatarUrl && !avatarFailed ? createElement("img", { src: avatarUrl, alt: "", onError: () => setAvatarFailed(true) }) : initials,
     ),
     open && createElement(
       "div",
