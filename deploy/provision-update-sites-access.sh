@@ -12,6 +12,7 @@ readonly backup_root="/var/backups/goodos-site-updates"
 readonly product_home="/home/mgoodlo3"
 
 readonly -a application_paths=(
+  "/var/www/GoodBase"
   "/home/mgoodlo3/GoodOS"
   "/home/mgoodlo3/GoodAds"
   "/home/mgoodlo3/GoodBoost"
@@ -49,5 +50,9 @@ for application_path in "${application_paths[@]}"; do
 done
 
 install -d -m 0700 -o "${deployment_user}" -g "${deployment_group}" "${backup_root}"
+find "${backup_root}" -type d -exec \
+  setfacl -m "u:${deployment_user}:rwx" -m "d:u:${deployment_user}:rwx" {} +
+find "${backup_root}" -type f -exec \
+  setfacl -m "u:${deployment_user}:rw-" {} +
 
 echo "GoodBase deployment access provisioned for ${#application_paths[@]} application directories."
