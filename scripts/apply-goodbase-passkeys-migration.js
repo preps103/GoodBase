@@ -13,9 +13,25 @@ async function schemaReady(client) {
   const result = await client.query(`
     SELECT
       TO_REGCLASS('public.goodbase_passkey_credentials') IS NOT NULL AS "credentialsReady",
-      TO_REGCLASS('public.goodbase_passkey_challenges') IS NOT NULL AS "challengesReady"
+      TO_REGCLASS('public.goodbase_passkey_challenges') IS NOT NULL AS "challengesReady",
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'goodbase_passkey_credentials'
+          AND column_name = 'public_key'
+          AND is_nullable = 'NO'
+      ) AS "publicKeyReady",
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'goodbase_passkey_credentials'
+          AND column_name = 'transports_json'
+      ) AS "transportsReady"
   `);
-  return result.rows[0]?.credentialsReady === true && result.rows[0]?.challengesReady === true;
+  return result.rows[0]?.credentialsReady === true &&
+    result.rows[0]?.challengesReady === true &&
+    result.rows[0]?.publicKeyReady === true &&
+    result.rows[0]?.transportsReady === true;
 }
 
 async function main() {

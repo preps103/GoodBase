@@ -211,7 +211,7 @@ async function verifyAuthentication({ challengeId, response, ipAddress, userAgen
   await query(
     `UPDATE goodbase_passkey_credentials
      SET counter = $2, last_used_at = NOW(), updated_at = NOW()
-     WHERE id = $1::uuid`,
+     WHERE id::text = $1::text`,
     [stored.id, verification.authenticationInfo.newCounter]
   );
   const user = await getUserById(stored.user_id);

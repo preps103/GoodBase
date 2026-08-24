@@ -17,6 +17,62 @@ CREATE TABLE IF NOT EXISTS goodbase_passkey_credentials (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- July's identity-platform migration created an earlier passkey table shape.
+-- Upgrade that table in place so production data is preserved and the current
+-- WebAuthn service can store and verify credentials.
+ALTER TABLE goodbase_passkey_credentials
+  ADD COLUMN IF NOT EXISTS public_key BYTEA,
+  ADD COLUMN IF NOT EXISTS counter BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS transports_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS device_type TEXT,
+  ADD COLUMN IF NOT EXISTS backed_up BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT 'Passkey',
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'goodbase_passkey_credentials'
+      AND column_name = 'public_key_cose'
+  ) THEN
+    EXECUTE $upgrade$
+      UPDATE goodbase_passkey_credentials
+      SET public_key = COALESCE(public_key, public_key_cose),
+          counter = CASE
+            WHEN counter = 0 THEN COALESCE(sign_count, 0)
+            ELSE counter
+          END,
+          transports_json = CASE
+            WHEN transports_json = '[]'::jsonb THEN COALESCE(to_jsonb(transports), '[]'::jsonb)
+            ELSE transports_json
+          END,
+          label = COALESCE(NULLIF(label, 'Passkey'), nickname, 'Passkey'),
+          updated_at = COALESCE(updated_at, created_at, NOW())
+    $upgrade$;
+
+    ALTER TABLE goodbase_passkey_credentials
+      ALTER COLUMN organization_id DROP NOT NULL,
+      ALTER COLUMN public_key_cose DROP NOT NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'goodbase_passkey_credentials'
+      AND column_name = 'id'
+      AND data_type = 'text'
+  ) THEN
+    ALTER TABLE goodbase_passkey_credentials
+      ALTER COLUMN id SET DEFAULT gen_random_uuid()::text;
+  END IF;
+END
+$$;
+
+ALTER TABLE goodbase_passkey_credentials
+  ALTER COLUMN public_key SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_goodbase_passkey_credentials_user
   ON goodbase_passkey_credentials(user_id, created_at DESC);
 

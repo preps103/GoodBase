@@ -25,7 +25,16 @@ test("GoodBase exposes durable, user-verified passkey ceremonies", () => {
   assert.match(service, /requireUserVerification:\s*true/);
   assert.match(service, /consumed_at = NOW\(\)/);
   assert.match(service, /authMethod:\s*"passkey"/);
+  assert.match(service, /WHERE id::text = \$1::text/);
   assert.match(migration, /credential_id TEXT NOT NULL UNIQUE/);
   assert.match(migration, /public_key BYTEA NOT NULL/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS public_key BYTEA/);
+  assert.match(migration, /public_key_cose DROP NOT NULL/);
+  assert.match(migration, /gen_random_uuid\(\)::text/);
   assert.match(migration, /expires_at TIMESTAMPTZ NOT NULL/);
+
+  const migrationRunner = read("scripts/apply-goodbase-passkeys-migration.js");
+  assert.match(migrationRunner, /column_name = 'public_key'/);
+  assert.match(migrationRunner, /publicKeyReady/);
+  assert.match(migrationRunner, /transportsReady/);
 });
