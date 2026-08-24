@@ -9,9 +9,10 @@ import {
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.5.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.6.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
+export const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
 
 export async function loadGoodOSIdentityProviders(origin = GOODOS_AUTH_ORIGIN) {
   const response = await fetch(`${origin.replace(/\/$/, "")}/api/oidc/providers`, {
@@ -39,6 +40,21 @@ export function goodOSAccountUrl(mode, redirect, origin = GOODOS_AUTH_ORIGIN) {
   if (mode && mode !== "login") url.searchParams.set("mode", mode);
   url.searchParams.set("redirect", redirect);
   return url.toString();
+}
+
+export function goodOSPasskeyHandoffUrl(redirect, origin = GOODOS_PASSKEY_ORIGIN) {
+  const url = new URL("/", origin);
+  url.searchParams.set("passkey", "1");
+  url.searchParams.set("returnTo", redirect);
+  return url.toString();
+}
+
+export function goodOSPasskeysSupported() {
+  return typeof window !== "undefined" &&
+    window.isSecureContext === true &&
+    typeof window.PublicKeyCredential !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.credentials?.get === "function";
 }
 
 function classes(...values) {
@@ -371,27 +387,31 @@ const loginWidgetCss = String.raw`
 .goodos-login-widget .goodos-login-widget__input{appearance:none;width:100%!important;min-width:0!important;height:50px!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;outline:0!important;background:transparent!important;box-shadow:none!important;color:var(--goodos-login-text)!important;font:inherit;font-size:16px}
 .goodos-login-widget__input::placeholder{color:#737986}
 .goodos-login-widget__toggle{display:grid;width:34px;height:34px;place-items:center;border:0;border-radius:8px;background:transparent;color:#94a3b8;cursor:pointer;font:inherit;font-size:17px}
+.goodos-login-widget__passkey-setup{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;margin:-2px 0 18px;padding:14px 16px;border:1px solid color-mix(in srgb,var(--goodos-login-accent) 38%,var(--goodos-login-border));border-radius:12px;background:color-mix(in srgb,var(--goodos-login-surface) 92%,var(--goodos-login-accent));color:var(--goodos-login-text);cursor:pointer;transition:border-color 160ms ease,box-shadow 160ms ease,background 160ms ease}
+.goodos-login-widget__passkey-setup:hover{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 10%,transparent)}
+.goodos-login-widget__passkey-setup input{width:18px;height:18px;margin:0;accent-color:var(--goodos-login-accent);cursor:pointer}
+.goodos-login-widget__passkey-setup-copy{display:grid;gap:2px;min-width:0;font-size:14px;font-weight:800;line-height:1.35}
+.goodos-login-widget__passkey-setup-copy small{color:var(--goodos-login-muted);font-size:12px;font-weight:600;line-height:1.4}
+.goodos-login-widget__passkey-enroll{display:flex;width:100%;min-height:48px;align-items:center;justify-content:center;gap:9px;margin:-2px 0 18px;padding:0 16px;border:1px solid color-mix(in srgb,var(--goodos-login-accent) 48%,var(--goodos-login-border));border-radius:12px;background:color-mix(in srgb,var(--goodos-login-surface) 93%,var(--goodos-login-accent));color:var(--goodos-login-text);cursor:pointer;font:inherit;font-size:14px;font-weight:780}
+.goodos-login-widget__passkey-enroll:hover{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 12%,transparent)}
+.goodos-login-widget__passkey-enroll:disabled{cursor:not-allowed;opacity:.58}
 .goodos-login-widget__error{margin:0 0 18px;padding:14px 16px;border:1px solid #ef9a9a;border-radius:12px;background:#3a171a;color:#fecaca;font-size:14px;font-weight:650;line-height:1.5}
 .goodos-login-widget .goodos-login-widget__submit{display:flex!important;width:100%!important;height:54px!important;min-height:54px!important;align-items:center!important;justify-content:center!important;gap:9px!important;margin-top:7px!important;padding:0 18px!important;border:0!important;border-radius:12px!important;background:var(--goodos-login-accent)!important;color:var(--goodos-login-accent-ink)!important;cursor:pointer;font:inherit;font-size:15px!important;font-weight:800!important;box-shadow:0 10px 24px color-mix(in srgb,var(--goodos-login-accent) 20%,transparent)!important}
 .goodos-login-widget__submit:hover{filter:brightness(1.07);transform:translateY(-1px)}
 .goodos-login-widget__submit:disabled{cursor:not-allowed;opacity:.58;transform:none}
 .goodos-login-widget__access{margin:16px 0 0;color:#8f96a4;font-size:14px;text-align:center}
 .goodos-login-widget__create{border:0;background:transparent;color:var(--goodos-login-accent);cursor:pointer;font:inherit;font-weight:750}
-.goodos-login-widget__security{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;min-height:96px;margin-top:24px;padding:16px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#10b981}
-.goodos-login-widget__security-copy{color:#9da3ae;font-size:14px;line-height:1.5}
-.goodos-login-widget__security-copy strong{display:block;margin-bottom:3px;color:#e5e7eb}
-.goodos-login-widget__status{width:8px;height:8px;margin-top:6px;border-radius:50%;background:#10b981}
 .goodos-login-widget__legal{flex:0 0 auto;width:100%;padding:8px 0 0;color:#7f8795;font-size:11px;line-height:1.6;text-align:center}
 .goodos-login-widget__legal a{color:inherit;font-weight:700;text-decoration:none}
 .goodos-login-widget.goodos-login-widget--light{--goodos-login-panel:#f4f7fb;--goodos-login-card:#fff;--goodos-login-surface:#fff;--goodos-login-tile:#fff;--goodos-login-border:#d7e0eb;--goodos-login-text:#0f172a;--goodos-login-muted:#64748b;--goodos-login-soft:#64748b;background:radial-gradient(circle at 82% 9%,color-mix(in srgb,var(--goodos-login-accent) 16%,transparent),transparent 24rem),linear-gradient(145deg,#fff 0%,#f5f8fc 52%,color-mix(in srgb,var(--goodos-login-accent) 8%,#f4f7fb) 100%)!important}
 .goodos-login-widget.goodos-login-widget--light .goodos-login-widget__card{border-color:#d7e0eb;background:#fff!important;box-shadow:0 28px 70px rgba(15,23,42,.12)}
 .goodos-login-widget.goodos-login-widget--light .goodos-login-widget__theme{border-color:#cbd5e1;background:#fff;color:#334155}
-.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__provider,.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__input-shell,.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__security{background:#fff!important}
-.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__label{color:#1e293b!important}.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__security-copy strong{color:#1e293b}.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__error{background:#fff1f2;color:#be123c}
+.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__provider,.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__input-shell{background:#fff!important}
+.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__label{color:#1e293b!important}.goodos-login-widget.goodos-login-widget--light .goodos-login-widget__error{background:#fff1f2;color:#be123c}
 @media(max-width:1024px){.goodos-login-shell.goodos-login-shell{grid-template-columns:minmax(0,1fr)!important}.goodos-login-shell__brand{display:none}.goodos-login-shell__auth{grid-column:1}.goodos-login-widget__mobile-brand{display:block}.goodos-login-widget__scroll{padding-inline:32px}.goodos-login-widget__inner{padding:36px 0}}
-@media(max-width:620px){.goodos-login-widget__scroll{padding:18px 18px calc(22px + env(safe-area-inset-bottom))}.goodos-login-widget__column{min-height:calc(100dvh - 40px)}.goodos-login-widget__header{min-height:40px}.goodos-login-widget__theme{min-height:40px;padding-inline:11px}.goodos-login-widget__mobile-brand{margin-top:18px}.goodos-login-widget__inner{align-items:flex-start;padding:28px 0}.goodos-login-widget__card{padding:24px;border-radius:20px}.goodos-login-widget__heading{margin-bottom:24px}.goodos-login-widget__title{font-size:clamp(30px,9vw,38px)}.goodos-login-widget__subtitle{font-size:14px}.goodos-login-widget__providers{grid-template-columns:1fr}.goodos-login-widget__provider{min-height:50px}.goodos-login-widget__divider{margin:20px 0}.goodos-login-widget__security{padding:14px}.goodos-login-widget__security-copy{font-size:12px}.goodos-login-widget__access{font-size:12px}}
+@media(max-width:620px){.goodos-login-widget__scroll{padding:18px 18px calc(22px + env(safe-area-inset-bottom))}.goodos-login-widget__column{min-height:calc(100dvh - 40px)}.goodos-login-widget__header{min-height:40px}.goodos-login-widget__theme{min-height:40px;padding-inline:11px}.goodos-login-widget__mobile-brand{margin-top:18px}.goodos-login-widget__inner{align-items:flex-start;padding:28px 0}.goodos-login-widget__card{padding:24px;border-radius:20px}.goodos-login-widget__heading{margin-bottom:24px}.goodos-login-widget__title{font-size:clamp(30px,9vw,38px)}.goodos-login-widget__subtitle{font-size:14px}.goodos-login-widget__providers{grid-template-columns:1fr}.goodos-login-widget__provider{min-height:50px}.goodos-login-widget__divider{margin:20px 0}.goodos-login-widget__access{font-size:12px}}
 @media(max-width:380px){.goodos-login-widget__scroll{padding-inline:12px}.goodos-login-widget__card{padding:20px 16px}.goodos-login-widget__home span,.goodos-login-widget__theme span:last-child{display:none}}
-@media(max-height:760px) and (min-width:621px){.goodos-login-widget__inner{align-items:flex-start;padding:26px 0}.goodos-login-widget__card{padding:28px}.goodos-login-widget__heading{margin-bottom:22px}.goodos-login-widget__security{margin-top:18px}}
+@media(max-height:760px) and (min-width:621px){.goodos-login-widget__inner{align-items:flex-start;padding:26px 0}.goodos-login-widget__card{padding:28px}.goodos-login-widget__heading{margin-bottom:22px}}
 @media(prefers-reduced-motion:reduce){.goodos-login-shell__brand:before,.goodos-login-shell__brand:after{animation:none}.goodos-login-widget__submit{transition:none}}
 `;
 
@@ -515,9 +535,15 @@ export function GoodOSLoginWidget({
   onSubmit,
   onProviderSignIn,
   onGoodOSSignIn,
-  passkeyAvailable = false,
+  passkeyAvailable,
   passkeyLoading = false,
   onPasskeySignIn,
+  setupPasskeyAfterSignIn = false,
+  onSetupPasskeyAfterSignInChange,
+  passkeyEnrollmentAvailable = false,
+  passkeyEnrollmentLoading = false,
+  passkeyEnrollmentLabel = "Set up Touch ID on this Mac",
+  onPasskeyEnroll,
   providerAvailability = {},
   onForgotPassword,
   onCreateAccount,
@@ -528,8 +554,6 @@ export function GoodOSLoginWidget({
   mobileBrand,
   emailPlaceholder = "you@domain.com",
   passwordPlaceholder = "Enter your GoodOS password",
-  securityTitle = "Authentication and account security are managed through GoodBase.",
-  securityDescription = "Use the same GoodOS email and password as every other GoodOS application.",
   termsHref = "/terms",
   privacyHref = "/privacy",
   className,
@@ -538,10 +562,12 @@ export function GoodOSLoginWidget({
   if (!appName) throw new Error("GoodOSLoginWidget requires appName.");
   const [mode, setMode] = useState(initialMode);
   const [showPassword, setShowPassword] = useState(false);
+  const [nativePasskeyAvailable, setNativePasskeyAvailable] = useState(false);
   const loginId = `${String(appName).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-goodos-login`;
   const emailId = `${loginId}-username`;
   const passwordId = `${loginId}-password`;
   const isLight = mode === "light";
+  const showPasskey = passkeyAvailable ?? nativePasskeyAvailable;
   const providerLabels = {
     google: "Sign in with Google",
     apple: "Sign in with Apple",
@@ -551,6 +577,20 @@ export function GoodOSLoginWidget({
   const submit = (event) => {
     event.preventDefault();
     if (!loading) onSubmit?.(event);
+  };
+
+  useEffect(() => {
+    setNativePasskeyAvailable(goodOSPasskeysSupported());
+  }, []);
+
+  const beginPasskeySignIn = () => {
+    if (onPasskeySignIn) {
+      onPasskeySignIn();
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.location.assign(goodOSPasskeyHandoffUrl(window.location.href));
+    }
   };
 
   return createElement(
@@ -624,12 +664,12 @@ export function GoodOSLoginWidget({
             createElement(
               "div",
               { className: "goodos-login-widget__providers", "data-goodbase-login-providers": "", "aria-label": "Sign-in options" },
-              passkeyAvailable && createElement(ProviderButton, {
+              showPasskey && createElement(ProviderButton, {
                 provider: "passkey",
                 label: passkeyLoading ? "Waiting for your passkey…" : "Use Touch ID or passkey",
                 disabled: loading || passkeyLoading,
                 passkey: true,
-                onClick: onPasskeySignIn,
+                onClick: beginPasskeySignIn,
               }),
               ...["google", "apple", "microsoft"].map((provider) =>
                 createElement(ProviderButton, {
@@ -710,6 +750,33 @@ export function GoodOSLoginWidget({
                 }, showPassword ? "◉" : "◎"),
               ),
             ),
+            onSetupPasskeyAfterSignInChange && createElement(
+              "label",
+              { className: "goodos-login-widget__passkey-setup" },
+              createElement("input", {
+                type: "checkbox",
+                checked: setupPasskeyAfterSignIn,
+                disabled: loading,
+                onChange: (event) => onSetupPasskeyAfterSignInChange?.(event.target.checked, event),
+              }),
+              createElement(
+                "span",
+                { className: "goodos-login-widget__passkey-setup-copy" },
+                createElement("span", null, "Set up Touch ID after signing in"),
+                createElement("small", null, "Verify your account once, then create the passkey immediately."),
+              ),
+            ),
+            passkeyEnrollmentAvailable && createElement(
+              "button",
+              {
+                className: "goodos-login-widget__passkey-enroll",
+                type: "button",
+                disabled: loading || passkeyEnrollmentLoading,
+                onClick: onPasskeyEnroll,
+              },
+              createElement("span", { "aria-hidden": "true" }, "◎"),
+              passkeyEnrollmentLoading ? "Setting up Touch ID…" : passkeyEnrollmentLabel,
+            ),
             error && createElement("div", { className: "goodos-login-widget__error", role: "alert" }, error),
             createElement(
               "button",
@@ -722,18 +789,6 @@ export function GoodOSLoginWidget({
               { className: "goodos-login-widget__access" },
               `New to ${appName}? `,
               createElement("button", { className: "goodos-login-widget__create", type: "button", onClick: onCreateAccount }, "Create account"),
-            ),
-            createElement(
-              "div",
-              { className: "goodos-login-widget__security" },
-              createElement("span", { "aria-hidden": "true" }, "♢"),
-              createElement(
-                "span",
-                { className: "goodos-login-widget__security-copy" },
-                createElement("strong", null, securityTitle),
-                securityDescription,
-              ),
-              createElement("i", { className: "goodos-login-widget__status", title: "GoodBase authentication is available" }),
             ),
           ),
         ),

@@ -57,6 +57,10 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
   assert.match(routes, /router\.get\("\/register"/);
   assert.match(authClient, /setPasswordVisibility/);
   assert.match(authClient, /aria-pressed/);
+  assert.match(authUi, /Use Touch ID or passkey/);
+  assert.match(authClient, /url\.searchParams\.set\("passkey", "1"\)/);
+  assert.doesNotMatch(authUi, /Authentication and account security are managed through GoodBase/);
+  assert.doesNotMatch(css, /goodbase-login-security/);
   assert.match(authUi, /Continue with GoodOS/);
   assert.match(authRoutes, /router\.get\("\/authorize\/:appId", authRequired/);
   assert.match(authRoutes, /APPLICATION_ACCESS_DENIED/);
@@ -70,7 +74,9 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.5\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.6\.0"/);
+  assert.match(sharedWidget, /goodOSPasskeyHandoffUrl/);
+  assert.match(sharedWidget, /Use Touch ID or passkey/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /package-lock\.json/);
@@ -87,7 +93,8 @@ test("canonical login preserves one exact card and rejects extra wrappers", () =
   assert.match(sharedWidget, /\.goodos-login-widget__provider\{[^}]*height:var\(--goodos-login-control-height\)/);
   assert.match(sharedWidget, /\.goodos-login-widget__input-shell\{[^}]*height:var\(--goodos-login-control-height\)/);
   assert.match(sharedWidget, /\.goodos-login-widget__submit\{[^}]*height:54px/);
-  assert.match(sharedWidget, /\.goodos-login-widget__security\{[^}]*min-height:96px/);
+  assert.doesNotMatch(sharedWidget, /Authentication and account security are managed through GoodBase/);
+  assert.doesNotMatch(sharedWidget, /goodos-login-widget__security/);
   assert.match(sharedWidget, /\.goodos-login-shell\.goodos-login-shell\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)!important/);
   assert.match(sharedWidget, /\.goodos-login-shell>\.goodos-login-shell__auth\{[^}]*padding:0!important[^}]*background:transparent!important/);
   assert.match(sharedWidget, /\.goodos-login-widget\.goodos-login-widget\{[^}]*display:flex!important[^}]*grid-template-columns:none!important/);
@@ -120,7 +127,7 @@ test("canonical brand treatment gives product stories distinct motion without ch
     "mac-glass-float",
     "supply-conveyor-flow",
   ]) assert.match(sharedWidget, new RegExp(`goodos-${motion}`));
-  assert.match(sharedWidget, /url\("\/login\/brand-hero\.png"\)/);
+  assert.doesNotMatch(sharedWidget, /url\("\/login\/brand-hero\.png"\)/);
   assert.match(sharedWidget, /@media\(prefers-reduced-motion:reduce\)/);
 });
 
@@ -132,4 +139,5 @@ test("GoodBase console login uses its updated static platform artwork", () => {
   assert.match(consoleHtml, /radial-gradient\(circle at 82% 22%/);
   assert.match(authUi, /radial-gradient\(circle at 82% 22%/);
   assert.doesNotMatch(consoleHtml, /login-story[^}]*animation:/);
+  assert.match(routes, /router\.get\("\/goodbase-login-story\.css"/);
 });

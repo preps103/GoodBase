@@ -6,9 +6,10 @@ import type {
 } from "react";
 
 export declare const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.5.0";
+export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.6.0";
 export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
+export declare const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
 
 export interface GoodOSIdentityProviderRecord {
   id: string;
@@ -32,6 +33,13 @@ export declare function goodOSAccountUrl(
   redirect: string,
   origin?: string,
 ): string;
+
+export declare function goodOSPasskeyHandoffUrl(
+  redirect: string,
+  origin?: string,
+): string;
+
+export declare function goodOSPasskeysSupported(): boolean;
 
 interface SharedProps {
   className?: string;
@@ -91,6 +99,12 @@ export interface GoodOSLoginWidgetProps extends SharedProps {
   passkeyAvailable?: boolean;
   passkeyLoading?: boolean;
   onPasskeySignIn?: () => void;
+  setupPasskeyAfterSignIn?: boolean;
+  onSetupPasskeyAfterSignInChange?: (value: boolean, event: ChangeEvent<HTMLInputElement>) => void;
+  passkeyEnrollmentAvailable?: boolean;
+  passkeyEnrollmentLoading?: boolean;
+  passkeyEnrollmentLabel?: string;
+  onPasskeyEnroll?: () => void;
   providerAvailability?: Partial<Record<GoodOSIdentityProvider, boolean>>;
   onForgotPassword?: () => void;
   onCreateAccount?: () => void;
@@ -103,6 +117,7 @@ export interface GoodOSLoginWidgetProps extends SharedProps {
   passwordPlaceholder?: string;
   securityTitle?: string;
   securityDescription?: string;
+  showSecurityNotice?: boolean;
   termsHref?: string;
   privacyHref?: string;
 }

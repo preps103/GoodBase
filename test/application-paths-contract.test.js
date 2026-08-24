@@ -37,7 +37,7 @@ test("the registry discovers active products without a fixed application count",
 test("every active product declares the canonical login integration and theme tokens", () => {
   assert.equal(manifest.canonicalLogin.owner, "goodbase");
   assert.equal(manifest.canonicalLogin.package, "@goodos/topbar-widget");
-  assert.equal(manifest.canonicalLogin.version, "4.5.0");
+  assert.equal(manifest.canonicalLogin.version, "4.6.0");
   assert.deepEqual(
     manifest.canonicalLogin.requiredComponents,
     ["GoodOSLoginShell", "GoodOSLoginWidget"]

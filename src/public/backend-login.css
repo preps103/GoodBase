@@ -243,16 +243,6 @@ button { appearance: none; }
   color: var(--goodbase-login-muted) !important;
   font-size: 13px !important;
 }
-.goodbase-login-security {
-  margin: 24px 0 0 !important;
-  border: 1px solid var(--goodbase-login-border) !important;
-  border-radius: 14px !important;
-  background: var(--goodbase-login-control-bg) !important;
-  padding: 14px 16px !important;
-  color: var(--goodbase-login-muted) !important;
-  font-size: 12px !important;
-  line-height: 18px !important;
-}
 .goodbase-login-back {
   width: 100%;
   margin-top: 18px;

@@ -47,6 +47,10 @@
         <p id="notice" class="goodbase-login-notice hidden" role="status"></p>
 
         <div id="login-only">
+          <button data-goodbase-login-provider id="passkey" type="button" style="width:100%;margin-bottom:12px">
+            <span class="goodbase-login-provider-mark" aria-hidden="true">◎</span>
+            Use Touch ID or passkey
+          </button>
           <div data-goodbase-login-providers id="providers" aria-label="Social sign in">
             <button data-goodbase-login-provider id="goodos-sso" type="button">
               <span class="goodbase-login-provider-mark" aria-hidden="true">◇</span>
@@ -89,10 +93,9 @@
         </form>
         <button class="goodbase-login-back hidden" id="back" type="button">← Back to sign in</button>
         <p class="goodbase-login-create" id="create">New to GoodOS? <a data-goodbase-login-recovery id="create-link" href="/register">Create account</a></p>
-        <p class="goodbase-login-security">Authentication and account security are managed through GoodBase.</p>
       </div>
     </section>
   </main>
-  <script src="/goodbase-auth.js?v=20260728" defer></script>
+  <script src="/goodbase-auth.js?v=20260824-passkey-1" defer></script>
 </body>
 </html>

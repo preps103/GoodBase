@@ -4,6 +4,7 @@ const nodes = {
   form: document.querySelector("#auth-form"),
   loginOnly: document.querySelector("#login-only"),
   providers: document.querySelector("#providers"),
+  passkey: document.querySelector("#passkey"),
   goodos: document.querySelector("#goodos-sso"),
   emailField: document.querySelector("#email-field"),
   passwordField: document.querySelector("#password-field"),
@@ -167,6 +168,13 @@ async function loadProviders() {
 nodes.goodos.addEventListener("click", () => {
   const returnTo = safeRedirect(redirectTarget);
   location.assign(`https://goodos.app/?returnTo=${encodeURIComponent(returnTo)}`);
+});
+
+nodes.passkey.addEventListener("click", () => {
+  const url = new URL("https://goodos.app/");
+  url.searchParams.set("passkey", "1");
+  url.searchParams.set("returnTo", safeRedirect(redirectTarget));
+  location.assign(url.toString());
 });
 
 nodes.forgot.addEventListener("click", () => {
