@@ -94,6 +94,14 @@ router.get("/health", (_request, response) => {
   });
 });
 
+router.use((_request, response, next) => {
+  response.set({
+    "Cache-Control": "private, no-store, no-cache, must-revalidate, max-age=0",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
+  return next();
+});
 router.use(authRequired);
 router.use(requireOwnerOrAdmin);
 

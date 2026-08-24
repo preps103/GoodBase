@@ -50,21 +50,21 @@
     <section class="panel quick">
       <div class="panel-head">
         <h2>Quick Site Update</h2>
-        <span class="badge" id="workspaceStatus">Loading…</span>
+        <span class="badge" id="workspaceStatus">Checking access…</span>
       </div>
       <div class="panel-body">
         <div class="selector-grid">
           <div class="field">
             <label for="siteSelector">1. Site or application</label>
-            <select id="siteSelector"><option value="">Loading sites…</option></select>
+            <select id="siteSelector" disabled><option value="">Checking access…</option></select>
           </div>
           <div class="field">
             <label for="repositorySelector">2. GitHub repository</label>
-            <select id="repositorySelector"><option value="">Loading repositories…</option></select>
+            <select id="repositorySelector" disabled><option value="">Checking access…</option></select>
           </div>
           <div class="field">
             <label for="targetSelector">3. Server application target</label>
-            <select id="targetSelector"><option value="">Loading server targets…</option></select>
+            <select id="targetSelector" disabled><option value="">Checking access…</option></select>
           </div>
           <div class="field">
             <label for="branchInput">Branch</label>
@@ -110,7 +110,7 @@
         <div class="table-wrap">
           <table>
             <thead><tr><th>Site / Subdomain</th><th>GitHub repository</th><th>Server target</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody id="sitesBody"><tr><td colspan="5" class="empty">Loading registered sites…</td></tr></tbody>
+            <tbody id="sitesBody"><tr><td colspan="5" class="empty">Checking account access…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -148,6 +148,6 @@
   </dialog>
 
   <div class="toast" id="toast"></div>
-  <script src="/update-sites.js" defer></script>
+  <script src="/update-sites.js?v=20260824-2" defer></script>
 </body>
 </html>

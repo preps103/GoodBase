@@ -5,6 +5,8 @@ const state = {
   repositories: [],
   targets: [],
   pollTimer: null,
+  workspaceLoading: false,
+  lastWorkspaceLoadAt: 0,
 };
 
 const REQUEST_TIMEOUT_MS = 12000;
@@ -584,8 +586,10 @@ async function loadTargets() {
 }
 
 async function loadWorkspace() {
+  if (state.workspaceLoading) return;
+  state.workspaceLoading = true;
   clearAlert();
-  $("workspaceStatus").textContent = "Loading…";
+  $("workspaceStatus").textContent = "Checking access…";
   $("workspaceStatus").className = "badge warn";
 
   const results = await Promise.allSettled([
@@ -593,6 +597,8 @@ async function loadWorkspace() {
     loadRepositories(),
     loadTargets(),
   ]);
+  state.workspaceLoading = false;
+  state.lastWorkspaceLoadAt = Date.now();
 
   if (results[0].status === "rejected") {
     const authenticationRequired = results[0].reason.code === "AUTH_REQUIRED";
@@ -639,6 +645,29 @@ async function loadWorkspace() {
   fillRepositoryOptions();
   fillTargetOptions();
   updateSummary();
+}
+
+function handleWorkspaceFailure(error) {
+  state.workspaceLoading = false;
+  state.lastWorkspaceLoadAt = Date.now();
+  const message = error instanceof Error
+    ? error.message
+    : "GoodBase could not load deployment data.";
+  showAlert(message);
+  setSelectorStatus("Deployment data unavailable");
+  $("sitesBody").innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(message)}</td></tr>`;
+  $("workspaceStatus").textContent = "Failed to load";
+  $("workspaceStatus").className = "badge bad";
+}
+
+function refreshStaleWorkspace() {
+  const status = $("workspaceStatus")?.textContent || "";
+  const unresolved = ["Loading…", "Checking access…"].includes(status);
+  const stale = Date.now() - state.lastWorkspaceLoadAt > 30000;
+
+  if (!document.hidden && !state.workspaceLoading && (unresolved || stale)) {
+    loadWorkspace().catch(handleWorkspaceFailure);
+  }
 }
 
 async function viewRun(runId) {
@@ -864,8 +893,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadWorkspace();
   } catch (error) {
-    showAlert(error.message);
-    $("workspaceStatus").textContent = "Failed to load";
-    $("workspaceStatus").className = "badge bad";
+    handleWorkspaceFailure(error);
   }
+});
+
+document.addEventListener("visibilitychange", refreshStaleWorkspace);
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) refreshStaleWorkspace();
 });

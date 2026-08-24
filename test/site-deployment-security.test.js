@@ -176,12 +176,21 @@ test("deployment center exits loading state and preserves the return path throug
     path.join(__dirname, "..", "src", "client", "goodbase-console-login.js"),
     "utf8"
   );
+  const routes = fs.readFileSync(
+    path.join(__dirname, "..", "src", "routes", "update-sites.routes.js"),
+    "utf8"
+  );
 
   assert.match(page, /id="pageAlertAction"[^>]+returnTo=%2Fupdate-sites/);
+  assert.match(page, /update-sites\.js\?v=20260824-2/);
+  assert.doesNotMatch(page, />Loading(?: sites| repositories| server targets| registered sites)?…</);
   assert.match(client, /REQUEST_TIMEOUT_MS = 12000/);
   assert.match(client, /error\.code = "AUTH_REQUIRED"/);
   assert.match(client, /setSelectorStatus\(/);
   assert.match(client, /Sign in required/);
+  assert.match(client, /visibilitychange/);
+  assert.match(client, /event\.persisted/);
+  assert.match(routes, /private, no-store, no-cache, must-revalidate, max-age=0/);
   assert.match(login, /function safeReturnTarget\(\)/);
   assert.match(login, /target\.origin !== window\.location\.origin/);
   assert.match(login, /window\.location\.assign\(safeReturnTarget\(\)\)/);
