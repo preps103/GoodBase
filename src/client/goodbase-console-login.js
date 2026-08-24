@@ -118,10 +118,24 @@ async function api(path, options = {}) {
 }
 
 function accountUrl(mode) {
+  const returnTo = safeReturnTarget();
   const url = new URL("/auth/ui", window.location.origin);
   if (mode !== "login") url.searchParams.set("mode", mode);
-  url.searchParams.set("redirect", `${window.location.origin}/`);
+  url.searchParams.set("redirect", new URL(returnTo, window.location.origin).toString());
   return url.toString();
+}
+
+function safeReturnTarget() {
+  const requested = new URLSearchParams(window.location.search).get("returnTo");
+  if (!requested) return "/";
+
+  try {
+    const target = new URL(requested, window.location.origin);
+    if (target.origin !== window.location.origin) return "/";
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return "/";
+  }
 }
 
 function GoodBaseConsoleLogin() {
@@ -158,7 +172,9 @@ function GoodBaseConsoleLogin() {
       setError(`${type.charAt(0).toUpperCase() + type.slice(1)} sign-in is not enabled in GoodBase yet.`);
       return;
     }
-    const returnTo = encodeURIComponent(`${window.location.origin}/`);
+    const returnTo = encodeURIComponent(
+      new URL(safeReturnTarget(), window.location.origin).toString()
+    );
     window.location.assign(`/api/oidc/start/${encodeURIComponent(provider.id)}?returnTo=${returnTo}`);
   };
 
@@ -170,7 +186,7 @@ function GoodBaseConsoleLogin() {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
-      window.location.assign("/");
+      window.location.assign(safeReturnTarget());
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to sign in through GoodBase.");
       setLoading(false);

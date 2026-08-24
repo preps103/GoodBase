@@ -17,7 +17,7 @@
     button,input,select{font:inherit}.shell{max-width:1540px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:18px}.title h1{margin:0;font-size:30px}.title p{margin:6px 0 0;color:var(--muted)}
     .top-actions,.actions,.quick-actions{display:flex;gap:9px;flex-wrap:wrap}.btn{border:1px solid var(--line);background:#1b2738;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;text-decoration:none}.btn:hover{border-color:var(--accent)}.btn.primary{background:var(--accent);color:#07101f;border-color:var(--accent);font-weight:750}.btn:disabled{opacity:.45;cursor:not-allowed}
     .panel,.stat{background:rgba(16,23,34,.95);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.22)}.panel{overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 17px;border-bottom:1px solid var(--line)}.panel-head h2{margin:0;font-size:17px}.panel-body{padding:16px}
-    .alert{display:none;margin-bottom:16px;border:1px solid #78404a;background:#2a171c;color:#ffd9de;padding:13px 15px;border-radius:12px}.alert.show{display:block}
+    .alert{display:none;margin-bottom:16px;border:1px solid #78404a;background:#2a171c;color:#ffd9de;padding:13px 15px;border-radius:12px;align-items:center;justify-content:space-between;gap:14px}.alert.show{display:flex}.alert .btn{flex:0 0 auto;background:#ffd9de;color:#331116;border-color:#ffd9de;font-weight:750}
     .quick{margin-bottom:16px}.selector-grid{display:grid;grid-template-columns:1.15fr 1.35fr 1.1fr .65fr;gap:13px;align-items:end}.field{display:flex;flex-direction:column;gap:7px;min-width:0}.field label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;font-weight:700}.field input,.field select{width:100%;background:#090f18;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px;min-height:43px}.manual{display:none;margin-top:12px}.manual.show{display:block}
     .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.summary-item{background:#0a111b;border:1px solid #233146;border-radius:10px;padding:10px 12px;min-width:0}.summary-item span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase}.summary-item strong{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.quick-actions{justify-content:flex-end;margin-top:14px}
     .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}.stat{padding:16px}.stat strong{display:block;font-size:25px}.stat span{color:var(--muted)}
@@ -42,7 +42,10 @@
       </div>
     </header>
 
-    <div class="alert" id="pageAlert"></div>
+    <div class="alert" id="pageAlert" role="alert">
+      <span id="pageAlertMessage"></span>
+      <a class="btn" id="pageAlertAction" href="/console?returnTo=%2Fupdate-sites" hidden>Sign in to GoodBase</a>
+    </div>
 
     <section class="panel quick">
       <div class="panel-head">

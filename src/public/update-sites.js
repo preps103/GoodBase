@@ -7,6 +7,8 @@ const state = {
   pollTimer: null,
 };
 
+const REQUEST_TIMEOUT_MS = 12000;
+
 const $ = (id) => document.getElementById(id);
 
 function escapeHtml(value) {
@@ -70,23 +72,41 @@ function authToken() {
 
 async function api(url, options = {}) {
   const token = authToken();
-  const response = await fetch(url, {
-    ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response;
+
+  try {
+    response = await fetch(url, {
+      ...options,
+      credentials: "include",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "GoodBase took too long to return deployment data. Refresh this page to try again."
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error(
+      const error = new Error(
         "Your GoodOS backend session is unavailable. Open Back to Console, sign in, then return to Update Sites."
       );
+      error.code = "AUTH_REQUIRED";
+      throw error;
     }
 
     throw new Error(
@@ -107,14 +127,30 @@ function toast(message, isError = false) {
   }, 5000);
 }
 
-function showAlert(message) {
-  $("pageAlert").textContent = message;
+function showAlert(message, { authRequired = false } = {}) {
+  $("pageAlertMessage").textContent = message;
+  $("pageAlertAction").hidden = !authRequired;
   $("pageAlert").className = "alert show";
 }
 
 function clearAlert() {
-  $("pageAlert").textContent = "";
+  $("pageAlertMessage").textContent = "";
+  $("pageAlertAction").hidden = true;
   $("pageAlert").className = "alert";
+}
+
+function setSelectorStatus(message) {
+  for (const id of ["siteSelector", "repositorySelector", "targetSelector"]) {
+    const select = $(id);
+    select.innerHTML = `<option value="">${escapeHtml(message)}</option>`;
+    select.disabled = true;
+  }
+}
+
+function enableSelectors() {
+  for (const id of ["siteSelector", "repositorySelector", "targetSelector"]) {
+    $(id).disabled = false;
+  }
 }
 
 function siteById(id) {
@@ -559,12 +595,22 @@ async function loadWorkspace() {
   ]);
 
   if (results[0].status === "rejected") {
-    showAlert(results[0].reason.message);
+    const authenticationRequired = results[0].reason.code === "AUTH_REQUIRED";
+    showAlert(results[0].reason.message, {
+      authRequired: authenticationRequired,
+    });
+    setSelectorStatus(
+      authenticationRequired ? "Sign in required" : "Deployment data unavailable"
+    );
     $("sitesBody").innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(results[0].reason.message)}</td></tr>`;
-    $("workspaceStatus").textContent = "Authentication required";
+    $("workspaceStatus").textContent = authenticationRequired
+      ? "Sign in required"
+      : "Failed to load";
     $("workspaceStatus").className = "badge bad";
     return;
   }
+
+  enableSelectors();
 
   const warnings = [];
 

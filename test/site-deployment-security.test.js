@@ -163,6 +163,30 @@ test("deployment reconciliation retires stale Sites rows and canonical duplicate
   assert.doesNotMatch(page, /Registered Sites and Subdomains/);
 });
 
+test("deployment center exits loading state and preserves the return path through sign-in", () => {
+  const page = fs.readFileSync(
+    path.join(__dirname, "..", "src", "public", "update-sites.html"),
+    "utf8"
+  );
+  const client = fs.readFileSync(
+    path.join(__dirname, "..", "src", "public", "update-sites.js"),
+    "utf8"
+  );
+  const login = fs.readFileSync(
+    path.join(__dirname, "..", "src", "client", "goodbase-console-login.js"),
+    "utf8"
+  );
+
+  assert.match(page, /id="pageAlertAction"[^>]+returnTo=%2Fupdate-sites/);
+  assert.match(client, /REQUEST_TIMEOUT_MS = 12000/);
+  assert.match(client, /error\.code = "AUTH_REQUIRED"/);
+  assert.match(client, /setSelectorStatus\(/);
+  assert.match(client, /Sign in required/);
+  assert.match(login, /function safeReturnTarget\(\)/);
+  assert.match(login, /target\.origin !== window\.location\.origin/);
+  assert.match(login, /window\.location\.assign\(safeReturnTarget\(\)\)/);
+});
+
 test("PM2 discovery ignores legacy product copies and keeps platform runtime paths separate", async (context) => {
   const childProcess = require("node:child_process");
   const originalSpawn = childProcess.spawn;
