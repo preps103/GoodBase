@@ -126,6 +126,41 @@ test("canonical server mappings include only VPS-managed platform services", () 
     sites.some((site) => site.appId === "goodbuilder"),
     false
   );
+
+  const sitesHostedIds = deployment.sitesHostedApplicationIds();
+  assert.deepEqual(
+    sitesHostedIds.sort(),
+    manifest.applications
+      .filter((entry) => entry.deploymentType === "sites" && entry.deploymentManaged === false)
+      .map((entry) => entry.id)
+      .sort()
+  );
+  assert.equal(sitesHostedIds.includes("goodos"), true);
+  assert.equal(sitesHostedIds.includes("goodvoice"), true);
+  assert.equal(sitesHostedIds.includes("goodbase"), false);
+});
+
+test("deployment reconciliation retires stale Sites rows and canonical duplicates", () => {
+  const service = fs.readFileSync(
+    path.join(__dirname, "..", "src", "services", "site-deployment.service.js"),
+    "utf8"
+  );
+  const routes = fs.readFileSync(
+    path.join(__dirname, "..", "src", "routes", "update-sites.routes.js"),
+    "utf8"
+  );
+  const page = fs.readFileSync(
+    path.join(__dirname, "..", "src", "public", "update-sites.html"),
+    "utf8"
+  );
+
+  assert.match(service, /'retiredReason', 'managed-by-sites'/);
+  assert.match(service, /'retiredReason', 'duplicate-canonical-domain'/);
+  assert.match(service, /WHERE app_id = ANY\(\$1::text\[\]\)/);
+  assert.match(service, /WHERE app_id IS NULL/);
+  assert.match(routes, /WHERE site\.status <> 'retired'/);
+  assert.match(page, /VPS-managed Deployments/);
+  assert.doesNotMatch(page, /Registered Sites and Subdomains/);
 });
 
 test("PM2 discovery ignores legacy product copies and keeps platform runtime paths separate", async (context) => {

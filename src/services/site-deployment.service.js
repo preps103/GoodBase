@@ -65,6 +65,15 @@ function canonicalDeploymentSites() {
   }));
 }
 
+function sitesHostedApplicationIds() {
+  return deploymentManifest.applications
+    .filter((application) =>
+      application.deploymentType === "sites" &&
+      application.deploymentManaged === false
+    )
+    .map((application) => application.id);
+}
+
 function canonicalSiteByAppId(appId) {
   const normalized = cleanText(appId, 200).toLowerCase();
   return canonicalDeploymentSites().find((site) => site.appId === normalized) || null;
@@ -290,6 +299,7 @@ function inspectApplicationPath(appPath) {
 
 async function reconcileCanonicalDeploymentSites() {
   const canonicalSites = canonicalDeploymentSites();
+  const sitesHostedIds = sitesHostedApplicationIds();
   const client = await pool.connect();
 
   try {
@@ -367,6 +377,58 @@ async function reconcileCanonicalDeploymentSites() {
         ]
       );
     }
+
+    if (sitesHostedIds.length) {
+      await client.query(
+        `
+          UPDATE backend_deployment_sites
+          SET
+            status = 'retired',
+            metadata_json =
+              COALESCE(metadata_json, '{}'::jsonb) ||
+              jsonb_build_object(
+                'retiredByReconcile', true,
+                'retiredReason', 'managed-by-sites',
+                'retiredAt', NOW()
+              ),
+            updated_at = CASE
+              WHEN status = 'retired' THEN updated_at
+              ELSE NOW()
+            END
+          WHERE app_id = ANY($1::text[])
+            AND status <> 'retired'
+        `,
+        [sitesHostedIds]
+      );
+    }
+
+    for (const site of canonicalSites) {
+      if (site.appId === "goodbase") continue;
+
+      await client.query(
+        `
+          UPDATE backend_deployment_sites
+          SET
+            status = 'retired',
+            metadata_json =
+              COALESCE(metadata_json, '{}'::jsonb) ||
+              jsonb_build_object(
+                'retiredByReconcile', true,
+                'retiredReason', 'duplicate-canonical-domain',
+                'retiredAt', NOW()
+              ),
+            updated_at = CASE
+              WHEN status = 'retired' THEN updated_at
+              ELSE NOW()
+            END
+          WHERE app_id IS NULL
+            AND status <> 'retired'
+            AND LOWER(COALESCE(domain, '')) = LOWER($1)
+        `,
+        [site.domain]
+      );
+    }
+
     await client.query("COMMIT");
     return canonicalSites;
   } catch (error) {
@@ -1529,6 +1591,7 @@ module.exports = {
   validateProcessName,
   validateHealthUrl,
   canonicalDeploymentSites,
+  sitesHostedApplicationIds,
   canonicalSiteByAppId,
   canonicalSiteByProcessName,
   inspectApplicationPath,

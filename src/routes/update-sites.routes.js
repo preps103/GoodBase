@@ -132,6 +132,7 @@ router.get("/sites", async (_request, response) => {
         ORDER BY created_at DESC
         LIMIT 1
       ) recent ON TRUE
+      WHERE site.status <> 'retired'
       ORDER BY site.name ASC
     `);
 
