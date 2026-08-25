@@ -17,9 +17,16 @@ const configuredOrigins = String(
   .map(value => value.trim())
   .filter(Boolean);
 
+// This is the one explicitly-owned GoodBuilder Sites surface.  It needs to
+// authenticate with GoodBase while its UI is hosted separately; do not widen
+// this to a wildcard or to arbitrary chatgpt.site origins.
+const GOODBUILDER_SITES_ORIGIN =
+  "https://goodbuilder-app.goodqrcodes.chatgpt.site";
+
 const exactOrigins = new Set(
   [
     ...configuredOrigins,
+    GOODBUILDER_SITES_ORIGIN,
     "https://localhost",
   ]
 );

@@ -152,8 +152,9 @@ router.use(authRequired);
 router.use((req, res, next) => {
   const origin = clean(req.get("Origin"), 300);
   const expected = process.env.GOODBUILDER_ORIGIN || "https://builder.goodos.app";
+  const hostedPreview = "https://goodbuilder-app.goodqrcodes.chatgpt.site";
   const developmentOrigin = process.env.NODE_ENV !== "production" && /^https?:\/\/localhost(?::\d+)?$/.test(origin);
-  if (origin && origin !== expected && !developmentOrigin) {
+  if (origin && origin !== expected && origin !== hostedPreview && !developmentOrigin) {
     return res.status(403).json({ success: false, code: "GOODBUILDER_ORIGIN_DENIED", message: "Request origin is not allowed." });
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.get("X-Requested-With") !== "GoodBuilder") {
