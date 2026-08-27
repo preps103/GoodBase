@@ -150,10 +150,22 @@ age_minutes() {
 newest_matching() {
   directory="$1"
   pattern="$2"
-  {
-    find "$directory" -maxdepth 1 -type f -name "$pattern" -exec ls -1t {} + 2>/dev/null |
-      head -1
-  } || true
+  newest=""
+  newest_epoch=-1
+
+  # `find -exec ls ... +` sorts only within each argument batch. Once the
+  # archive directory grows past one batch, `head -1` can therefore select an
+  # arbitrarily old artifact. Compare every candidate's modification time
+  # directly so recovery freshness checks always use the true newest archive.
+  while IFS= read -r -d '' candidate; do
+    candidate_epoch="$(file_epoch "$candidate")"
+    if [ "$candidate_epoch" -gt "$newest_epoch" ]; then
+      newest="$candidate"
+      newest_epoch="$candidate_epoch"
+    fi
+  done < <(find "$directory" -maxdepth 1 -type f -name "$pattern" -print0 2>/dev/null)
+
+  printf '%s\n' "$newest"
 }
 
 verify_encrypted_checksum() {
