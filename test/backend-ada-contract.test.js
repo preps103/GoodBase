@@ -62,10 +62,16 @@ test("ADA control preserves the GoodOS accessibility contract", () => {
   assert.match(client, /goodos:accessibility:close/);
   assert.match(client, /goodos:accessibility:toggle/);
   assert.match(client, /goodos:accessibility:ready/);
+  assert.match(client, /window\.GoodOSAdaWidget/);
+  assert.match(client, /unmount: unmount/);
+  assert.match(client, /configure: configure/);
+  assert.match(client, /goodosAdaPlacement/);
   assert.match(styles, /html\.ada-reduce-motion/);
   assert.match(styles, /html\.ada-focus-indicators/);
   assert.match(styles, /button\[aria-label="Accessibility Options"\]:not\(\.backend-ada-trigger\)/);
   assert.match(styles, /button\[aria-label="Open accessibility menu"\]:not\(\.backend-ada-trigger\)/);
+  assert.match(styles, /data-goodos-ada-placement="bottom-left"/);
+  assert.match(styles, /data-goodos-ada-placement="top-right"/);
 });
 
 test("ADA launcher and panel use the universal GoodOS dimensions", () => {

@@ -1,7 +1,7 @@
 (function initializeBackendAda() {
   "use strict";
 
-  var WIDGET_VERSION = "3.0.0";
+  var WIDGET_VERSION = "4.0.0";
   var STORAGE_KEY = "goodos-accessibility-settings-v1";
   var DEFAULT_SETTINGS = {
     textScale: 100,
@@ -43,6 +43,67 @@
   var root;
   var trigger;
   var panel;
+  var widgetOptions;
+
+  function firstDefined() {
+    for (var index = 0; index < arguments.length; index += 1) {
+      if (arguments[index] !== undefined && arguments[index] !== null && arguments[index] !== "") {
+        return arguments[index];
+      }
+    }
+    return undefined;
+  }
+
+  function widgetScript() {
+    var scripts = document.querySelectorAll("script[src]");
+    for (var index = scripts.length - 1; index >= 0; index -= 1) {
+      if (/backend-ada\.js(?:[?#]|$)/.test(scripts[index].getAttribute("src") || "")) return scripts[index];
+    }
+    return null;
+  }
+
+  function normalizePlacement(value) {
+    var placement = String(value || "bottom-right").toLowerCase();
+    return ["bottom-right", "bottom-left", "top-right", "top-left"].indexOf(placement) >= 0
+      ? placement
+      : "bottom-right";
+  }
+
+  function readWidgetOptions(overrides) {
+    var script = widgetScript();
+    var scriptData = script ? script.dataset : {};
+    var htmlData = document.documentElement.dataset;
+    var bodyData = document.body ? document.body.dataset : {};
+    var supplied = overrides || {};
+    return {
+      placement: normalizePlacement(firstDefined(
+        supplied.placement,
+        scriptData.goodosAdaPlacement,
+        htmlData.goodosAdaPlacement,
+        bodyData.goodosAdaPlacement,
+      )),
+      triggerRight: firstDefined(supplied.triggerRight, scriptData.goodosAdaTriggerRight),
+      triggerBottom: firstDefined(supplied.triggerBottom, scriptData.goodosAdaTriggerBottom),
+      panelRight: firstDefined(supplied.panelRight, scriptData.goodosAdaPanelRight),
+      panelBottom: firstDefined(supplied.panelBottom, scriptData.goodosAdaPanelBottom),
+      disabled: firstDefined(supplied.disabled, scriptData.goodosAdaDisabled, htmlData.goodosAdaDisabled, bodyData.goodosAdaDisabled) === true ||
+        firstDefined(supplied.disabled, scriptData.goodosAdaDisabled, htmlData.goodosAdaDisabled, bodyData.goodosAdaDisabled) === "true",
+    };
+  }
+
+  function applyWidgetOptions(options) {
+    if (!root) return;
+    root.dataset.goodosAdaPlacement = options.placement;
+    [
+      ["--backend-ada-trigger-right", options.triggerRight],
+      ["--backend-ada-trigger-bottom", options.triggerBottom],
+      ["--backend-ada-panel-right", options.panelRight],
+      ["--backend-ada-panel-bottom", options.panelBottom],
+    ].forEach(function (entry) {
+      if (entry[1] === undefined) root.style.removeProperty(entry[0]);
+      else root.style.setProperty(entry[0], entry[1]);
+    });
+  }
 
   function productName() {
     return (
@@ -188,16 +249,54 @@
     });
   }
 
-  function start() {
-    if (document.querySelector(".backend-ada-root")) return;
+  function mount(overrides) {
+    widgetOptions = readWidgetOptions(overrides);
+    if (widgetOptions.disabled) return null;
+    if (root || document.querySelector(".backend-ada-root")) {
+      root = root || document.querySelector(".backend-ada-root");
+      applyWidgetOptions(widgetOptions);
+      return root;
+    }
     build();
+    applyWidgetOptions(widgetOptions);
     wire();
     applySettings(false);
     window.dispatchEvent(
       new CustomEvent("goodos:accessibility:ready", {
-        detail: { version: WIDGET_VERSION, productName: productName() },
+        detail: { version: WIDGET_VERSION, productName: productName(), placement: widgetOptions.placement },
       }),
     );
+    return root;
+  }
+
+  function unmount() {
+    if (root && root.parentNode) root.parentNode.removeChild(root);
+    root = null;
+    trigger = null;
+    panel = null;
+  }
+
+  function configure(overrides) {
+    widgetOptions = readWidgetOptions(Object.assign({}, widgetOptions || {}, overrides || {}));
+    if (widgetOptions.disabled) {
+      unmount();
+      return null;
+    }
+    return root ? (applyWidgetOptions(widgetOptions), root) : mount(widgetOptions);
+  }
+
+  window.GoodOSAdaWidget = Object.freeze({
+    mount: mount,
+    unmount: unmount,
+    configure: configure,
+    open: function () { window.dispatchEvent(new Event("goodos:accessibility:open")); },
+    close: function () { window.dispatchEvent(new Event("goodos:accessibility:close")); },
+    toggle: function () { window.dispatchEvent(new Event("goodos:accessibility:toggle")); },
+    version: WIDGET_VERSION,
+  });
+
+  function start() {
+    mount();
   }
 
   if (document.readyState === "loading") {

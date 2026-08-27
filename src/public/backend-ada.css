@@ -10,13 +10,42 @@
   --backend-ada-trigger-hover-shadow: 0 23px 52px rgba(38, 30, 112, 0.52), inset 0 1px rgba(255, 255, 255, 0.28);
   --backend-ada-trigger-right: 24px;
   --backend-ada-trigger-bottom: 24px;
+  --backend-ada-trigger-left: auto;
+  --backend-ada-trigger-top: auto;
   --backend-ada-panel-right: 24px;
   --backend-ada-panel-bottom: 96px;
+  --backend-ada-panel-left: auto;
+  --backend-ada-panel-top: auto;
 }
 
 .backend-ada-root {
   position: relative;
   z-index: 50;
+}
+
+.backend-ada-root[data-goodos-ada-placement="bottom-left"] {
+  --backend-ada-trigger-right: auto;
+  --backend-ada-trigger-left: 24px;
+  --backend-ada-panel-right: auto;
+  --backend-ada-panel-left: 24px;
+}
+
+.backend-ada-root[data-goodos-ada-placement="top-right"] {
+  --backend-ada-trigger-bottom: auto;
+  --backend-ada-trigger-top: 24px;
+  --backend-ada-panel-bottom: auto;
+  --backend-ada-panel-top: 96px;
+}
+
+.backend-ada-root[data-goodos-ada-placement="top-left"] {
+  --backend-ada-trigger-right: auto;
+  --backend-ada-trigger-left: 24px;
+  --backend-ada-trigger-bottom: auto;
+  --backend-ada-trigger-top: 24px;
+  --backend-ada-panel-right: auto;
+  --backend-ada-panel-left: 24px;
+  --backend-ada-panel-bottom: auto;
+  --backend-ada-panel-top: 96px;
 }
 
 button[aria-label="Accessibility Options"]:not(.backend-ada-trigger),
@@ -29,6 +58,8 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
   position: fixed;
   right: var(--backend-ada-trigger-right);
   bottom: var(--backend-ada-trigger-bottom);
+  left: var(--backend-ada-trigger-left);
+  top: var(--backend-ada-trigger-top);
   z-index: 50;
   display: inline-flex;
   align-items: center;
@@ -111,6 +142,8 @@ button[aria-label="Open accessibility options"]:not(.backend-ada-trigger) {
   position: fixed;
   right: var(--backend-ada-panel-right);
   bottom: var(--backend-ada-panel-bottom);
+  left: var(--backend-ada-panel-left);
+  top: var(--backend-ada-panel-top);
   z-index: 100;
   display: flex;
   overflow: hidden;
