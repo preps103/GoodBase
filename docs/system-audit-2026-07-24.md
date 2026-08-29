@@ -69,7 +69,7 @@ only their compiled output.
 | GoodScan | 200 | Pass | Shared boundary passes |
 | GoodSpeech | 200 | Pass | Speech route exists; protected with 401 |
 | GoodSwapz | 200 | Pass | Listings route exists; protected with 401 |
-| GoodTrusts | 200 | Pass | Shared boundary and deployed UI bundle pass |
+| GoodTrust | 200 | Pass | Shared boundary and deployed UI bundle pass |
 | GoodVoice | 200 | Pass | Voice health returns 200 |
 
 ## Registry and isolation

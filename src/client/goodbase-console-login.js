@@ -71,7 +71,7 @@ function installGoodBaseStory() {
           <div class="goodbase-network__node goodbase-network__node--qr"><b>QR</b><div><strong>GoodQR</strong><small>Authorized</small></div></div>
           <div class="goodbase-network__node goodbase-network__node--scan"><b>3D</b><div><strong>GoodScan</strong><small>Authorized</small></div></div>
           <div class="goodbase-network__node goodbase-network__node--voice"><b>VO</b><div><strong>GoodVoice</strong><small>Authorized</small></div></div>
-          <div class="goodbase-network__node goodbase-network__node--trust"><b>TR</b><div><strong>GoodTrusts</strong><small>Authorized</small></div></div>
+          <div class="goodbase-network__node goodbase-network__node--trust"><b>TR</b><div><strong>GoodTrust</strong><small>Authorized</small></div></div>
           <div class="goodbase-network__node goodbase-network__node--boost"><b>BO</b><div><strong>GoodBoost</strong><small>Realtime connected</small></div></div>
           <div class="goodbase-network__node goodbase-network__node--fleet"><b>FL</b><div><strong>GoodFleet</strong><small>API connected</small></div></div>
 

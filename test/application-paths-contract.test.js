@@ -80,7 +80,7 @@ test("GoodBase, GoodID, and GoodMail Accounts have explicit authentication roles
   assert.match(shared.get("goodmail-accounts").canonicalLoginException, /Mailbox credentials/i);
 });
 
-test("GoodCustoms, GoodTrusts, and GoodSure use canonical singular domains", () => {
+test("GoodCustoms, GoodTrust, and GoodSure use canonical singular domains", () => {
   const applications = new Map(
     manifest.applications.map((application) => [application.id, application])
   );

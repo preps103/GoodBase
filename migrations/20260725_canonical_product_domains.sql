@@ -33,7 +33,7 @@ BEGIN
       AND domain = 'trust.goodos.app'
       AND status = 'active'
   ) THEN
-    RAISE EXCEPTION 'GoodTrusts canonical domain is missing';
+    RAISE EXCEPTION 'GoodTrust canonical domain is missing';
   END IF;
 END
 $canonical_domain_validation$;

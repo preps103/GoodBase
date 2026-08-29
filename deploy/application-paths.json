@@ -108,7 +108,7 @@
       "theme": { "accent": "#10b981", "accentInk": "#04170f" }
     },
     {
-      "id": "goodtrusts", "name": "GoodTrusts", "domain": "trust.goodos.app", "status": "active", "classification": "product",
+      "id": "goodtrusts", "name": "GoodTrust", "domain": "trust.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/GoodTrusts-v1.7.git", "localDirectory": "goodtrusts-source",
       "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6002a664c48191a35b7f03d34a6491",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/Login.tsx",

@@ -22,7 +22,7 @@ manifest, plus the GoodBase and GoodID platform services.
 | GoodScan | `preps103/GoodScan-3D` |
 | GoodSpeech | `preps103/GoodSpeech` |
 | GoodSwapz | `preps103/GoodSwapz` |
-| GoodTrusts | `preps103/GoodTrusts-v1.7` |
+| GoodTrust | `preps103/GoodTrusts-v1.7` |
 | GoodVoice | `preps103/GoodVoice-v1.3` |
 
 GoodBackend was identified as a retired record and is not a deployment target.
@@ -40,7 +40,7 @@ It was not modified or deleted.
   React copies in several applications. Those applications could mount two
   accessibility controls.
 - GoodBuilder did not load the shared ADA control.
-- GoodAds, GoodQR, and GoodTrusts did not consistently load the shared ADA assets.
+- GoodAds, GoodQR, and GoodTrust did not consistently load the shared ADA assets.
 - Product-specific ADA theme files are valid token overrides and are retained.
 
 ## Canonical contracts
@@ -78,7 +78,7 @@ The migration removes:
 
 - local `GoodOSTopBarWidget.tsx` copies after imports use the package;
 - local React ADA launchers after the shared script is loaded;
-- GoodTrusts' copied `backend-ada.css` and `backend-ada.js`;
+- GoodTrust's copied `backend-ada.css` and `backend-ada.js`;
 - stale, unreferenced versioned top-bar CSS files.
 
 Product-specific theme files are retained because they contain application color
