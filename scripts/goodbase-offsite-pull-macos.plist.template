@@ -3,26 +3,27 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.goodbase.recovery-verify</string>
+  <string>com.goodos.offsite-backup</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>__RECOVERY_SCRIPT_PATH__</string>
+    <string>/bin/zsh</string>
+    <string>__OFFSITE_SCRIPT_PATH__</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>GOODBASE_BACKUP_DRIVE</key>
+    <string>__BACKUP_DRIVE__</string>
     <key>GOODBASE_RECOVERY_ROOT</key>
     <string>__RECOVERY_ROOT__</string>
+    <key>GOODBASE_BACKUP_VPS</key>
+    <string>__BACKUP_VPS__</string>
+    <key>GOODBASE_BACKUP_SSH_KEY</key>
+    <string>__SSH_KEY__</string>
   </dict>
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>3</integer>
-    <key>Minute</key>
-    <integer>45</integer>
-  </dict>
+  <key>StartInterval</key>
+  <integer>900</integer>
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>

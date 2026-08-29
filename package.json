@@ -35,6 +35,7 @@
     "migrate:applications": "node scripts/apply-goodsupply-rename-migration.js && node scripts/apply-goodos-application-domain-migration.js",
     "readiness:goodscan": "node scripts/goodscan-production-readiness.js",
     "audit:goodfleet": "node scripts/audit-goodfleet-readiness.js",
+    "audit:production-boundaries": "node scripts/audit-production-boundaries.js",
     "test": "node --test test/*.test.js",
     "test:goodspeech": "node --test --test-name-pattern='GoodSpeech' test/goodspeech-security.test.js",
     "enterprise:readiness": "node scripts/enterprise-readiness.js",
