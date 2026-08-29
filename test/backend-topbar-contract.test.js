@@ -73,7 +73,12 @@ test("master top bar preserves the GoodBase desktop dimensions", () => {
   assert.match(styles, /\[data-goodos-topbar-control="help"\][\s\S]*grid-column:\s*3\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-control="account"\][\s\S]*grid-column:\s*4\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-control="account"\]\s+img\s*\{[\s\S]*width:\s*32px\s*!important\s*;[\s\S]*height:\s*32px\s*!important\s*;/);
-  assert.match(styles, /\[data-goodos-topbar-controls\]\s*>\s*\[data-goodos-notifications\]\s+button\s*\{[\s\S]*width:\s*var\(--goodos-topbar-control-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-control-size\)\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar-controls\][\s\S]*>\s*\[data-goodos-notifications\][\s\S]*\[data-goodos-notification-trigger\]\s*\{[\s\S]*width:\s*var\(--goodos-topbar-control-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-control-size\)\s*!important\s*;/);
+  assert.doesNotMatch(
+    styles,
+    /\[data-goodos-topbar-controls\]\s*>\s*\[data-goodos-notifications\]\s+button\s*\{/,
+    "notification-center actions and rows must retain their own dimensions"
+  );
 });
 
 test("top-bar widget owns viewport placement and preserves application notification slots", () => {

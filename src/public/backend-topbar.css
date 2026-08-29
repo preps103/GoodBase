@@ -521,7 +521,9 @@
   height: var(--goodos-topbar-control-size) !important;
 }
 
-[data-goodos-topbar-controls] > [data-goodos-notifications] button {
+[data-goodos-topbar-controls]
+  > [data-goodos-notifications]
+  [data-goodos-notification-trigger] {
   width: var(--goodos-topbar-control-size) !important;
   min-width: var(--goodos-topbar-control-size) !important;
   max-width: var(--goodos-topbar-control-size) !important;
