@@ -6,8 +6,9 @@
   <string>com.goodos.offsite-backup</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>__OFFSITE_SCRIPT_PATH__</string>
+    <string>/usr/bin/open</string>
+    <string>-gj</string>
+    <string>__OFFSITE_APP_PATH__</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
