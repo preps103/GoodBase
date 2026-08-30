@@ -30,7 +30,9 @@ function ensureBackupSshPort(options = {}) {
   const run = options.execFileSync || execFileSync;
   const platform = options.platform || process.platform;
   const getuid = options.getuid || process.getuid;
-  const cwd = path.resolve(options.cwd || process.cwd());
+  const runtimeRoot = path.resolve(
+    options.runtimeRoot || path.join(__dirname, "..", ".."),
+  );
   const paths = {
     productionRoot: PRODUCTION_ROOT,
     sshdConfig: SSHD_CONFIG,
@@ -44,7 +46,7 @@ function ensureBackupSshPort(options = {}) {
     platform !== "linux" ||
     typeof getuid !== "function" ||
     getuid() !== 0 ||
-    cwd !== paths.productionRoot
+    runtimeRoot !== paths.productionRoot
   ) {
     return { status: "skipped", reason: "not-goodbase-production-root" };
   }

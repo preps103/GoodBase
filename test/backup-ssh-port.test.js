@@ -50,6 +50,19 @@ test("backup SSH configuration is gated to the GoodBase production process", () 
   });
 });
 
+test("backup SSH configuration rejects a root process outside the production checkout", () => {
+  const result = ensureBackupSshPort({
+    platform: "linux",
+    getuid: () => 0,
+    runtimeRoot: "/root/GoodBase",
+  });
+
+  assert.deepEqual(result, {
+    status: "skipped",
+    reason: "not-goodbase-production-root",
+  });
+});
+
 test("backup SSH configuration preserves port 22 and adds port 2222", (t) => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
@@ -58,7 +71,7 @@ test("backup SSH configuration preserves port 22 and adds port 2222", (t) => {
   const result = ensureBackupSshPort({
     platform: "linux",
     getuid: () => 0,
-    cwd: PRODUCTION_ROOT,
+    runtimeRoot: PRODUCTION_ROOT,
     paths: fixture.paths,
     execFileSync: (file, args) => calls.push([file, args]),
   });
@@ -84,7 +97,7 @@ test("invalid SSH configuration is rolled back before the error is reported", (t
       ensureBackupSshPort({
         platform: "linux",
         getuid: () => 0,
-        cwd: PRODUCTION_ROOT,
+        runtimeRoot: PRODUCTION_ROOT,
         paths: fixture.paths,
         execFileSync: () => {
           callCount += 1;
@@ -96,4 +109,20 @@ test("invalid SSH configuration is rolled back before the error is reported", (t
 
   assert.equal(fs.readFileSync(fixture.paths.dropIn, "utf8"), previousContent);
   assert.equal(callCount, 3);
+});
+
+test("backup SSH configuration is independent of the process-manager cwd", (t) => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+
+  const result = ensureBackupSshPort({
+    platform: "linux",
+    getuid: () => 0,
+    cwd: "/root",
+    runtimeRoot: PRODUCTION_ROOT,
+    paths: fixture.paths,
+    execFileSync: () => {},
+  });
+
+  assert.deepEqual(result, { status: "configured", port: 2222 });
 });
