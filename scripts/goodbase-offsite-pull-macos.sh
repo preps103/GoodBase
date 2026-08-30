@@ -7,6 +7,7 @@ DEST_ROOT="${GOODBASE_RECOVERY_ROOT:-$DRIVE/GoodOS-Backups/srv1592310}"
 VPS="${GOODBASE_BACKUP_VPS:-root@2.24.206.16}"
 SSH_KEY="${GOODBASE_BACKUP_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SSH_PORT="${GOODBASE_BACKUP_SSH_PORT:-2222}"
+SSH_FALLBACK_PORT="${GOODBASE_BACKUP_SSH_FALLBACK_PORT:-22}"
 LOG_FILE="${GOODBASE_BACKUP_LOG:-$HOME/Library/Logs/GoodOS/offsite-backup.log}"
 LOCAL_STATUS_DIR="${GOODBASE_LOCAL_STATUS_DIR:-$HOME/Library/Application Support/Goodbase Recovery/status}"
 LOCK_DIRECTORY="${TMPDIR:-/tmp}/goodbase-offsite-backup.lock"
@@ -95,12 +96,36 @@ trap cleanup EXIT INT TERM
   "$DEST_ROOT/metadata" \
   "$DEST_ROOT/status"
 
+SELECTED_SSH_PORT=""
+for candidate_port in "$SSH_PORT" "$SSH_FALLBACK_PORT"; do
+  if [ -n "$SELECTED_SSH_PORT" ] || [ -z "$candidate_port" ]; then
+    continue
+  fi
+  if /usr/bin/ssh \
+    -i "$SSH_KEY" \
+    -p "$candidate_port" \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o ConnectTimeout=15 \
+    -o ConnectionAttempts=1 \
+    -o AddKeysToAgent=yes \
+    -o UseKeychain=yes \
+    "$VPS" true; then
+    SELECTED_SSH_PORT="$candidate_port"
+  fi
+done
+
+[ -n "$SELECTED_SSH_PORT" ] || fail "Neither the primary nor fallback SSH port is reachable"
+SSH_PORT="$SELECTED_SSH_PORT"
+echo "$(timestamp) Using SSH port $SSH_PORT."
+
 SSH_OPTIONS=(
   -i "$SSH_KEY"
   -p "$SSH_PORT"
   -o IdentitiesOnly=yes
   -o BatchMode=yes
   -o ConnectTimeout=15
+  -o ConnectionAttempts=1
   -o ServerAliveInterval=30
   -o ServerAliveCountMax=3
   -o AddKeysToAgent=yes
@@ -117,7 +142,7 @@ REMOTE_FILE_COUNT="$(
   '
 )"
 
-export RSYNC_RSH="/usr/bin/ssh -i $SSH_KEY -p $SSH_PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o AddKeysToAgent=yes -o UseKeychain=yes"
+export RSYNC_RSH="/usr/bin/ssh -i $SSH_KEY -p $SSH_PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o AddKeysToAgent=yes -o UseKeychain=yes"
 
 for directory in database base wal; do
   /usr/bin/rsync -a --partial \
