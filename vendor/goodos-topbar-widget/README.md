@@ -23,13 +23,10 @@ availability from GoodBase, `goodOSIdentityProviderUrl` to start a configured
 provider, and `goodOSAccountUrl` for shared sign-in, registration, and recovery
 routes. Product code must not assume that a provider is enabled.
 
-Passkeys are enrolled once for the `goodos.app` relying party and reused across
-the product suite. When a product does not supply `onPasskeySignIn`, the login
-widget automatically shows the passkey option on supported browsers and sends
-the user through `goodOSPasskeyHandoffUrl(window.location.href)`. GoodOS performs
-the Touch ID or passkey ceremony, establishes the shared GoodBase session, and
-returns the user to the product. The product must still enforce its own active
-application membership before rendering protected content.
+The shared login widget intentionally does not render a full-width Touch ID or
+passkey provider button. On supported devices it exposes the same passkey flow
+through a compact biometric control inside the password field. Existing passkey
+helpers, enrollment controls, and callback properties remain available.
 
 Product repositories keep a vendored snapshot so production builds remain
 deterministic and do not require registry access. From the GoodBase repository,
