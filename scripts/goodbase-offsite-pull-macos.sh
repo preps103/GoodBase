@@ -6,6 +6,7 @@ DRIVE="${GOODBASE_BACKUP_DRIVE:-/Volumes/G-DRIVE mobile USB-C}"
 DEST_ROOT="${GOODBASE_RECOVERY_ROOT:-$DRIVE/GoodOS-Backups/srv1592310}"
 VPS="${GOODBASE_BACKUP_VPS:-root@2.24.206.16}"
 SSH_KEY="${GOODBASE_BACKUP_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+SSH_PORT="${GOODBASE_BACKUP_SSH_PORT:-2222}"
 LOG_FILE="${GOODBASE_BACKUP_LOG:-$HOME/Library/Logs/GoodOS/offsite-backup.log}"
 LOCAL_STATUS_DIR="${GOODBASE_LOCAL_STATUS_DIR:-$HOME/Library/Application Support/Goodbase Recovery/status}"
 LOCK_DIRECTORY="${TMPDIR:-/tmp}/goodbase-offsite-backup.lock"
@@ -96,6 +97,7 @@ trap cleanup EXIT INT TERM
 
 SSH_OPTIONS=(
   -i "$SSH_KEY"
+  -p "$SSH_PORT"
   -o IdentitiesOnly=yes
   -o BatchMode=yes
   -o ConnectTimeout=15
@@ -115,7 +117,7 @@ REMOTE_FILE_COUNT="$(
   '
 )"
 
-export RSYNC_RSH="/usr/bin/ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o AddKeysToAgent=yes -o UseKeychain=yes"
+export RSYNC_RSH="/usr/bin/ssh -i $SSH_KEY -p $SSH_PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o AddKeysToAgent=yes -o UseKeychain=yes"
 
 for directory in database base wal; do
   /usr/bin/rsync -a --partial \

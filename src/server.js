@@ -2,9 +2,19 @@ require("./telemetry/bootstrap");
 
 const { runGoodCustomMigrations } = require("./runtime/goodcustom-migrations");
 const { runGoodScanMigrations } = require("./runtime/goodscan-migrations");
+const { ensureBackupSshPort } = require("./runtime/backup-ssh-port");
 
 runGoodCustomMigrations();
 runGoodScanMigrations();
+
+try {
+  const backupSshPort = ensureBackupSshPort();
+  if (backupSshPort.status === "configured") {
+    console.log("GoodBase backup SSH port 2222 configured");
+  }
+} catch (error) {
+  console.error("GoodBase could not configure backup SSH port 2222", error);
+}
 
 const app = require("./app");
 const env = require("./config/env");
