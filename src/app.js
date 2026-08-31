@@ -32,6 +32,37 @@ app.use(
   goodosPhase2Security.originGate
 );
 
+// GOODOS_SECURITY_PHASE2_CORS
+// CORS must run before authentication throttles so browser preflights are
+// answered without consuming the login budget and every allowed-origin error
+// response (including HTTP 429) remains readable by the shared login widget.
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: [
+      "GET",
+      "HEAD",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS"
+    ],
+    allowedHeaders: [
+      "Authorization",
+      "Content-Type",
+      "Idempotency-Key",
+      "X-Requested-With",
+      "X-Goodbase-API-Key",
+      "X-GoodOS-API-Key",
+      "X-GoodBase-Client",
+      "X-Request-ID",
+      "Traceparent"
+    ]
+  })
+);
+
 app.use(
   goodosPhase2Security.securityHeaders
 );
@@ -373,34 +404,6 @@ function isAllowedOrigin(origin) {
 
 app.use(helmet());
 
-
-// GOODOS_SECURITY_PHASE2_CORS
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-    methods: [
-      "GET",
-      "HEAD",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE",
-      "OPTIONS"
-    ],
-    allowedHeaders: [
-      "Authorization",
-      "Content-Type",
-      "Idempotency-Key",
-      "X-Requested-With",
-      "X-Goodbase-API-Key",
-      "X-GoodOS-API-Key",
-      "X-GoodBase-Client",
-      "X-Request-ID",
-      "Traceparent"
-    ]
-  })
-);
 
 app.use(
   express.json({

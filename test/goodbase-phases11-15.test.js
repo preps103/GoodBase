@@ -17,7 +17,7 @@ test("application launcher renders every registered GoodOS application beneath V
   assert.match(source, /fetch\("\/api\/apps"/);
   assert.match(source, /GoodOS Voice/);
   assert.match(source, /goodos-app-launcher-list/);
-  assert.doesNotMatch(source, /GoodFleet|GoodQR|GoodTrusts/);
+  assert.doesNotMatch(source, /GoodFleet|GoodQR|GoodTrust/);
   assert.match(migration, /domain='base\.goodos\.app'/);
   assert.match(migration, /name='GoodBase'/);
 });

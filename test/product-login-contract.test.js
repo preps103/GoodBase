@@ -57,8 +57,8 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
   assert.match(routes, /router\.get\("\/register"/);
   assert.match(authClient, /setPasswordVisibility/);
   assert.match(authClient, /aria-pressed/);
-  assert.match(authUi, /Use Touch ID or passkey/);
-  assert.match(authClient, /url\.searchParams\.set\("passkey", "1"\)/);
+  assert.doesNotMatch(authUi, /Use Touch ID or passkey/);
+  assert.doesNotMatch(authClient, /url\.searchParams\.set\("passkey", "1"\)/);
   assert.doesNotMatch(authUi, /Authentication and account security are managed through GoodBase/);
   assert.doesNotMatch(css, /goodbase-login-security/);
   assert.match(authUi, /Continue with GoodOS/);
@@ -74,9 +74,11 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.7\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.8\.0"/);
   assert.match(sharedWidget, /goodOSPasskeyHandoffUrl/);
-  assert.match(sharedWidget, /Use Touch ID or passkey/);
+  assert.doesNotMatch(sharedWidget, /Use Touch ID or passkey/);
+  assert.match(sharedWidget, /Sign in with Touch ID or passkey/);
+  assert.match(sharedWidget, /goodos-login-widget__passkey-trigger/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /package-lock\.json/);

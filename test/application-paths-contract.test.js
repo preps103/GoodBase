@@ -37,7 +37,7 @@ test("the registry discovers active products without a fixed application count",
 test("every active product declares the canonical login integration and theme tokens", () => {
   assert.equal(manifest.canonicalLogin.owner, "goodbase");
   assert.equal(manifest.canonicalLogin.package, "@goodos/topbar-widget");
-  assert.equal(manifest.canonicalLogin.version, "4.7.0");
+  assert.equal(manifest.canonicalLogin.version, "4.8.0");
   assert.deepEqual(
     manifest.canonicalLogin.requiredComponents,
     ["GoodOSLoginShell", "GoodOSLoginWidget"]
@@ -80,7 +80,7 @@ test("GoodBase, GoodID, and GoodMail Accounts have explicit authentication roles
   assert.match(shared.get("goodmail-accounts").canonicalLoginException, /Mailbox credentials/i);
 });
 
-test("GoodCustoms, GoodTrusts, and GoodSure use canonical singular domains", () => {
+test("GoodCustoms, GoodTrust, and GoodSure use canonical singular domains", () => {
   const applications = new Map(
     manifest.applications.map((application) => [application.id, application])
   );

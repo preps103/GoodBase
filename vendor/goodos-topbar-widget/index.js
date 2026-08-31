@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.6.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.7.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
@@ -390,11 +390,14 @@ const loginWidgetCss = String.raw`
 .goodos-login-widget .goodos-login-widget__label{display:grid!important;min-width:0;gap:8px!important;margin:0 0 18px!important;color:#e5e7eb!important;font-size:14px!important;font-weight:750!important;line-height:1.5!important}
 .goodos-login-widget__label-row{display:flex;align-items:center;justify-content:space-between;gap:14px}
 .goodos-login-widget__recovery{border:0;background:transparent;color:var(--goodos-login-accent);cursor:pointer;font:inherit;font-size:12px;font-weight:750}
-.goodos-login-widget__input-shell{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;height:var(--goodos-login-control-height);min-height:var(--goodos-login-control-height);padding:0 15px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#94a3b8;transition:border-color 160ms ease,box-shadow 160ms ease}
+.goodos-login-widget__input-shell{display:grid;grid-template-columns:20px minmax(0,1fr) auto auto;align-items:center;gap:8px;min-width:0;height:var(--goodos-login-control-height);min-height:var(--goodos-login-control-height);padding:0 15px;border:1px solid var(--goodos-login-border);border-radius:12px;background:var(--goodos-login-surface);color:#94a3b8;transition:border-color 160ms ease,box-shadow 160ms ease}
 .goodos-login-widget__input-shell:focus-within{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 18%,transparent)}
 .goodos-login-widget .goodos-login-widget__input{appearance:none;width:100%!important;min-width:0!important;height:50px!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;outline:0!important;background:transparent!important;box-shadow:none!important;color:var(--goodos-login-text)!important;font:inherit;font-size:16px}
 .goodos-login-widget__input::placeholder{color:#737986}
 .goodos-login-widget__toggle{display:grid;width:34px;height:34px;place-items:center;border:0;border-radius:8px;background:transparent;color:#94a3b8;cursor:pointer;font:inherit;font-size:17px}
+.goodos-login-widget__passkey-trigger{display:grid;width:34px;height:34px;place-items:center;border:1px solid color-mix(in srgb,var(--goodos-login-accent) 45%,var(--goodos-login-border));border-radius:8px;background:color-mix(in srgb,var(--goodos-login-surface) 90%,var(--goodos-login-accent));color:var(--goodos-login-accent);cursor:pointer;font:inherit;font-size:19px;font-weight:800;line-height:1}
+.goodos-login-widget__passkey-trigger:hover{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 12%,transparent)}
+.goodos-login-widget__passkey-trigger:disabled{cursor:not-allowed;opacity:.52}
 .goodos-login-widget__passkey-setup{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;margin:-2px 0 18px;padding:14px 16px;border:1px solid color-mix(in srgb,var(--goodos-login-accent) 38%,var(--goodos-login-border));border-radius:12px;background:color-mix(in srgb,var(--goodos-login-surface) 92%,var(--goodos-login-accent));color:var(--goodos-login-text);cursor:pointer;transition:border-color 160ms ease,box-shadow 160ms ease,background 160ms ease}
 .goodos-login-widget__passkey-setup:hover{border-color:var(--goodos-login-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-login-accent) 10%,transparent)}
 .goodos-login-widget__passkey-setup input{width:18px;height:18px;margin:0;accent-color:var(--goodos-login-accent);cursor:pointer}
@@ -672,13 +675,6 @@ export function GoodOSLoginWidget({
             createElement(
               "div",
               { className: "goodos-login-widget__providers", "data-goodbase-login-providers": "", "aria-label": "Sign-in options" },
-              showPasskey && createElement(ProviderButton, {
-                provider: "passkey",
-                label: passkeyLoading ? "Waiting for your passkey…" : "Use Touch ID or passkey",
-                disabled: loading || passkeyLoading,
-                passkey: true,
-                onClick: beginPasskeySignIn,
-              }),
               ...["google", "apple", "microsoft"].map((provider) =>
                 createElement(ProviderButton, {
                   key: provider,
@@ -749,6 +745,22 @@ export function GoodOSLoginWidget({
                   required: true,
                   disabled: loading,
                 }),
+                showPasskey && createElement(
+                  "button",
+                  {
+                    className: "goodos-login-widget__passkey-trigger",
+                    type: "button",
+                    disabled: loading || passkeyLoading,
+                    onClick: beginPasskeySignIn,
+                    "aria-label": passkeyLoading
+                      ? "Waiting for Touch ID or passkey"
+                      : "Sign in with Touch ID or passkey",
+                    title: passkeyLoading
+                      ? "Waiting for Touch ID or passkey"
+                      : "Sign in with Touch ID or passkey",
+                  },
+                  createElement("span", { "aria-hidden": "true" }, "◎"),
+                ),
                 createElement("button", {
                   className: "goodos-login-widget__toggle",
                   type: "button",

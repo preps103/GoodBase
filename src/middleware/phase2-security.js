@@ -173,6 +173,7 @@ const authLimiter = rateLimit({
   limit: 30,
   standardHeaders: "draft-7",
   legacyHeaders: false,
+  skip: req => req.method === "OPTIONS",
   skipSuccessfulRequests: true,
   handler: (req, res) => {
     audit({
