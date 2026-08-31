@@ -104,3 +104,48 @@ test("Sites frontends are evaluated by HTTPS instead of a PM2 process", () => {
     "offline"
   );
 });
+
+test("reachable VPS applications stay online while deployment metadata is active", () => {
+  const app = {
+    registryStatus: "active",
+    deploymentType: "vps",
+    deploymentStatus: "deploying",
+    lastRunStatus: "running",
+  };
+
+  assert.equal(
+    deriveStatus(
+      app,
+      null,
+      {
+        url: "https://base.goodos.app/api/health/ready",
+        ok: true,
+        responseMs: 104,
+      }
+    ),
+    "online",
+    "deployment state must not override a successful public health check"
+  );
+});
+
+test("unreachable VPS applications still report an active deployment", () => {
+  const app = {
+    registryStatus: "active",
+    deploymentType: "vps",
+    deploymentStatus: "deploying",
+    lastRunStatus: "running",
+  };
+
+  assert.equal(
+    deriveStatus(
+      app,
+      null,
+      {
+        url: "https://base.goodos.app/api/health/ready",
+        ok: false,
+        responseMs: 104,
+      }
+    ),
+    "deploying"
+  );
+});
