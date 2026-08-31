@@ -415,6 +415,32 @@ function deriveStatus(
     return "online";
   }
 
+  // Availability is the primary status signal. A queued, running, or stale
+  // deployment record must not downgrade an application that is currently
+  // answering its public health check. Deployment state remains available in
+  // the response metadata and is used below when the service is unreachable.
+  if (
+    health.ok &&
+    (
+      !runtime ||
+      runtime.status ===
+        "online"
+    )
+  ) {
+    return (
+      health.responseMs !==
+        null &&
+      health.responseMs >
+        1500
+    )
+      ? "degraded"
+      : "online";
+  }
+
+  if (health.ok) {
+    return "degraded";
+  }
+
   if (
     [
       "queued",
@@ -438,28 +464,6 @@ function deriveStatus(
     !runtime
   ) {
     return "setup_required";
-  }
-
-  if (
-    health.ok &&
-    (
-      !runtime ||
-      runtime.status ===
-        "online"
-    )
-  ) {
-    return (
-      health.responseMs !==
-        null &&
-      health.responseMs >
-        1500
-    )
-      ? "degraded"
-      : "online";
-  }
-
-  if (health.ok) {
-    return "degraded";
   }
 
   if (
