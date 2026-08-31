@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.7.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.8.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
@@ -367,6 +367,7 @@ const loginWidgetCss = String.raw`
 .goodos-login-widget__mobile-brand{display:none;margin:24px 0 0;color:var(--goodos-login-text)}
 .goodos-login-widget__inner{display:flex;width:100%;min-width:0;flex:1 0 auto;align-items:center;padding:clamp(28px,6vh,54px) 0}
 .goodos-login-widget__card{display:grid;width:100%;min-width:0;padding:clamp(30px,4vw,48px);border:1px solid #2c3038;border-radius:24px;background:var(--goodos-login-card);box-shadow:0 28px 70px rgba(0,0,0,.34)}
+.goodos-login-widget__context{width:100%;min-width:0;margin-bottom:30px;padding-bottom:30px;border-bottom:1px solid var(--goodos-login-border)}
 .goodos-login-widget__heading{min-width:0;min-height:138px;margin-bottom:30px}
 .goodos-login-widget__eyebrow{display:block;margin-bottom:10px;color:var(--goodos-login-accent);font-size:14px;font-weight:800}
 .goodos-login-widget__title{margin:0;color:var(--goodos-login-text);font-size:clamp(34px,3vw,42px);font-weight:650;letter-spacing:-.045em;line-height:1.08;overflow-wrap:anywhere}
@@ -563,6 +564,7 @@ export function GoodOSLoginWidget({
   homeHref = "/",
   initialMode = "light",
   mobileBrand,
+  applicationContext,
   emailPlaceholder = "you@domain.com",
   passwordPlaceholder = "Enter your GoodOS password",
   termsHref = "/terms",
@@ -578,7 +580,11 @@ export function GoodOSLoginWidget({
   const emailId = `${loginId}-username`;
   const passwordId = `${loginId}-password`;
   const isLight = mode === "light";
-  const showPasskey = passkeyAvailable ?? nativePasskeyAvailable;
+  // The centralized GoodOS handoff is available even when this product's
+  // browser context cannot invoke WebAuthn directly. Keep the shared control
+  // visible for that handoff, while still allowing a product to explicitly
+  // disable it when no passkey callback exists.
+  const showPasskey = passkeyAvailable !== false || Boolean(onPasskeySignIn);
   const providerLabels = {
     google: "Sign in with Google",
     apple: "Sign in with Apple",
@@ -595,7 +601,7 @@ export function GoodOSLoginWidget({
   }, []);
 
   const beginPasskeySignIn = () => {
-    if (onPasskeySignIn) {
+    if (onPasskeySignIn && nativePasskeyAvailable) {
       onPasskeySignIn();
       return;
     }
@@ -665,6 +671,7 @@ export function GoodOSLoginWidget({
               onSubmit: submit,
               "data-goodbase-login-card": "",
             },
+            applicationContext && createElement("div", { className: "goodos-login-widget__context", "data-goodbase-login-context": "" }, applicationContext),
             createElement(
               "div",
               { className: "goodos-login-widget__heading" },

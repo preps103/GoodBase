@@ -6,7 +6,7 @@ import type {
 } from "react";
 
 export declare const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.6.0";
+export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.8.0";
 export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export declare const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
@@ -113,6 +113,8 @@ export interface GoodOSLoginWidgetProps extends SharedProps {
   homeHref?: string;
   initialMode?: "dark" | "light";
   mobileBrand?: ReactNode;
+  /** Product-specific information rendered in the widget's standardized context area. */
+  applicationContext?: ReactNode;
   emailPlaceholder?: string;
   passwordPlaceholder?: string;
   termsHref?: string;

@@ -28,6 +28,17 @@ passkey provider button. On supported devices it exposes the same passkey flow
 through a compact biometric control inside the password field. Existing passkey
 helpers, enrollment controls, and callback properties remain available.
 
+The compact biometric control remains visible when a product is running in a
+browser context without direct WebAuthn access. In that case it securely hands
+the user to GoodOS for Touch ID or passkey authentication and returns them to
+the product after sign-in. Products must not hide the control solely from a
+local capability check.
+
+Use `applicationContext` for product-specific information such as a portal,
+workspace, or account-type selector. The shared widget owns its placement,
+divider, spacing, and responsive behavior so login controls remain uniform
+across every GoodOS application.
+
 Product repositories keep a vendored snapshot so production builds remain
 deterministic and do not require registry access. From the GoodBase repository,
 run `npm run auth:widget:check` to detect drift or

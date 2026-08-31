@@ -37,11 +37,12 @@ test("the registry discovers active products without a fixed application count",
 test("every active product declares the canonical login integration and theme tokens", () => {
   assert.equal(manifest.canonicalLogin.owner, "goodbase");
   assert.equal(manifest.canonicalLogin.package, "@goodos/topbar-widget");
-  assert.equal(manifest.canonicalLogin.version, "4.8.0");
+  assert.equal(manifest.canonicalLogin.version, "4.9.0");
   assert.deepEqual(
     manifest.canonicalLogin.requiredComponents,
     ["GoodOSLoginShell", "GoodOSLoginWidget"]
   );
+  assert.equal(manifest.canonicalLogin.applicationContextProp, "applicationContext");
 
   for (const application of manifest.applications) {
     assert.equal(application.authEnabled, true, `${application.id} auth must be enabled`);
@@ -50,6 +51,10 @@ test("every active product declares the canonical login integration and theme to
     assert.match(application.theme.accent, /^#[0-9a-f]{6}$/i);
     assert.match(application.theme.accentInk, /^#[0-9a-f]{6}$/i);
   }
+
+  const customized = manifest.applications.filter((application) => application.loginCustomization);
+  assert.deepEqual(customized.map(({ id }) => id), ["goodsupply"]);
+  assert.deepEqual(customized[0].loginCustomization, ["applicationContext"]);
 });
 
 test("every product frontend is hosted identically on Sites", () => {

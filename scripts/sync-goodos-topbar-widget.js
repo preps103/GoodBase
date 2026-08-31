@@ -100,6 +100,7 @@ const packageDependencyDrift = [];
 const themeDrift = [];
 const providerContractDrift = [];
 const accountFlowDrift = [];
+const customizationDrift = [];
 const protectedMarkupDrift = [];
 const protectedStyleDrift = [];
 const obsoleteAuthDrift = [];
@@ -184,6 +185,7 @@ for (const application of applications) {
   let themeMatches = false;
   let providerContractMatches = false;
   let accountFlowMatches = false;
+  let customizationMatches = false;
   if (!fs.existsSync(integrationPath)) {
     integrationDrift.push(`${application.id}:${application.loginIntegration} is missing`);
   } else {
@@ -233,6 +235,21 @@ for (const application of applications) {
         `${application.id}:${application.loginIntegration} must route recovery and registration to the centralized GoodBase auth UI`
       );
     }
+    const contextProp = manifest.canonicalLogin.applicationContextProp;
+    const allowedCustomizations = application.loginCustomization || [];
+    const usesContext = new RegExp(`\\b${contextProp}\\s*=`).test(integration);
+    const usesLegacyCustomization = /\\b(?:portalSelector|showSecurityNotice)\\s*=/.test(integration);
+    const disablesPasskey = /\\bpasskeyAvailable\\s*=\\s*\\{\\s*false\\s*\\}/.test(integration);
+    customizationMatches =
+      !usesLegacyCustomization &&
+      !disablesPasskey &&
+      (!usesContext || allowedCustomizations.includes(contextProp)) &&
+      allowedCustomizations.every((prop) => new RegExp(`\\b${prop}\\s*=`).test(integration));
+    if (!customizationMatches) {
+      customizationDrift.push(
+        `${application.id}:${application.loginIntegration} may customize login content only through its registered ${contextProp} slot and must not hide shared security controls`
+      );
+    }
   }
 
   let hasProtectedMarkup = false;
@@ -270,6 +287,7 @@ for (const application of applications) {
     themeMatches &&
     providerContractMatches &&
     accountFlowMatches &&
+    customizationMatches &&
     !hasNoncanonicalAuthAuthority &&
     !hasProtectedMarkup &&
     !hasProtectedStyles
@@ -293,6 +311,7 @@ const allDrift = [
   ...themeDrift,
   ...providerContractDrift,
   ...accountFlowDrift,
+  ...customizationDrift,
   ...protectedMarkupDrift,
   ...protectedStyleDrift,
   ...obsoleteAuthDrift,
@@ -318,6 +337,7 @@ const report = {
     themes: themeDrift,
     providers: providerContractDrift,
     accountFlows: accountFlowDrift,
+    customizations: customizationDrift,
     protectedMarkup: protectedMarkupDrift,
     protectedStyles: protectedStyleDrift,
     obsoleteAuth: [...new Set(obsoleteAuthDrift)],

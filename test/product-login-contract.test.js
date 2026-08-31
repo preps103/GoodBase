@@ -74,15 +74,23 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.8\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.9\.0"/);
   assert.match(sharedWidget, /goodOSPasskeyHandoffUrl/);
   assert.doesNotMatch(sharedWidget, /Use Touch ID or passkey/);
   assert.match(sharedWidget, /Sign in with Touch ID or passkey/);
   assert.match(sharedWidget, /goodos-login-widget__passkey-trigger/);
+  assert.match(sharedWidget, /passkeyAvailable !== false \|\| Boolean\(onPasskeySignIn\)/);
+  assert.match(sharedWidget, /onPasskeySignIn && nativePasskeyAvailable/);
+  assert.match(sharedWidget, /goodos-login-widget__context/);
+  assert.match(sharedWidget, /data-goodbase-login-context/);
+  assert.match(sharedWidget, /applicationContext/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /package-lock\.json/);
   assert.match(sharedWidgetSync, /canonicalPackage\.version/);
+  assert.match(sharedWidgetSync, /applicationContextProp/);
+  assert.match(sharedWidgetSync, /showSecurityNotice/);
+  assert.match(sharedWidgetSync, /disablesPasskey/);
   assert.match(sharedWidgetSync, /--write/);
 });
 
