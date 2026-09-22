@@ -5,7 +5,8 @@
     "migrations/20260726_goodos_application_registry_expansion.sql",
     "migrations/20260731_goodos_application_registry_sites_expansion.sql",
     "migrations/20260819_rename_supplyguyz_to_goodsupply.sql",
-    "migrations/20260820_align_goodos_application_domains.sql"
+    "migrations/20260820_align_goodos_application_domains.sql",
+    "migrations/20260922_goodsigns_application.sql"
   ],
   "canonicalLogin": {
     "owner": "goodbase",
@@ -162,6 +163,13 @@
       "repositoryUrl": "https://github.com/preps103/SupplyGuyz.git", "localDirectory": "goodsupply-source",
       "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a6a5ef33e5881918b6130a53e8c389a", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "app/components/auth-gate.tsx", "theme": { "accent": "#2f6ff0", "accentInk": "#071a33" }
+    },
+    {
+      "id": "goodsigns", "name": "GoodSigns", "domain": "signs.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": "https://github.com/preps103/GoodSigns.git", "localDirectory": "goodsigns-source",
+      "deploymentType": "worker", "deploymentManaged": false, "hostingProjectId": "goodsigns-studio", "hostingProvider": "cloudflare-workers",
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#0c766e", "accentInk": "#ffffff" }
     }
   ],
   "platformServices": [
