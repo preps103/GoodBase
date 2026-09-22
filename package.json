@@ -82,7 +82,7 @@
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
-    "nodemailer": "9.0.3",
+    "nodemailer": "9.1.1",
     "openid-client": "6.8.4",
     "pg": "^8.22.0",
     "qrcode": "^1.5.4",
