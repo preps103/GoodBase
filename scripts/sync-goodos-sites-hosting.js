@@ -12,7 +12,9 @@ const repositoriesRoot = path.resolve(
 const manifest = require(path.join(goodbaseRoot, "deploy", "application-paths.json"));
 const sourceRoot = path.join(goodbaseRoot, "vendor", "goodos-sites-hosting");
 const files = ["package.json", "README.md", "prepare-sites.mjs", "sites-worker.js"];
-const applications = manifest.applications.filter((application) => application.status === "active");
+const applications = manifest.applications.filter((application) =>
+  application.status === "active" && application.deploymentType === "sites"
+);
 
 function checksum(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");

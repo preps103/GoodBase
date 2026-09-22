@@ -30,6 +30,32 @@ test("Sites health checks use the canonical published application URL", () => {
   );
 });
 
+test("Worker frontends use their canonical URL and never require PM2", () => {
+  const app = {
+    registryStatus: "active",
+    deploymentType: "worker",
+    domain: "signs.goodos.app",
+    healthUrl: "https://base.goodos.app/api/health/ready",
+  };
+  assert.equal(applicationHealthUrl(app), "https://signs.goodos.app");
+  assert.equal(
+    deriveStatus(app, null, {
+      url: "https://signs.goodos.app/",
+      ok: true,
+      responseMs: 86,
+    }),
+    "online"
+  );
+  assert.equal(
+    deriveStatus(app, null, {
+      url: "https://signs.goodos.app/",
+      ok: false,
+      responseMs: 86,
+    }),
+    "offline"
+  );
+});
+
 test("Sites probes preserve the exact canonical URL", () => {
   assert.equal(
     healthProbeUrl(

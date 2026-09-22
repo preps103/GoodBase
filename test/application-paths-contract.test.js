@@ -52,9 +52,10 @@ test("every active product declares the canonical login integration and theme to
   }
 });
 
-test("every product frontend is hosted identically on Sites", () => {
+test("every product frontend declares its canonical managed publishing target", () => {
   const projectIds = [];
-  for (const application of manifest.applications) {
+  const sitesApplications = manifest.applications.filter((application) => application.deploymentType === "sites");
+  for (const application of sitesApplications) {
     assert.equal(application.deploymentType, "sites");
     assert.equal(application.deploymentManaged, false);
     assert.equal(Object.hasOwn(application, "productionPath"), false);
@@ -62,7 +63,32 @@ test("every product frontend is hosted identically on Sites", () => {
     assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
     projectIds.push(application.hostingProjectId);
   }
-  assert.equal(new Set(projectIds).size, manifest.applications.length);
+  assert.equal(new Set(projectIds).size, sitesApplications.length);
+
+  const goodSigns = manifest.applications.find((application) => application.id === "goodsigns");
+  assert.equal(goodSigns.deploymentType, "worker");
+  assert.equal(goodSigns.deploymentManaged, false);
+  assert.equal(goodSigns.hostingProvider, "cloudflare-workers");
+  assert.equal(goodSigns.hostingProjectId, "goodsigns-studio");
+  assert.equal(Object.hasOwn(goodSigns, "productionPath"), false);
+});
+
+test("GoodSigns is a canonical GoodOS product with an idempotent registry migration", () => {
+  const application = manifest.applications.find(({ id }) => id === "goodsigns");
+  assert.equal(application.name, "GoodSigns");
+  assert.equal(application.domain, "signs.goodos.app");
+  assert.equal(application.repositoryUrl, "https://github.com/preps103/GoodSigns.git");
+  assert.equal(application.loginIntegration, "src/components/GoodOSAuthGate.tsx");
+  assert.ok(manifest.registrySources.includes("migrations/20260922_goodsigns_application.sql"));
+
+  const migration = fs.readFileSync(
+    path.join(root, "migrations/20260922_goodsigns_application.sql"),
+    "utf8"
+  );
+  assert.match(migration, /INSERT INTO apps/);
+  assert.match(migration, /ON CONFLICT \(id\) DO UPDATE/);
+  assert.match(migration, /INSERT INTO app_memberships/);
+  assert.match(migration, /platform_role = 'owner'/);
 });
 
 test("GoodBase, GoodID, and GoodMail Accounts have explicit authentication roles", () => {

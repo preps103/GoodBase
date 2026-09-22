@@ -83,6 +83,14 @@ function isReachableHttpStatus(status) {
   );
 }
 
+function isPublishedFrontend(appOrType) {
+  const deploymentType =
+    typeof appOrType === "string"
+      ? appOrType
+      : appOrType?.deploymentType;
+  return deploymentType === "sites" || deploymentType === "worker";
+}
+
 function approvedHealthUrl(value) {
   if (!value) return null;
 
@@ -112,12 +120,11 @@ function approvedHealthUrl(value) {
 }
 
 function applicationHealthUrl(app) {
-  // Sites applications are considered available when their published,
+  // Static frontend applications are considered available when their published,
   // canonical frontend is reachable. Database health URLs can outlive an old
   // deployment and must not make a healthy Sites frontend appear offline.
   if (
-    app.deploymentType ===
-      "sites" &&
+    isPublishedFrontend(app) &&
     app.domain
   ) {
     return `https://${app.domain}`;
@@ -397,10 +404,7 @@ function deriveStatus(
     return "maintenance";
   }
 
-  if (
-    app.deploymentType ===
-    "sites"
-  ) {
+  if (isPublishedFrontend(app)) {
     if (!health.url) {
       return "setup_required";
     }
@@ -490,8 +494,8 @@ function statusReason(
       return `HTTP ${health.httpStatus}; access-controlled service reachable.`;
     }
 
-    if (deploymentType === "sites") {
-      return `HTTP ${health.httpStatus}; Sites frontend reachable.`;
+    if (isPublishedFrontend(deploymentType)) {
+      return `HTTP ${health.httpStatus}; published frontend reachable.`;
     }
 
     return runtime
@@ -655,9 +659,7 @@ async function buildLiveStatus() {
             app
           ),
           {
-            cacheBust:
-              app.deploymentType !==
-              "sites",
+            cacheBust: !isPublishedFrontend(app),
           }
         )
       )
@@ -667,8 +669,7 @@ async function buildLiveStatus() {
     apps.map(
       (app, index) => {
         const runtime =
-          app.deploymentType !==
-            "sites" &&
+          !isPublishedFrontend(app) &&
           app.processName
             ? pm2Statuses.get(
                 app.processName
@@ -720,16 +721,14 @@ async function buildLiveStatus() {
               ?.restartCount ??
             null,
           deploymentStatus:
-            app.deploymentType ===
-            "sites"
+            isPublishedFrontend(app)
               ? health.ok
                 ? "published"
                 : "unreachable"
               : app.deploymentStatus ||
                 "setup_required",
           deploymentReady:
-            app.deploymentType ===
-            "sites"
+            isPublishedFrontend(app)
               ? Boolean(
                   app.hostingProjectId
                 )
@@ -834,7 +833,7 @@ async function buildLiveStatus() {
 
   return {
     source:
-      "database+sites+pm2+https",
+      "database+published-frontends+pm2+https",
     checkedAt,
     cacheTtlMs:
       CACHE_TTL_MS,
@@ -899,5 +898,6 @@ module.exports = {
   deriveStatus,
   getLiveAppsStatus,
   healthProbeUrl,
+  isPublishedFrontend,
   isReachableHttpStatus,
 };
