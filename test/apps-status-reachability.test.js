@@ -181,7 +181,7 @@ test("application status discovery uses the approved GoodOS PM2 runtime", () => 
     require("node:path").join(__dirname, "../src/services/apps-status.service.js"),
     "utf8"
   );
-  assert.match(source, /process\.env\.GOODOS_PM2_HOME/);
-  assert.match(source, /env: \{ PM2_HOME \}/);
+  assert.match(source, /PM2_CONTROL_COMMAND = "\/usr\/local\/sbin\/goodos-pm2-control"/);
+  assert.match(source, /\["-n", PM2_CONTROL_COMMAND, "discover"\]/);
   assert.doesNotMatch(source, /env: \{ HOME:/);
 });

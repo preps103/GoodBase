@@ -1328,22 +1328,22 @@ async function discoverServerApps() {
   let result;
   try {
     result = await runCommand(
-      "pm2",
-      ["jlist"],
+      "sudo",
+      ["-n", PM2_CONTROL_COMMAND, "discover"],
       {
         timeoutMs: 60000,
         maxOutput: 5 * 1024 * 1024,
-        env: { PM2_HOME },
       }
     );
   } catch {
     try {
       result = await runCommand(
-        "sudo",
-        ["-n", PM2_CONTROL_COMMAND, "discover"],
+        "pm2",
+        ["jlist"],
         {
           timeoutMs: 60000,
           maxOutput: 5 * 1024 * 1024,
+          env: { PM2_HOME },
         }
       );
     } catch {
