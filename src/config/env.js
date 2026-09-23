@@ -31,6 +31,8 @@ const allowedOrigins = [
   "https://trust.goodos.app",
   "https://goodfleet.us",
   "https://localhost",
+  "tauri://localhost",
+  "http://tauri.localhost",
   "https://thirddegreeclothing.com",
   "https://ghostcreationz.com",
   "http://localhost:5173",

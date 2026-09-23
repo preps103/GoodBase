@@ -36,3 +36,14 @@ test("GoodScan public asset contract does not expose private storage keys", () =
   assert.equal(asset.source, "web");
   assert.equal(JSON.stringify(asset).includes("private-key"), false);
 });
+
+test("GoodScan pairing secrets use a pairing-bound one-way hash", () => {
+  const secret = "a".repeat(43);
+  const first = service.pairingSecretHash("123e4567-e89b-12d3-a456-426614174000", secret);
+  const second = service.pairingSecretHash("123e4567-e89b-12d3-a456-426614174001", secret);
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.notEqual(first, second);
+  assert.equal(first.includes(secret), false);
+  assert.equal(service.safeHashEqual(first, first), true);
+  assert.equal(service.safeHashEqual(first, second), false);
+});

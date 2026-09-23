@@ -19,6 +19,11 @@ const applicationManifest = require(
   )
 );
 
+const PM2_HOME = path.resolve(
+  process.env.GOODOS_PM2_HOME ||
+  "/home/mgoodlo3/.pm2"
+);
+
 const PRODUCT_HOSTING_BY_REGISTRY_ID =
   new Map();
 
@@ -190,6 +195,7 @@ async function loadPm2Statuses() {
         timeoutMs: 30000,
         maxOutput:
           5 * 1024 * 1024,
+        env: { PM2_HOME },
       }
     );
 

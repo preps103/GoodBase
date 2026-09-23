@@ -11,6 +11,7 @@ require("dotenv").config({
 const MIGRATION_PATHS = [
   "20260810_goodscan_production_workspace.sql",
   "20260810_goodscan_credit_billing.sql",
+  "20260922_goodscan_device_pairing.sql",
 ].map(fileName => path.join(__dirname, "..", "migrations", fileName));
 
 async function main() {

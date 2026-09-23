@@ -28,6 +28,8 @@ const exactOrigins = new Set(
     ...configuredOrigins,
     GOODBUILDER_SITES_ORIGIN,
     "https://localhost",
+    "tauri://localhost",
+    "http://tauri.localhost",
   ]
 );
 

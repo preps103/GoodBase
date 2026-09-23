@@ -6,6 +6,7 @@ const path = require("node:path");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const multer = require("multer");
+const QRCode = require("qrcode");
 const authRequired = require("../middleware/authRequired");
 const service = require("../services/goodscan.service");
 const credits = require("../services/goodscan-credits.service");
@@ -41,6 +42,8 @@ const upload = multer({
 const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
 const billingLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
 const quoteLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false });
+const pairingCreateLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: "draft-8", legacyHeaders: false });
+const pairingClaimLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
 
 async function cleanup(files) {
   await Promise.all(files.map(file => fs.promises.unlink(file.path).catch(() => {})));
@@ -86,6 +89,40 @@ router.get("/workspace", async (req, res, next) => {
 });
 router.get("/credits", async (req, res, next) => {
   try { return res.json({ success: true, data: await credits.summary(req.user.id) }); } catch (error) { return next(error); }
+});
+router.post("/device-pairings", pairingCreateLimiter, async (req, res, next) => {
+  try {
+    const data = await service.createDevicePairing({ userId: req.user.id, device: req.body?.device || {} });
+    const qrCodeDataUrl = await QRCode.toDataURL(data.pairingUrl, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 512,
+      color: { dark: "#09090b", light: "#ffffff" },
+    });
+    return res.status(201).json({ success: true, data: { ...data, qrCodeDataUrl } });
+  } catch (error) { return next(error); }
+});
+router.get("/device-pairings/:pairingId", async (req, res, next) => {
+  try {
+    return res.json({ success: true, data: await service.pairingStatus({ userId: req.user.id, pairingId: req.params.pairingId }) });
+  } catch (error) { return next(error); }
+});
+router.post("/device-pairings/:pairingId/claim", pairingClaimLimiter, async (req, res, next) => {
+  try {
+    const data = await service.claimDevicePairing({
+      userId: req.user.id,
+      pairingId: req.params.pairingId,
+      secret: req.body?.secret,
+      device: req.body?.device || {},
+    });
+    return res.json({ success: true, data });
+  } catch (error) { return next(error); }
+});
+router.delete("/device-pairings/:pairingId", async (req, res, next) => {
+  try {
+    await service.revokeDevicePairing({ userId: req.user.id, pairingId: req.params.pairingId });
+    return res.status(204).end();
+  } catch (error) { return next(error); }
 });
 router.post("/credits/checkout-sessions", billingLimiter, async (req, res, next) => {
   try {
