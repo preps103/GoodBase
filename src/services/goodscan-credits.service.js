@@ -102,10 +102,10 @@ async function ensureAccount(client, userId) {
       `INSERT INTO goodscan_credit_ledger
         (owner_user_id, amount, balance_after, entry_type, reference_type, reference_id,
          idempotency_key, description, metadata)
-       VALUES ($1,100,100,'welcome_grant','account',$1::text,$2,
+       VALUES ($1,100,100,'welcome_grant','account',$2,$3,
          'Welcome credits for starting with GoodScan','{"source":"account_activation"}'::jsonb)
        ON CONFLICT (idempotency_key) DO NOTHING`,
-      [userId, `goodscan-welcome:${userId}`],
+      [userId, String(userId), `goodscan-welcome:${userId}`],
     );
     return inserted.rows[0];
   }

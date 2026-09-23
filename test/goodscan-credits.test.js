@@ -55,6 +55,13 @@ test("GoodScan billing schema is an immutable ledger with idempotent fulfillment
   assert.match(service, /charge\.refunded/);
 });
 
+test("GoodScan welcome grants use type-stable database parameters", () => {
+  const service = source("src/services/goodscan-credits.service.js");
+  assert.match(service, /'welcome_grant','account',\$2,\$3/);
+  assert.match(service, /\[userId, String\(userId\), `goodscan-welcome:\$\{userId\}`\]/);
+  assert.doesNotMatch(service, /'welcome_grant','account',\$1::text/);
+});
+
 test("GoodScan Stripe webhook is public, signed, and mounted before application auth", () => {
   const routes = source("src/routes/goodscan.routes.js");
   const webhook = routes.indexOf('router.post("/credits/webhooks/stripe"');
