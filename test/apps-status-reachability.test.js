@@ -175,3 +175,13 @@ test("unreachable VPS applications still report an active deployment", () => {
     "deploying"
   );
 });
+
+test("application status discovery uses the approved GoodOS PM2 runtime", () => {
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "../src/services/apps-status.service.js"),
+    "utf8"
+  );
+  assert.match(source, /process\.env\.GOODOS_PM2_HOME/);
+  assert.match(source, /env: \{ PM2_HOME \}/);
+  assert.doesNotMatch(source, /env: \{ HOME:/);
+});

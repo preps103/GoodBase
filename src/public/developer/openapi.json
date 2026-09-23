@@ -3534,6 +3534,16 @@
       "/api/goodscan/v1/workspace": {
         "get": {"summary":"Read the authenticated user's GoodScan assets, community gallery, analytics, devices, usage, and integrations","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"responses":{"200":{"description":"Live GoodScan workspace snapshot"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"}}}
       },
+      "/api/goodscan/v1/device-pairings": {
+        "post": {"summary":"Create a short-lived, one-time GoodScan desktop-to-phone pairing","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"responses":{"201":{"description":"Pairing QR and status created"},"400":{"description":"Invalid desktop device"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"},"429":{"description":"Pairing rate limit exceeded"}}}
+      },
+      "/api/goodscan/v1/device-pairings/{pairingId}": {
+        "get": {"summary":"Read an owned GoodScan pairing status","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"parameters":[{"in":"path","name":"pairingId","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"Pairing status"},"404":{"description":"Pairing not found"}}},
+        "delete": {"summary":"Revoke an owned GoodScan pairing","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"parameters":[{"in":"path","name":"pairingId","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"204":{"description":"Pairing revoked"},"404":{"description":"Pairing not found"}}}
+      },
+      "/api/goodscan/v1/device-pairings/{pairingId}/claim": {
+        "post": {"summary":"Claim a one-time GoodScan pairing from an authenticated phone","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"parameters":[{"in":"path","name":"pairingId","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"Phone paired"},"400":{"description":"Invalid device or secret"},"403":{"description":"Secret or account mismatch"},"409":{"description":"Pairing already used"},"410":{"description":"Pairing expired"},"429":{"description":"Claim rate limit exceeded"}}}
+      },
       "/api/goodscan/v1/captures": {
         "post": {"summary":"Upload a validated GoodScan capture manifest and original media","tags":["GoodScan"],"security":[{"GoodOSBearer":[]}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["manifest","sources"],"properties":{"manifest":{"type":"string","format":"binary"},"sources":{"type":"array","maxItems":500,"items":{"type":"string","format":"binary"}}}}}}},"responses":{"202":{"description":"Capture accepted and queued"},"400":{"description":"Invalid capture manifest"},"401":{"description":"Authentication required"},"403":{"description":"GoodScan application access required"},"413":{"description":"Capture limits exceeded"},"415":{"description":"Unsupported media type"},"429":{"description":"Upload rate limit exceeded"}}}
       },

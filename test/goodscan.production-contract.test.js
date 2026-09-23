@@ -39,13 +39,36 @@ test("GoodScan database migration is run before the API starts", () => {
   const server = source("src/server.js");
   const migration = source("migrations/20260810_goodscan_production_workspace.sql");
   const creditMigration = source("migrations/20260810_goodscan_credit_billing.sql");
+  const pairingMigration = source("migrations/20260922_goodscan_device_pairing.sql");
   const migrationRunner = source("scripts/apply-goodscan-migration.js");
 
   assert.match(server, /runGoodScanMigrations\(\)/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodscan_assets/);
   assert.match(migration, /visibility = 'public' AND status = 'completed'/);
   assert.match(creditMigration, /CREATE TABLE IF NOT EXISTS goodscan_credit_accounts/);
+  assert.match(pairingMigration, /CREATE TABLE IF NOT EXISTS goodscan_device_pairings/);
+  assert.match(pairingMigration, /token_hash TEXT NOT NULL UNIQUE/);
   assert.match(migrationRunner, /20260810_goodscan_credit_billing\.sql/);
+  assert.match(migrationRunner, /20260922_goodscan_device_pairing\.sql/);
+});
+
+test("GoodScan phone pairing is authenticated, rate limited, expiring, and one time", () => {
+  const routes = source("src/routes/goodscan.routes.js");
+  const service = source("src/services/goodscan.service.js");
+  const security = source("src/middleware/phase2-security.js");
+  const authIndex = routes.indexOf("router.use(authRequired, requireGoodScanAccess)");
+  const pairingIndex = routes.indexOf('router.post("/device-pairings"');
+
+  assert.ok(pairingIndex > authIndex);
+  assert.match(routes, /pairingCreateLimiter/);
+  assert.match(routes, /pairingClaimLimiter/);
+  assert.match(service, /PAIRING_LIFETIME_MS = 10 \* 60 \* 1000/);
+  assert.match(service, /crypto\.randomBytes\(32\)\.toString\("base64url"\)/);
+  assert.match(service, /crypto\.timingSafeEqual/);
+  assert.match(service, /pairing\.owner_user_id = \$2/);
+  assert.match(service, /token_hash = \$3/);
+  assert.match(security, /"tauri:\/\/localhost"/);
+  assert.match(security, /"http:\/\/tauri\.localhost"/);
 });
 
 test("GoodScan production release serializes migrations and exposes a fail-closed readiness gate", () => {

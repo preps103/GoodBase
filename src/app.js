@@ -382,6 +382,8 @@ const allowedOrigins = [
   "https://swapz.goodos.app",
   "https://trust.goodos.app",
   "https://localhost",
+  "tauri://localhost",
+  "http://tauri.localhost",
 ];
 
 function isAllowedOrigin(origin) {
