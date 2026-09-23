@@ -19,10 +19,7 @@ const applicationManifest = require(
   )
 );
 
-const PM2_HOME = path.resolve(
-  process.env.GOODOS_PM2_HOME ||
-  "/home/mgoodlo3/.pm2"
-);
+const PM2_CONTROL_COMMAND = "/usr/local/sbin/goodos-pm2-control";
 
 const PRODUCT_HOSTING_BY_REGISTRY_ID =
   new Map();
@@ -189,13 +186,12 @@ function parsePm2Payload(rawValue) {
 async function loadPm2Statuses() {
   const result =
     await runCommand(
-      "pm2",
-      ["jlist"],
+      "sudo",
+      ["-n", PM2_CONTROL_COMMAND, "discover"],
       {
         timeoutMs: 30000,
         maxOutput:
           5 * 1024 * 1024,
-        env: { PM2_HOME },
       }
     );
 
