@@ -567,6 +567,8 @@ async function loginGuard(req, res, next) {
       `
         SELECT
           id,
+          platform_role,
+          failed_login_count,
           locked_until
         FROM users
         WHERE lower(email) = $1
@@ -576,8 +578,57 @@ async function loginGuard(req, res, next) {
     );
 
     const user = result.rows[0];
+    const ownerAccount =
+      String(user?.platform_role || "")
+        .trim()
+        .toLowerCase() === "owner";
+
+    // A persistent per-account lock lets an attacker deny the platform owner
+    // access simply by submitting bad passwords from another device. Owners
+    // remain protected by the IP-aware login limiter, password verification,
+    // MFA, and auditing, but the durable account lock must not block recovery
+    // from a trusted desktop or mobile device.
+    if (
+      ownerAccount &&
+      (
+        Number(user.failed_login_count || 0) > 0 ||
+        user.locked_until
+      )
+    ) {
+      await database.query(
+        `
+          UPDATE users
+          SET
+            failed_login_count = 0,
+            locked_until = NULL
+          WHERE id = $1
+        `,
+        [user.id]
+      );
+
+      audit({
+        userId: user.id,
+        action:
+          "security.owner_login_lock_cleared",
+        metadata: {
+          path: req.originalUrl,
+          hadFailedAttempts:
+            Number(
+              user.failed_login_count || 0
+            ) > 0,
+          hadActiveLock:
+            Boolean(
+              user.locked_until &&
+              new Date(
+                user.locked_until
+              ).getTime() > Date.now()
+            )
+        }
+      });
+    }
 
     if (
+      !ownerAccount &&
       user?.locked_until &&
       new Date(
         user.locked_until
@@ -615,7 +666,10 @@ async function loginGuard(req, res, next) {
         return;
       }
 
-      if (res.statusCode === 401) {
+      if (
+        res.statusCode === 401 &&
+        !ownerAccount
+      ) {
         database.query(
           `
             UPDATE users
