@@ -37,6 +37,7 @@ const fleetAdvancedOperationsRoutes = require("./fleet-advanced-operations.route
 const goodCustomChatRoutes = require("./goodcustom-chat.routes");
 const goodCustomQuotesRoutes = require("./goodcustom-quotes.routes");
 const goodSureLeadsRoutes = require("./goodsure-leads.routes");
+const goodEscrowAssistantRoutes = require("./goodescrow-assistant.routes");
 
 
 const billingRoutes = require("./billing.routes");
@@ -452,6 +453,7 @@ router.use("/api/goodscan/v1", goodScanRoutes);
 router.use("/api/apps/goodcustom/v1/chat", goodCustomChatRoutes);
 router.use("/api/apps/goodcustom/v1/quotes", goodCustomQuotesRoutes);
 router.use("/api/apps/goodsure/v1/leads", goodSureLeadsRoutes);
+router.use("/api/apps/goodescrow/v1/assistant", goodEscrowAssistantRoutes);
 router.use("/api/apps", appsRoutes);
 router.use("/api/db", dbRoutes);
 router.use("/api/auth", authRoutes);
