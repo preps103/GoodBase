@@ -39,6 +39,25 @@ test("authentication throttling never consumes browser preflight requests", () =
   assert.match(authLimiter, /skip:\s*req\s*=>\s*req\.method\s*===\s*"OPTIONS"/);
 });
 
+test("automatic REST preflights allow the PostgREST browser contract", () => {
+  const source = fs.readFileSync(path.join(root, "src/app.js"), "utf8");
+  const corsStart = source.indexOf("cors({");
+  const corsEnd = source.indexOf("\n  })", corsStart);
+  const contract = source.slice(corsStart, corsEnd);
+  for (const header of [
+    "Authorization",
+    "Content-Profile",
+    "Prefer",
+    "Range",
+    "Range-Unit",
+    "Accept-Profile",
+  ]) {
+    assert.match(contract, new RegExp(`"${header}"`));
+  }
+  assert.match(contract, /exposedHeaders/);
+  assert.match(contract, /"Content-Range"/);
+});
+
 test("a saturated login limit still returns readable CORS responses and allows preflight", async t => {
   const app = express();
 
