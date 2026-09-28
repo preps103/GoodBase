@@ -192,7 +192,7 @@ function buildCapabilities(health, videoHealth = {
 }) {
   const kokoroStatus = health.ready ? "ready" : "unavailable";
   const kokoroIssue = health.ready ? null : health.message;
-  const videoStatus = videoHealth.ready ? "ready" : "unavailable";
+  const videoStatus = videoHealth.ready ? "ready" : "limited";
   return [
     ...KOKORO_TOOL_IDS.map((id) => ({
       id,
@@ -203,8 +203,8 @@ function buildCapabilities(health, videoHealth = {
     })),
     {
       id: "video",
-      execution: "goodbase",
-      engine: "goodmotion-open",
+      execution: videoHealth.ready ? "goodbase" : "browser",
+      engine: videoHealth.ready ? "goodmotion-open" : "motion-canvas",
       status: videoStatus,
       issue: videoHealth.ready ? null : videoHealth.message,
     },
@@ -223,6 +223,23 @@ function buildCapabilities(health, videoHealth = {
       issue: BROWSER_TOOL_LIMITATIONS[id],
     })),
   ];
+}
+
+function buildSystemReadiness(speech, video, avatars) {
+  const fallbacksActive = [];
+  if (!video.ready) {
+    fallbacksActive.push({ capability: "video", engine: "motion-canvas" });
+  }
+  if (!avatars.ready) {
+    fallbacksActive.push({ capability: "avatars", engine: "browser-live" });
+  }
+  return {
+    success: speech.ready,
+    status: speech.ready ? "ready" : "unready",
+    primaryEngineReady: speech.ready,
+    optionalEnhancementsReady: Boolean(video.ready && avatars.ready),
+    fallbacksActive,
+  };
 }
 
 function kokoroEndpoint() {
@@ -370,12 +387,12 @@ router.get("/status", statusLimiter, async (_req, res) => {
     videoService.checkHealth(),
     avatarService.checkHealth(),
   ]);
+  const readiness = buildSystemReadiness(speech, video, avatars);
   return res.status(speech.ready ? 200 : 503).json({
-    success: speech.ready,
+    ...readiness,
     service: "GoodSpeech",
     version: env.version,
     releaseCommit: env.releaseCommit,
-    status: speech.ready ? (video.ready && avatars.ready ? "ready" : "degraded") : "unready",
     engines: { speech, video, avatars },
     checkedAt: new Date().toISOString(),
   });
@@ -403,7 +420,9 @@ router.get("/capabilities", authRequired, async (_req, res) => {
     success: true,
     service: "GoodSpeech",
     provider: "kokoro",
-    degraded: !health.ready || !videoHealth.ready || !avatarHealth.ready,
+    degraded: !health.ready,
+    optionalEnhancementsReady: Boolean(videoHealth.ready && avatarHealth.ready),
+    fallbacksActive: buildSystemReadiness(health, videoHealth, avatarHealth).fallbacksActive,
     engine: health,
     engines: {
       speech: health,
@@ -656,6 +675,7 @@ module.exports.validatePayload = validatePayload;
 module.exports.kokoroRequest = kokoroRequest;
 module.exports.kokoroSpeed = kokoroSpeed;
 module.exports.buildCapabilities = buildCapabilities;
+module.exports.buildSystemReadiness = buildSystemReadiness;
 module.exports.kokoroEndpoint = kokoroEndpoint;
 module.exports.kokoroHealthEndpoint = kokoroHealthEndpoint;
 module.exports.configuredProvider = configuredProvider;
