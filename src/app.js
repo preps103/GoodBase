@@ -52,13 +52,24 @@ app.use(
     allowedHeaders: [
       "Authorization",
       "Content-Type",
+      "Content-Profile",
       "Idempotency-Key",
+      "Prefer",
+      "Range",
+      "Range-Unit",
+      "Accept-Profile",
       "X-Requested-With",
       "X-Goodbase-API-Key",
       "X-GoodOS-API-Key",
       "X-GoodBase-Client",
       "X-Request-ID",
       "Traceparent"
+    ],
+    exposedHeaders: [
+      "Content-Range",
+      "Location",
+      "Preference-Applied",
+      "X-Request-ID"
     ]
   })
 );
