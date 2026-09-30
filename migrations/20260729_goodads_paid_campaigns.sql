@@ -81,6 +81,11 @@ CREATE INDEX IF NOT EXISTS idx_goodads_ad_operations_dispatch
   ON goodads_ad_operations (status, available_at, created_at)
   WHERE status IN ('queued', 'retrying');
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goodads_ad_operations_open_mutation
+  ON goodads_ad_operations (provider_campaign_id)
+  WHERE operation_type IN ('create', 'pause', 'activate', 'archive')
+    AND status IN ('queued', 'processing', 'retrying');
+
 INSERT INTO backend_jobs (
   id, name, display_name, description, job_type, handler_key, status,
   priority, schedule_seconds, timeout_seconds, max_attempts, concurrency_key,

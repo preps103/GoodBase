@@ -967,6 +967,37 @@ test("paid campaign adapters map objectives and bind approvals to immutable snap
   assert.notEqual(ads._test.snapshotHash(snapshot), ads._test.snapshotHash({ ...snapshot, version: 4 }));
 });
 
+test("provider creation executes the immutable launch snapshot instead of later campaign edits", () => {
+  const snapshot = {
+    id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    version: 3,
+    name: "Approved launch",
+    status: "ready",
+    data: { dailyBudget: 25, creative: { headline: "Approved copy" } },
+  };
+  const hash = ads._test.snapshotHash(snapshot);
+  const bound = ads._test.bindCreateOperationSnapshot({
+    operation_type: "create",
+    operation_payload: { snapshot, snapshotHash: hash },
+    snapshot_hash: hash,
+    campaign_name: "Later edit",
+    campaign_data: { dailyBudget: 5000, creative: { headline: "Unreviewed copy" } },
+  });
+
+  assert.equal(bound.campaign_name, "Approved launch");
+  assert.deepEqual(bound.campaign_data, snapshot.data);
+  assert.throws(
+    () => ads._test.bindCreateOperationSnapshot({
+      operation_type: "create",
+      operation_payload: { snapshot: { ...snapshot, version: 4 }, snapshotHash: hash },
+      snapshot_hash: hash,
+    }),
+    /immutable campaign snapshot/
+  );
+  assert.equal(ads.capabilities().paidAdvertising.immutableLaunchSnapshots, true);
+  assert.equal(ads.capabilities().paidAdvertising.oneOpenMutationPerProviderCampaign, true);
+});
+
 test("paid campaign migration installs verified accounts, durable operations, and worker dispatch", () => {
   const migration = fs.readFileSync(
     path.join(__dirname, "../migrations/20260729_goodads_paid_campaigns.sql"),
@@ -982,6 +1013,8 @@ test("paid campaign migration installs verified accounts, durable operations, an
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_ad_accounts/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_provider_campaigns/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_ad_operations/);
+  assert.match(migration, /idx_goodads_ad_operations_open_mutation/);
+  assert.match(migration, /operation_type IN \('create', 'pause', 'activate', 'archive'\)/);
   assert.match(migration, /activation_approval_id/);
   assert.match(migration, /'goodads\.ads\.dispatch'/);
   assert.match(jobs, /case "goodads\.ads\.dispatch"/);
@@ -1008,6 +1041,8 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /dead_letter/);
   assert.match(source, /GOODADS_ADAPTER_NOT_INSTALLED/);
   assert.match(source, /GOODADS_AD_ACTIVATION_NOT_SUPPORTED/);
+  assert.match(source, /ON CONFLICT DO NOTHING/);
+  assert.match(source, /active_operation\.operation_type IN \('create','pause','activate','archive'\)/);
   assert.match(source, /intendedStatus: "DRAFT"/);
   assert.match(source, /activationSupported: false/);
   assert.doesNotMatch(source, /row\.provider === "meta"[\s\S]{0,120}: createGoogleDelivery/);

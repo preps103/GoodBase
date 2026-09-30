@@ -16,6 +16,7 @@ async function schemaState(client) {
        to_regclass('public.goodads_provider_campaigns') IS NOT NULL AS provider_campaigns,
        to_regclass('public.goodads_ad_operations') IS NOT NULL AS ad_operations,
        to_regclass('public.idx_goodads_ad_operations_dispatch') IS NOT NULL AS dispatch_index,
+       to_regclass('public.idx_goodads_ad_operations_open_mutation') IS NOT NULL AS open_mutation_index,
        EXISTS (
          SELECT 1 FROM backend_jobs
          WHERE id = 'job_goodads_ad_operations_dispatch'
@@ -27,7 +28,7 @@ async function schemaState(client) {
 }
 
 function ready(state) {
-  return ["ad_accounts", "provider_campaigns", "ad_operations", "dispatch_index", "dispatch_job"]
+  return ["ad_accounts", "provider_campaigns", "ad_operations", "dispatch_index", "open_mutation_index", "dispatch_job"]
     .every((key) => state[key] === true);
 }
 

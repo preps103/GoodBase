@@ -1682,7 +1682,8 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   }
   const snapshot = campaignSnapshot(campaign);
   const hash = snapshotHash(snapshot);
-  for (const account of accountResult.rows) {
+  const accounts = [...accountResult.rows].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  for (const account of accounts) {
     const availability = providerAvailability(account.provider);
     if (!availability.available) {
       throw adsError(`${availability.name} is not fully configured in GoodBase.`, 503, "GOODADS_AD_PROVIDER_NOT_CONFIGURED");
@@ -1692,20 +1693,87 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    for (const account of accountResult.rows) {
+    for (const account of accounts) {
+      const existingResult = await client.query(
+        `SELECT provider_campaign.*,
+           EXISTS (
+             SELECT 1 FROM goodads_ad_operations operation
+             WHERE operation.provider_campaign_id = provider_campaign.id
+               AND operation.operation_type = 'create'
+               AND operation.status IN ('queued','processing','retrying')
+           ) AS create_pending
+         FROM goodads_provider_campaigns provider_campaign
+         WHERE provider_campaign.organization_id = $1
+           AND provider_campaign.campaign_id = $2::uuid
+           AND provider_campaign.ad_account_id = $3::uuid
+         FOR UPDATE`,
+        [context.organizationId, campaign.id, account.id]
+      );
+      const existing = existingResult.rows[0];
+      if (
+        existing
+        && existing.status !== "archived"
+        && existing.snapshot_hash !== hash
+        && (existing.provider_campaign_id || existing.create_pending)
+      ) {
+        throw adsError(
+          existing.create_pending
+            ? "This provider campaign is already being created from an earlier campaign version. Wait for it to finish, then archive it before recreating."
+            : "This provider campaign belongs to an earlier campaign version. Archive it before recreating from the current version.",
+          409,
+          "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
+        );
+      }
       const providerCampaign = await client.query(
         `INSERT INTO goodads_provider_campaigns (
            organization_id, campaign_id, ad_account_id, provider, status,
            campaign_version, snapshot_hash, created_by_user_id
          ) VALUES ($1, $2::uuid, $3::uuid, $4, 'queued', $5, $6, $7::uuid)
          ON CONFLICT (organization_id, campaign_id, ad_account_id) DO UPDATE SET
-           campaign_version = EXCLUDED.campaign_version,
-           snapshot_hash = EXCLUDED.snapshot_hash,
+           campaign_version = CASE
+             WHEN goodads_provider_campaigns.provider_campaign_id IS NULL
+               OR goodads_provider_campaigns.status = 'archived'
+             THEN EXCLUDED.campaign_version
+             ELSE goodads_provider_campaigns.campaign_version
+           END,
+           snapshot_hash = CASE
+             WHEN goodads_provider_campaigns.provider_campaign_id IS NULL
+               OR goodads_provider_campaigns.status = 'archived'
+             THEN EXCLUDED.snapshot_hash
+             ELSE goodads_provider_campaigns.snapshot_hash
+           END,
+           provider_campaign_id = CASE
+             WHEN goodads_provider_campaigns.status = 'archived' THEN NULL
+             ELSE goodads_provider_campaigns.provider_campaign_id
+           END,
+           provider_resource_name = CASE
+             WHEN goodads_provider_campaigns.status = 'archived' THEN NULL
+             ELSE goodads_provider_campaigns.provider_resource_name
+           END,
+           provider_budget_id = CASE
+             WHEN goodads_provider_campaigns.status = 'archived' THEN NULL
+             ELSE goodads_provider_campaigns.provider_budget_id
+           END,
            status = CASE
-             WHEN goodads_provider_campaigns.provider_campaign_id IS NULL THEN 'queued'
+             WHEN goodads_provider_campaigns.provider_campaign_id IS NULL
+               OR goodads_provider_campaigns.status = 'archived'
+             THEN 'queued'
              ELSE goodads_provider_campaigns.status
            END,
-           last_error = NULL,
+           activation_approval_id = CASE
+             WHEN goodads_provider_campaigns.status = 'archived' THEN NULL
+             ELSE goodads_provider_campaigns.activation_approval_id
+           END,
+           receipt = CASE
+             WHEN goodads_provider_campaigns.status = 'archived' THEN '{}'::jsonb
+             ELSE goodads_provider_campaigns.receipt
+           END,
+           last_error = CASE
+             WHEN goodads_provider_campaigns.provider_campaign_id IS NULL
+               OR goodads_provider_campaigns.status = 'archived'
+             THEN NULL
+             ELSE goodads_provider_campaigns.last_error
+           END,
            updated_at = NOW()
          RETURNING *`,
         [context.organizationId, campaign.id, account.id, account.provider, campaign.version, hash, userId]
@@ -1717,7 +1785,7 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
              organization_id, provider_campaign_id, requested_by_user_id,
              operation_type, idempotency_key, payload
            ) VALUES ($1, $2::uuid, $3::uuid, 'create', $4, $5::jsonb)
-           ON CONFLICT (organization_id, idempotency_key) DO NOTHING`,
+           ON CONFLICT DO NOTHING`,
           [
             context.organizationId,
             record.id,
@@ -1822,7 +1890,7 @@ async function queueLifecycleOperation({
        organization_id, provider_campaign_id, requested_by_user_id,
        operation_type, idempotency_key, payload
      ) VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6::jsonb)
-     ON CONFLICT (organization_id, idempotency_key) DO NOTHING`,
+     ON CONFLICT DO NOTHING`,
     [
       context.organizationId,
       campaign.id,
@@ -4491,28 +4559,56 @@ function nativeAdapter(provider) {
   return adapter;
 }
 
-async function executeOperation(row) {
-  const adapter = nativeAdapter(row.provider);
-  const accessToken = row.provider === "x"
-    ? await social.oauth1CredentialsForConnection(row)
-    : await social.accessTokenForConnection(row);
-  if (row.operation_type === "create") {
-    return adapter.create(row, accessToken);
+function bindCreateOperationSnapshot(row) {
+  if (row.operation_type !== "create") return row;
+  const snapshot = row.operation_payload?.snapshot;
+  const expectedHash = boundedText(row.operation_payload?.snapshotHash, 64).toLowerCase();
+  if (
+    !snapshot
+    || typeof snapshot !== "object"
+    || Array.isArray(snapshot)
+    || !/^[a-f0-9]{64}$/.test(expectedHash)
+    || snapshotHash(snapshot) !== expectedHash
+    || boundedText(row.snapshot_hash, 64).toLowerCase() !== expectedHash
+  ) {
+    throw adsError(
+      "The queued provider creation no longer matches its immutable campaign snapshot.",
+      409,
+      "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
+    );
   }
-  if (!row.provider_campaign_id) throw adsError("The provider campaign has not been created.");
-  if (row.operation_type === "pause") {
-    const receipt = await adapter.updateStatus(row, accessToken, adapter.statuses.pause);
+  return {
+    ...row,
+    campaign_name: boundedText(snapshot.name, 240),
+    campaign_data: snapshot.data && typeof snapshot.data === "object" && !Array.isArray(snapshot.data)
+      ? snapshot.data
+      : {},
+  };
+}
+
+async function executeOperation(row) {
+  const executionRow = bindCreateOperationSnapshot(row);
+  const adapter = nativeAdapter(executionRow.provider);
+  const accessToken = executionRow.provider === "x"
+    ? await social.oauth1CredentialsForConnection(executionRow)
+    : await social.accessTokenForConnection(executionRow);
+  if (executionRow.operation_type === "create") {
+    return adapter.create(executionRow, accessToken);
+  }
+  if (!executionRow.provider_campaign_id) throw adsError("The provider campaign has not been created.");
+  if (executionRow.operation_type === "pause") {
+    const receipt = await adapter.updateStatus(executionRow, accessToken, adapter.statuses.pause);
     return { receipt, status: "paused" };
   }
-  if (row.operation_type === "activate") {
-    const receipt = await adapter.updateStatus(row, accessToken, adapter.statuses.activate);
+  if (executionRow.operation_type === "activate") {
+    const receipt = await adapter.updateStatus(executionRow, accessToken, adapter.statuses.activate);
     return { receipt, status: "active" };
   }
-  if (row.operation_type === "archive") {
-    const receipt = await adapter.updateStatus(row, accessToken, adapter.statuses.archive);
+  if (executionRow.operation_type === "archive") {
+    const receipt = await adapter.updateStatus(executionRow, accessToken, adapter.statuses.archive);
     return { receipt, status: "archived" };
   }
-  return adapter.sync(row, accessToken);
+  return adapter.sync(executionRow, accessToken);
 }
 
 async function processOperation(row) {
@@ -4601,7 +4697,7 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
          provider_campaign.id AS provider_campaign_record_id,
          provider_campaign.provider_campaign_id, provider_campaign.provider_resource_name,
          provider_campaign.provider_budget_id, provider_campaign.status,
-         provider_campaign.receipt, provider_campaign.provider,
+         provider_campaign.receipt, provider_campaign.provider, provider_campaign.snapshot_hash,
          account.provider_account_id, account.currency AS account_currency,
          account.timezone AS account_timezone, account.metadata AS account_metadata,
          connection.*,
@@ -4632,6 +4728,16 @@ async function retryOperation({ id, context }) {
        AND operation.organization_id = $2
        AND provider_campaign.organization_id = $2
        AND operation.status IN ('failed','dead_letter')
+       AND (
+         operation.operation_type = 'sync'
+         OR NOT EXISTS (
+           SELECT 1 FROM goodads_ad_operations active_operation
+           WHERE active_operation.provider_campaign_id = operation.provider_campaign_id
+             AND active_operation.id <> operation.id
+             AND active_operation.operation_type IN ('create','pause','activate','archive')
+             AND active_operation.status IN ('queued','processing','retrying')
+         )
+       )
      RETURNING operation.*`,
     [requireUuid(id, "operation ID"), context.organizationId]
   );
@@ -4668,6 +4774,8 @@ function capabilities() {
       activationApprovalRequired: true,
       durableOperations: true,
       boundedRetries: true,
+      immutableLaunchSnapshots: true,
+      oneOpenMutationPerProviderCampaign: true,
       maximumAccountsPerLaunch: 10,
     },
   };
@@ -4726,6 +4834,7 @@ module.exports = {
     xLineItemParameters,
     xTweetParameters,
     nativeAdapter,
+    bindCreateOperationSnapshot,
     snapshotHash,
     validateCampaignForAccount,
   },
