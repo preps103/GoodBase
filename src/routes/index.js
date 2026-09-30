@@ -36,6 +36,8 @@ const fleetMarketplaceRoutes = require("./fleet-marketplace.routes");
 const fleetAdvancedOperationsRoutes = require("./fleet-advanced-operations.routes");
 const goodCustomChatRoutes = require("./goodcustom-chat.routes");
 const goodCustomQuotesRoutes = require("./goodcustom-quotes.routes");
+const goodSureLeadsRoutes = require("./goodsure-leads.routes");
+const goodEscrowAssistantRoutes = require("./goodescrow-assistant.routes");
 
 
 const billingRoutes = require("./billing.routes");
@@ -205,6 +207,7 @@ router.get("/console-v2.js", (req, res) => {
 });
 
 router.get("/goodbase-console-login.js", (req, res) => {
+  res.set("Cache-Control", "no-store");
   res.type("application/javascript");
   res.sendFile(path.join(__dirname, "../public/goodbase-console-login.js"));
 });
@@ -371,6 +374,30 @@ router.get("/packages/goodos-topbar-widget-4.8.0.tgz", (req, res) => {
   );
 });
 
+router.get("/packages/goodos-topbar-widget-4.9.0.tgz", (req, res) => {
+  res.set("Cross-Origin-Resource-Policy", "cross-origin");
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res.type("application/gzip");
+  res.sendFile(
+    path.resolve(
+      __dirname,
+      "../public/packages/goodos-topbar-widget-4.9.0.tgz",
+    ),
+  );
+});
+
+router.get("/packages/goodos-topbar-widget-4.10.0.tgz", (req, res) => {
+  res.set("Cross-Origin-Resource-Policy", "cross-origin");
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res.type("application/gzip");
+  res.sendFile(
+    path.resolve(
+      __dirname,
+      "../public/packages/goodos-topbar-widget-4.10.0.tgz",
+    ),
+  );
+});
+
 router.get("/backend-login.css", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Cross-Origin-Resource-Policy", "cross-origin");
@@ -450,6 +477,8 @@ router.use("/api/gooddesigner/v1", goodDesignerRoutes);
 router.use("/api/goodscan/v1", goodScanRoutes);
 router.use("/api/apps/goodcustom/v1/chat", goodCustomChatRoutes);
 router.use("/api/apps/goodcustom/v1/quotes", goodCustomQuotesRoutes);
+router.use("/api/apps/goodsure/v1/leads", goodSureLeadsRoutes);
+router.use("/api/apps/goodescrow/v1/assistant", goodEscrowAssistantRoutes);
 router.use("/api/apps", appsRoutes);
 router.use("/api/db", dbRoutes);
 router.use("/api/auth", authRoutes);

@@ -230,7 +230,7 @@
         "servers": [{ "url": "https://base.goodos.app" }],
         "security": [],
         "responses": {
-          "200": { "description": "Kokoro is ready; optional engines may be degraded" },
+          "200": { "description": "Primary Kokoro speech and supported browser fallbacks are ready; optional accelerators may be unavailable" },
           "503": { "description": "The primary Kokoro speech engine is unavailable" }
         }
       }

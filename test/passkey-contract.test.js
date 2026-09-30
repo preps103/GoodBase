@@ -21,10 +21,15 @@ test("GoodBase exposes durable, user-verified passkey ceremonies", () => {
   assert.match(service, /authenticatorAttachment:\s*"platform"/);
   assert.match(service, /timeout:\s*60_000/);
   assert.match(service, /https:\/\/voice\.goodos\.app/);
+  assert.match(service, /https:\/\/base\.goodos\.app/);
+  assert.match(service, /https:\/\/qr\.goodos\.app/);
+  assert.match(service, /https:\/\/trust\.goodos\.app/);
+  assert.match(service, /https:\/\/signs\.goodos\.app/);
   assert.match(service, /userVerification:\s*"required"/);
   assert.match(service, /requireUserVerification:\s*true/);
   assert.match(service, /consumed_at = NOW\(\)/);
   assert.match(service, /authMethod:\s*"passkey"/);
+  assert.match(service, /Passkey on this device/);
   assert.match(service, /WHERE id::text = \$1::text/);
   assert.match(migration, /credential_id TEXT NOT NULL UNIQUE/);
   assert.match(migration, /public_key BYTEA NOT NULL/);

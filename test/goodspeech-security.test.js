@@ -13,6 +13,7 @@ const {
   kokoroRequest,
   kokoroSpeed,
   buildCapabilities,
+  buildSystemReadiness,
   kokoroEndpoint,
   kokoroHealthEndpoint,
   configuredProvider,
@@ -120,9 +121,31 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "voice-changer").status, "limited");
   assert.match(ready.find((item) => item.id === "voice-changer").issue, /voice-conversion model/i);
   assert.equal(degraded.find((item) => item.id === "speech").issue, "Kokoro unavailable");
+  assert.equal(degraded.find((item) => item.id === "video").status, "limited");
+  assert.equal(degraded.find((item) => item.id === "video").execution, "browser");
+  assert.equal(degraded.find((item) => item.id === "video").engine, "motion-canvas");
   assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
   assert.match(degraded.find((item) => item.id === "image").issue, /image model/i);
   assert.match(degraded.find((item) => item.id === "avatars").issue, /browser live mode/i);
+});
+
+test("GoodSpeech remains ready when optional accelerators use working browser fallbacks", () => {
+  const readiness = buildSystemReadiness(
+    { ready: true },
+    { ready: false },
+    { ready: false },
+  );
+
+  assert.equal(readiness.success, true);
+  assert.equal(readiness.status, "ready");
+  assert.equal(readiness.primaryEngineReady, true);
+  assert.equal(readiness.optionalEnhancementsReady, false);
+  assert.deepEqual(readiness.fallbacksActive, [
+    { capability: "video", engine: "motion-canvas" },
+    { capability: "avatars", engine: "browser-live" },
+  ]);
+
+  assert.equal(buildSystemReadiness({ ready: false }, { ready: true }, { ready: true }).status, "unready");
 });
 
 test("GoodSpeech live avatars require an approved adult likeness and validated media", () => {

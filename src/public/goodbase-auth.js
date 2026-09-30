@@ -10,6 +10,7 @@ const nodes = {
   confirmField: document.querySelector("#confirm-field"),
   email: document.querySelector("#email"),
   password: document.querySelector("#password"),
+  passkey: document.querySelector("#passkey"),
   passwordToggle: document.querySelector("#password-toggle"),
   confirmPassword: document.querySelector("#confirm-password"),
   confirmPasswordToggle: document.querySelector("#confirm-password-toggle"),
@@ -56,6 +57,7 @@ nodes.confirmPasswordToggle.addEventListener("click", () => {
 const query = new URLSearchParams(location.search);
 const resetToken = query.get("reset_token") || "";
 const redirectTarget = query.get("redirect") || query.get("returnTo") || "/console";
+let passkeyAbortController = null;
 let mode = resetToken
   ? "reset"
   : location.pathname === "/register"
@@ -96,6 +98,106 @@ function setBusy(busy) {
   for (const button of document.querySelectorAll("button")) button.disabled = busy || button.dataset.unavailable === "true";
 }
 
+function passkeysSupported() {
+  return window.isSecureContext === true &&
+    typeof window.PublicKeyCredential !== "undefined" &&
+    typeof navigator.credentials?.get === "function";
+}
+
+function decodeBase64Url(value) {
+  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "===".slice((normalized.length + 3) % 4);
+  const decoded = atob(padded);
+  return Uint8Array.from(decoded, character => character.charCodeAt(0));
+}
+
+function encodeBase64Url(value) {
+  const bytes = new Uint8Array(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function authenticationOptionsJSON(options) {
+  return {
+    ...options,
+    challenge: decodeBase64Url(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map(credential => ({
+      ...credential,
+      id: decodeBase64Url(credential.id)
+    }))
+  };
+}
+
+function authenticationCredentialJSON(credential) {
+  return {
+    id: credential.id,
+    rawId: encodeBase64Url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment || undefined,
+    clientExtensionResults: credential.getClientExtensionResults(),
+    response: {
+      authenticatorData: encodeBase64Url(credential.response.authenticatorData),
+      clientDataJSON: encodeBase64Url(credential.response.clientDataJSON),
+      signature: encodeBase64Url(credential.response.signature),
+      userHandle: credential.response.userHandle
+        ? encodeBase64Url(credential.response.userHandle)
+        : undefined
+    }
+  };
+}
+
+async function authenticateWithPasskey({ conditional = false } = {}) {
+  if (!passkeysSupported()) throw new Error("This browser cannot use a fingerprint or passkey.");
+
+  if (passkeyAbortController) passkeyAbortController.abort();
+  const controller = new AbortController();
+  passkeyAbortController = controller;
+
+  try {
+    const ceremony = await api("/api/auth/passkeys/authentication/options", {
+      method: "POST",
+      body: "{}"
+    });
+    const request = {
+      publicKey: authenticationOptionsJSON(ceremony.options),
+      signal: controller.signal
+    };
+    if (conditional) request.mediation = "conditional";
+    const credential = await navigator.credentials.get(request);
+    if (!credential) throw new Error("No passkey was selected.");
+    await api("/api/auth/passkeys/authentication/verify", {
+      method: "POST",
+      body: JSON.stringify({
+        challengeId: ceremony.challengeId,
+        response: authenticationCredentialJSON(credential)
+      })
+    });
+    location.assign(safeRedirect(redirectTarget));
+  } finally {
+    if (passkeyAbortController === controller) passkeyAbortController = null;
+  }
+}
+
+function ignoredPasskeyError(error) {
+  return error?.name === "AbortError" || error?.name === "NotAllowedError";
+}
+
+async function startConditionalPasskey() {
+  if (
+    mode !== "login" ||
+    !passkeysSupported() ||
+    typeof PublicKeyCredential.isConditionalMediationAvailable !== "function" ||
+    !(await PublicKeyCredential.isConditionalMediationAvailable())
+  ) return;
+
+  try {
+    await authenticateWithPasskey({ conditional: true });
+  } catch (error) {
+    if (!ignoredPasskeyError(error)) console.warn("Conditional passkey sign-in could not start.", error);
+  }
+}
+
 function renderMode() {
   const login = mode === "login";
   const forgot = mode === "forgot";
@@ -112,7 +214,9 @@ function renderMode() {
   nodes.lastName.required = mode === "register";
   nodes.password.required = !forgot;
   nodes.email.required = mode !== "reset";
-  nodes.password.autocomplete = mode === "reset" ? "new-password" : "current-password";
+  nodes.email.autocomplete = login ? "username webauthn" : "email";
+  nodes.password.autocomplete = mode === "reset" ? "new-password" : login ? "current-password webauthn" : "new-password";
+  nodes.passkey.classList.toggle("hidden", !login || !passkeysSupported());
   nodes.passwordLabel.textContent = mode === "reset" ? "New password" : "Password";
   nodes.kicker.textContent = login ? "Welcome back" : mode === "register" ? "Join GoodOS" : "Account recovery";
   nodes.title.textContent = forgot ? "Reset your password" : mode === "reset" ? "Choose a new password" : mode === "register" ? "Create your GoodOS account" : "Sign in to GoodBase";
@@ -167,6 +271,20 @@ async function loadProviders() {
 nodes.goodos.addEventListener("click", () => {
   const returnTo = safeRedirect(redirectTarget);
   location.assign(`https://goodos.app/?returnTo=${encodeURIComponent(returnTo)}`);
+});
+
+nodes.passkey.addEventListener("click", async () => {
+  setMessage("", "");
+  setBusy(true);
+  try {
+    await authenticateWithPasskey();
+  } catch (error) {
+    if (!ignoredPasskeyError(error)) {
+      setMessage("error", error instanceof Error ? error.message : "Fingerprint sign-in failed.");
+    }
+  } finally {
+    setBusy(false);
+  }
 });
 
 nodes.forgot.addEventListener("click", () => {
@@ -240,3 +358,4 @@ nodes.form.addEventListener("submit", async event => {
 
 renderMode();
 loadProviders();
+void startConditionalPasskey();
