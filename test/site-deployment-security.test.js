@@ -304,6 +304,10 @@ test("GoodBase self-deployment recovery is lock-protected and owner-controlled",
     path.join(__dirname, "..", "scripts", "restart-goodbase-services.js"),
     "utf8"
   );
+  const control = fs.readFileSync(
+    path.join(__dirname, "..", "deploy", "goodos-pm2-control"),
+    "utf8"
+  );
 
   assert.match(routes, /router\.use\(authRequired\)/);
   assert.match(routes, /router\.use\(requireOwnerOrAdmin\)/);
@@ -324,4 +328,8 @@ test("GoodBase self-deployment recovery is lock-protected and owner-controlled",
     restart,
     /PROCESSES = \["goodbase-worker", "goodbase-api-ha", "goodbase-api"\]/
   );
+  assert.match(control, /GOODBASE_REPOSITORY="\/var\/www\/GoodBase"/);
+  assert.match(control, /git -c safe\.directory="\$\{GOODBASE_REPOSITORY\}"/);
+  assert.match(control, /GOODBASE_RELEASE_COMMIT="\$\{goodbase_release_commit\}"/);
+  assert.match(control, /\^\[0-9a-f\]\{40\}\$/);
 });

@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 readonly PM2_BIN="/usr/bin/pm2"
 readonly PM2_RUNTIME="/root/.pm2"
+readonly GOODBASE_REPOSITORY="/var/www/GoodBase"
 readonly action="${1:-}"
 
 allowed_process() {
@@ -28,6 +29,17 @@ case "${action}" in
     [[ "$#" -eq 2 ]]
     readonly requested_process="$2"
     allowed_process "${requested_process}"
+    if [[ "${requested_process}" == goodbase-* ]]; then
+      readonly goodbase_release_commit="$(
+        git -c safe.directory="${GOODBASE_REPOSITORY}" \
+          -C "${GOODBASE_REPOSITORY}" rev-parse --verify HEAD
+      )"
+      [[ "${goodbase_release_commit}" =~ ^[0-9a-f]{40}$ ]]
+      exec env \
+        PM2_HOME="${PM2_RUNTIME}" \
+        GOODBASE_RELEASE_COMMIT="${goodbase_release_commit}" \
+        "${PM2_BIN}" restart "${requested_process}" --update-env
+    fi
     exec env PM2_HOME="${PM2_RUNTIME}" "${PM2_BIN}" restart "${requested_process}" --update-env
     ;;
   save)
