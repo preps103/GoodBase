@@ -29,10 +29,10 @@ native GoodBase adapter are all installed.
 | TikTok | TikTok | Registered | Not installed | Not installed |
 | LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
 | X | X | Registered | Not installed | Not installed |
-| Pinterest | Pinterest | Registered | Not installed | Not installed |
+| Pinterest | Pinterest | Native | Native, paused by default | Not installed |
 | Snapchat | Snapchat Marketing API | Native | Native, paused by default | Not installed |
 
-The four unfinished providers remain visible in the readiness contract so the
+The three unfinished providers remain visible in the readiness contract so the
 GoodAds interface can show the exact setup gap. They are deliberately excluded
 from `supportedProviders` until an in-process adapter passes the paused-create,
 lifecycle, analytics, retry, and approval-gate tests.
@@ -52,8 +52,20 @@ request an activation review or activate one. This preserves the no-spend
 contract while making the campaign fully reviewable in LinkedIn Campaign
 Manager.
 
-Pinterest advertising scopes can be enabled for an approved OAuth application
-with `GOODADS_PINTEREST_ADS_OAUTH_ENABLED=true`.
+Pinterest's native v5 adapter discovers advertiser accounts and requires owner,
+admin, or campaign-manager access plus an account currency and IANA time zone.
+It creates a paused campaign with campaign-budget optimization, a paused
+country-targeted ad group, an ad-only image Pin, and a paused promoted-Pin ad.
+Every Pinterest ID is persisted before the next resource is created so a retry
+resumes instead of duplicating the campaign stack. Traffic, awareness, and
+engagement campaigns are supported. Sales, conversion, and lead campaigns fail
+closed until a Pinterest Tag or lead form is verified. Activation follows the
+same exact-snapshot approval gate as Meta, Google, and Snapchat; child resources
+are activated before the parent campaign, while pause runs parent first.
+
+Enable Pinterest advertising scopes for an approved OAuth application with
+`GOODADS_PINTEREST_ADS_OAUTH_ENABLED=true`. Existing Pinterest connections must
+reconnect to grant `ads:read`, `ads:write`, and `pins:write`.
 
 Snapchat's native adapter uses `GOODADS_SNAPCHAT_CLIENT_ID` and
 `GOODADS_SNAPCHAT_CLIENT_SECRET` with the `snapchat-marketing-api` scope. It

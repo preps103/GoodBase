@@ -38,7 +38,7 @@ test("all major paid platforms are explicit and unfinished adapters cannot fall 
     ads.publicProviders().map((provider) => provider.id),
     ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]
   );
-  for (const provider of ["youtube", "tiktok", "x", "pinterest"]) {
+  for (const provider of ["youtube", "tiktok", "x"]) {
     const availability = ads._test.providerAvailability(provider);
     assert.equal(availability.available, false);
     assert.equal(availability.adapterConfigured, false);
@@ -102,6 +102,39 @@ test("LinkedIn delivery requires an approved OAuth app with advertising scopes",
     assert.equal(withScopes.safePausedCreation, true);
     assert.equal(withScopes.activationSupported, false);
     assert.equal(typeof ads._test.nativeAdapter("linkedin").create, "function");
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
+test("Pinterest delivery requires an approved OAuth app with advertising scopes", () => {
+  const names = [
+    "GOODADS_PINTEREST_CLIENT_ID",
+    "GOODADS_PINTEREST_CLIENT_SECRET",
+    "GOODADS_PINTEREST_ADS_OAUTH_ENABLED",
+  ];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      GOODADS_PINTEREST_CLIENT_ID: "test-client",
+      GOODADS_PINTEREST_CLIENT_SECRET: "test-secret",
+      GOODADS_PINTEREST_ADS_OAUTH_ENABLED: "false",
+    });
+    const withoutScopes = ads._test.providerAvailability("pinterest");
+    assert.equal(withoutScopes.available, false);
+    assert.deepEqual(withoutScopes.missingOAuthScopes, ["ads:read", "ads:write"]);
+
+    process.env.GOODADS_PINTEREST_ADS_OAUTH_ENABLED = "true";
+    const withScopes = ads._test.providerAvailability("pinterest");
+    assert.equal(withScopes.available, true);
+    assert.equal(withScopes.adapterConfigured, true);
+    assert.equal(withScopes.adapterType, "native");
+    assert.equal(withScopes.safePausedCreation, true);
+    assert.equal(withScopes.activationSupported, true);
+    assert.equal(typeof ads._test.nativeAdapter("pinterest").create, "function");
   } finally {
     for (const name of names) {
       if (saved[name] === undefined) delete process.env[name];
@@ -195,6 +228,33 @@ test("LinkedIn account discovery requires campaign access and an organization ow
     ).status,
     "organization_required"
   );
+});
+
+test("Pinterest account discovery requires campaign access and a complete locale", () => {
+  const eligible = ads._test.normalizePinterestAccount({
+    id: "549755885175",
+    name: "GoodOS Pinterest",
+    country: "us",
+    currency: "usd",
+    time_zone: "America/Los_Angeles",
+    permissions: ["ANALYST", "CAMPAIGN_MANAGER"],
+    owner: { username: "goodos" },
+  });
+  assert.equal(eligible.eligible, true);
+  assert.equal(eligible.status, "active");
+  assert.equal(eligible.currency, "USD");
+  assert.equal(eligible.timezone, "America/Los_Angeles");
+  assert.equal(eligible.metadata.deliveryReady, true);
+  assert.deepEqual(eligible.metadata.permissions, ["ANALYST", "CAMPAIGN_MANAGER"]);
+
+  const readOnly = ads._test.normalizePinterestAccount({
+    id: "549755885175",
+    currency: "USD",
+    time_zone: "America/Los_Angeles",
+    permissions: ["ANALYST"],
+  });
+  assert.equal(readOnly.eligible, false);
+  assert.equal(readOnly.status, "campaign_manager_role_required");
 });
 
 test("Snapchat account discovery requires campaign write access and funding", () => {
@@ -322,6 +382,97 @@ test("Snapchat adapter builds a fully paused campaign stack with a shared Public
   );
   assert.equal(ad.type, "REMOTE_WEBPAGE");
   assert.equal(ad.status, "PAUSED");
+});
+
+test("Pinterest adapter builds a paused CBO campaign, targeted ad group, ad-only Pin, and ad", () => {
+  const row = {
+    provider_account_id: "549755885175",
+    campaign_name: "GoodOS Launch",
+    campaign_data: {
+      objective: "traffic",
+      dailyBudget: 25,
+      maxCpc: 2.5,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US", "CA"],
+      creative: {
+        primaryText: "Run every part of your business from one place.",
+        headline: "Meet GoodOS",
+        description: "One operating system for growing businesses.",
+        callToAction: "Learn More",
+        destinationUrl: "https://goodos.app/",
+        imageUrl: "https://cdn.goodos.app/goodads/launch.png",
+      },
+    },
+  };
+  const campaign = ads._test.pinterestCampaignPayload(row);
+  assert.equal(campaign.status, "PAUSED");
+  assert.equal(campaign.objective_type, "CONSIDERATION");
+  assert.equal(campaign.daily_spend_cap, 25000000);
+  assert.equal(campaign.is_campaign_budget_optimization, true);
+  assert.equal(campaign.end_time - campaign.start_time, 8 * 24 * 60 * 60);
+
+  const adGroup = ads._test.pinterestAdGroupPayload(row, "626747269410");
+  assert.equal(adGroup.status, "PAUSED");
+  assert.equal(adGroup.billable_event, "CLICKTHROUGH");
+  assert.equal(adGroup.bid_in_micro_currency, 2500000);
+  assert.deepEqual(adGroup.targeting_spec.LOCATION, ["US", "CA"]);
+
+  const pin = ads._test.pinterestPinPayload(row);
+  assert.equal(pin.is_removable, true);
+  assert.equal(pin.media_source.source_type, "image_url");
+  assert.equal(pin.media_source.url, "https://cdn.goodos.app/goodads/launch.png");
+
+  const ad = ads._test.pinterestAdPayload(row, "2680086898355", "687195905986");
+  assert.equal(ad.status, "PAUSED");
+  assert.equal(ad.creative_type, "REGULAR");
+  assert.equal(ad.pin_id, "687195905986");
+  assert.equal(ads._test.pinterestObjective("awareness").billableEvent, "IMPRESSION");
+});
+
+test("Pinterest setup fails closed on missing campaign access, event sources, and invalid copy", () => {
+  const campaign = {
+    status: "ready",
+    data: {
+      platforms: ["pinterest"],
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      creative: {
+        headline: "Meet GoodOS",
+        primaryText: "Run your business in one place.",
+        destinationUrl: "https://goodos.app/",
+        imageUrl: "https://cdn.goodos.app/goodads/launch.png",
+      },
+    },
+  };
+  const account = {
+    provider: "pinterest",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: { deliveryReady: true },
+  };
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, account));
+  assert.throws(
+    () => ads._test.validateCampaignForAccount(campaign, { ...account, metadata: {} }),
+    (error) => error.code === "GOODADS_PINTEREST_CAMPAIGN_ACCESS_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
+    (error) => error.code === "GOODADS_PINTEREST_EVENT_SOURCE_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: {
+        ...campaign.data,
+        creative: { ...campaign.data.creative, headline: "x".repeat(101) },
+      },
+    }, account),
+    (error) => error.code === "GOODADS_PINTEREST_COPY_TOO_LONG"
+  );
 });
 
 test("Snapchat setup fails closed on unsafe budgets, objectives, profiles, and media hosts", () => {

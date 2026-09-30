@@ -14,6 +14,7 @@ const LINKEDIN_CAMPAIGN_ROLES = new Set([
 ]);
 const LINKEDIN_IMAGE_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png"]);
 const MAX_LINKEDIN_IMAGE_BYTES = 10 * 1024 * 1024;
+const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
   "image/jpeg": { type: "IMAGE", extension: "jpg", maximumBytes: 5 * 1024 * 1024 },
@@ -82,10 +83,11 @@ const PROVIDERS = Object.freeze({
     name: "Pinterest Ads",
     connectionProviders: ["pinterest"],
     requiredEnvironment: [],
+    requiredOAuthScopes: ["ads:read", "ads:write", "pins:write"],
     platforms: ["pinterest"],
     safePausedCreation: true,
     deliveryAdapter: "promoted_pin",
-    adapterType: "not_installed",
+    adapterType: "native",
   },
   snapchat: {
     name: "Snapchat Ads",
@@ -197,6 +199,9 @@ function providerRequestError(response, payload, fallback) {
       || payload?.error?.details?.[0]?.errors?.[0]?.message
       || payload?.display_message
       || payload?.debug_message
+      || payload?.errors?.[0]?.message
+      || payload?.errors?.[0]?.error_message
+      || payload?.code
       || payload?.message
       || fallback,
     2000
@@ -358,6 +363,78 @@ async function discoverGoogleAccounts(accessToken) {
       }
     }));
     accounts.push(...details);
+  }
+  return { accounts, pages: [] };
+}
+
+function pinterestHeaders(accessToken, extra = {}) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json",
+    "User-Agent": "GoodAds/1.0",
+    ...extra,
+  };
+}
+
+async function pinterestRequest(path, accessToken, options = {}, fallback = "Pinterest Ads operation") {
+  return requestJson(
+    `https://api.pinterest.com/v5${path}`,
+    {
+      ...options,
+      headers: pinterestHeaders(accessToken, options.headers || {}),
+    },
+    fallback
+  );
+}
+
+function normalizePinterestAccount(account = {}) {
+  const providerAccountId = boundedText(account.id, 120);
+  const permissions = [...new Set((Array.isArray(account.permissions) ? account.permissions : [])
+    .map((permission) => boundedText(permission, 80).toUpperCase())
+    .filter(Boolean))];
+  const canManageCampaigns = permissions.some((permission) => PINTEREST_CAMPAIGN_ROLES.has(permission));
+  const currency = boundedText(account.currency, 12).toUpperCase();
+  const timezone = boundedText(account.time_zone, 120);
+  const eligible = /^\d{2,18}$/.test(providerAccountId)
+    && canManageCampaigns
+    && Boolean(currency)
+    && Boolean(timezone);
+  let status = "active";
+  if (!canManageCampaigns) status = "campaign_manager_role_required";
+  else if (!currency || !timezone) status = "account_locale_required";
+  else if (!/^\d{2,18}$/.test(providerAccountId)) status = "invalid_account_id";
+  return {
+    providerAccountId,
+    name: boundedText(account.name || `Pinterest Ads ${providerAccountId}`, 240),
+    currency,
+    timezone,
+    eligible,
+    status,
+    metadata: {
+      permissions,
+      country: boundedText(account.country, 2).toUpperCase() || null,
+      ownerUsername: boundedText(account.owner?.username, 240) || null,
+      deliveryReady: eligible,
+      channelType: "PROMOTED_PIN",
+    },
+  };
+}
+
+async function discoverPinterestAccounts(accessToken) {
+  const accounts = [];
+  let bookmark = "";
+  for (let page = 0; page < 5; page += 1) {
+    const parameters = new URLSearchParams({ page_size: "100" });
+    if (bookmark) parameters.set("bookmark", bookmark);
+    const { payload } = await pinterestRequest(
+      `/ad_accounts?${parameters}`,
+      accessToken,
+      {},
+      "Pinterest ad-account discovery"
+    );
+    accounts.push(...(Array.isArray(payload.items) ? payload.items.map(normalizePinterestAccount) : []));
+    bookmark = boundedText(payload.bookmark, 1000);
+    if (!bookmark) break;
   }
   return { accounts, pages: [] };
 }
@@ -663,15 +740,17 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
       ? await discoverGoogleAccounts(accessToken)
       : id === "linkedin"
         ? await discoverLinkedInAccounts(accessToken)
-        : id === "snapchat"
-          ? await discoverSnapchatAccounts(accessToken)
-          : (() => {
-          throw adsError(
-            `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
-            503,
-            "GOODADS_ADAPTER_NOT_INSTALLED"
-          );
-          })();
+        : id === "pinterest"
+          ? await discoverPinterestAccounts(accessToken)
+          : id === "snapchat"
+            ? await discoverSnapchatAccounts(accessToken)
+            : (() => {
+              throw adsError(
+                `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
+                503,
+                "GOODADS_ADAPTER_NOT_INSTALLED"
+              );
+            })();
   return {
     provider: id,
     connectionId: connection.id,
@@ -760,15 +839,17 @@ async function saveAdAccount({ payload, context, userId }) {
       }
     : provider === "linkedin"
       ? { ...(account.metadata || {}), deliveryReady: account.metadata?.deliveryReady === true }
-      : provider === "snapchat"
-        ? {
-            ...(account.metadata || {}),
-            profileId: selectedPage.id,
-            profileName: selectedPage.name,
-            deliveryReady: true,
-            channelType: "SNAP_AD",
-          }
-        : { deliveryReady: true, channelType: "SEARCH" };
+      : provider === "pinterest"
+        ? { ...(account.metadata || {}), deliveryReady: account.metadata?.deliveryReady === true }
+        : provider === "snapchat"
+          ? {
+              ...(account.metadata || {}),
+              profileId: selectedPage.id,
+              profileName: selectedPage.name,
+              deliveryReady: true,
+              channelType: "SNAP_AD",
+            }
+          : { deliveryReady: true, channelType: "SEARCH" };
   const result = await query(
     `INSERT INTO goodads_ad_accounts (
        organization_id, connection_id, provider, provider_account_id, name,
@@ -947,6 +1028,39 @@ function validateCampaignForAccount(campaign, account) {
         "LinkedIn delivery requires primary text and a headline.",
         409,
         "GOODADS_LINKEDIN_COPY_REQUIRED"
+      );
+    }
+  }
+  if (account.provider === "pinterest") {
+    if (!account.metadata?.deliveryReady) {
+      throw adsError(
+        "Pinterest delivery requires an ad account with owner, admin, or campaign-manager access.",
+        409,
+        "GOODADS_PINTEREST_CAMPAIGN_ACCESS_REQUIRED"
+      );
+    }
+    const objective = String(data.objective || "traffic").toLowerCase();
+    if (!["traffic", "awareness", "engagement"].includes(objective)) {
+      throw adsError(
+        "Pinterest one-click setup currently supports traffic, awareness, and engagement campaigns. Sales, conversion, and lead campaigns require a verified Pinterest Tag or lead form.",
+        409,
+        "GOODADS_PINTEREST_EVENT_SOURCE_REQUIRED"
+      );
+    }
+    const headline = String(creative.headline || "").trim();
+    const primaryText = String(creative.primaryText || "").trim();
+    if (!headline || !primaryText) {
+      throw adsError(
+        "Pinterest delivery requires a headline and primary text.",
+        409,
+        "GOODADS_PINTEREST_COPY_REQUIRED"
+      );
+    }
+    if (headline.length > 100 || primaryText.length > 800) {
+      throw adsError(
+        "Pinterest headlines cannot exceed 100 characters and primary text cannot exceed 800 characters.",
+        409,
+        "GOODADS_PINTEREST_COPY_TOO_LONG"
       );
     }
   }
@@ -1600,6 +1714,202 @@ async function createGoogleDelivery(row, accessToken) {
       adGroupResource,
       adResource,
       customerId,
+      state: "PAUSED",
+    },
+  };
+}
+
+function pinterestObjective(value) {
+  const objective = String(value || "traffic").toLowerCase();
+  return objective === "awareness"
+    ? { objectiveType: "AWARENESS", billableEvent: "IMPRESSION" }
+    : { objectiveType: "CONSIDERATION", billableEvent: "CLICKTHROUGH" };
+}
+
+function pinterestScheduleDate(value, exclusiveEnd = false) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) throw adsError("Pinterest campaign schedule is invalid.");
+  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
+  return Math.floor(date.getTime() / 1000);
+}
+
+function pinterestCampaignPayload(row) {
+  const data = row.campaign_data || {};
+  const { objectiveType } = pinterestObjective(data.objective);
+  return {
+    name: boundedText(row.campaign_name, 255),
+    status: "PAUSED",
+    objective_type: objectiveType,
+    intended_promotion_type: "STANDARD_AD",
+    daily_spend_cap: Math.round(Number(data.dailyBudget) * 1000000),
+    is_campaign_budget_optimization: true,
+    is_flexible_daily_budgets: false,
+    is_automated_campaign: false,
+    is_performance_plus: false,
+    is_top_of_search: false,
+    start_time: pinterestScheduleDate(data.startDate),
+    end_time: pinterestScheduleDate(data.endDate, true),
+  };
+}
+
+function pinterestAdGroupPayload(row, campaignId) {
+  const data = row.campaign_data || {};
+  const { billableEvent } = pinterestObjective(data.objective);
+  const countries = [...new Set((data.targetCountries || [])
+    .map((country) => boundedText(country, 2).toUpperCase())
+    .filter((country) => /^[A-Z]{2}$/.test(country)))];
+  return {
+    name: boundedText(`${row.campaign_name} audience`, 255),
+    campaign_id: campaignId,
+    status: "PAUSED",
+    billable_event: billableEvent,
+    bid_in_micro_currency: Math.round(Math.max(Number(data.maxCpc || 1), 0.01) * 1000000),
+    bid_strategy_type: "MAX_BID",
+    budget_type: "DAILY",
+    pacing_delivery_type: "STANDARD",
+    placement_group: "ALL",
+    auto_targeting_enabled: false,
+    targeting_spec: { LOCATION: countries },
+  };
+}
+
+function pinterestPinPayload(row) {
+  const creative = row.campaign_data?.creative || {};
+  return {
+    link: boundedText(creative.destinationUrl, 2048),
+    title: boundedText(creative.headline, 100),
+    description: boundedText(creative.primaryText, 800),
+    alt_text: boundedText(creative.description || creative.headline, 500),
+    media_source: {
+      source_type: "image_url",
+      url: boundedText(creative.imageUrl, 4000),
+      is_standard: true,
+    },
+    is_removable: true,
+  };
+}
+
+function pinterestAdPayload(row, adGroupId, pinId) {
+  const creative = row.campaign_data?.creative || {};
+  const callToAction = {
+    "Sign Up": "SIGN_UP",
+    Download: "DOWNLOAD",
+    "Shop Now": "SHOP_NOW",
+    "Book Now": "BOOK_NOW",
+    "Get Offer": "GET_OFFER",
+  }[creative.callToAction] || "LEARN_MORE";
+  return {
+    ad_group_id: adGroupId,
+    pin_id: pinId,
+    name: boundedText(`${row.campaign_name} ad`, 255),
+    status: "PAUSED",
+    creative_type: "REGULAR",
+    destination_url: boundedText(creative.destinationUrl, 2048),
+    customizable_cta_type: callToAction,
+    is_removable: true,
+  };
+}
+
+function pinterestBatchEntity(payload, key) {
+  const item = Array.isArray(payload?.items) ? payload.items[0] : null;
+  const exceptions = Array.isArray(item?.exceptions) ? item.exceptions : [];
+  const entity = item?.data;
+  if (!entity || exceptions.length || !/^\d{2,18}$/.test(String(entity.id || ""))) {
+    const message = boundedText(
+      exceptions[0]?.message
+        || exceptions[0]?.error_message
+        || exceptions[0]?.details
+        || `Pinterest did not return a valid ${key}.`,
+      2000
+    );
+    throw adsError(message, 502, "GOODADS_PINTEREST_BATCH_FAILED", true);
+  }
+  return entity;
+}
+
+async function createPinterestDelivery(row, accessToken) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  let campaignId = row.receipt?.campaignId || row.provider_campaign_id;
+  if (!campaignId) {
+    const { payload } = await pinterestRequest(
+      `/ad_accounts/${encodeURIComponent(accountId)}/campaigns`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([pinterestCampaignPayload(row)]),
+      },
+      "Pinterest paused-campaign creation"
+    );
+    campaignId = pinterestBatchEntity(payload, "campaign").id;
+    await mergeProviderReceipt(
+      row,
+      { campaignId },
+      { providerCampaignId: campaignId, providerResourceName: campaignId }
+    );
+  }
+
+  let adGroupId = row.receipt?.adGroupId || row.provider_budget_id;
+  if (!adGroupId) {
+    const { payload } = await pinterestRequest(
+      `/ad_accounts/${encodeURIComponent(accountId)}/ad_groups`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([pinterestAdGroupPayload(row, campaignId)]),
+      },
+      "Pinterest paused-ad-group creation"
+    );
+    adGroupId = pinterestBatchEntity(payload, "ad group").id;
+    await mergeProviderReceipt(row, { adGroupId }, { providerBudgetId: adGroupId });
+  }
+
+  let pinId = row.receipt?.pinId;
+  if (!pinId) {
+    const { payload } = await pinterestRequest(
+      `/pins?ad_account_id=${encodeURIComponent(accountId)}`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pinterestPinPayload(row)),
+      },
+      "Pinterest ad-only Pin creation"
+    );
+    pinId = boundedText(payload?.id, 120);
+    if (!/^\d{2,18}$/.test(pinId)) {
+      throw adsError("Pinterest did not return a valid ad-only Pin ID.", 502, "GOODADS_PINTEREST_PIN_CREATE_FAILED");
+    }
+    await mergeProviderReceipt(row, { pinId, pinBoardId: boundedText(payload.board_id, 120) || null });
+  }
+
+  let adId = row.receipt?.adId;
+  if (!adId) {
+    const { payload } = await pinterestRequest(
+      `/ad_accounts/${encodeURIComponent(accountId)}/ads`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([pinterestAdPayload(row, adGroupId, pinId)]),
+      },
+      "Pinterest paused-ad creation"
+    );
+    adId = pinterestBatchEntity(payload, "ad").id;
+    await mergeProviderReceipt(row, { adId });
+  }
+
+  return {
+    providerCampaignId: campaignId,
+    providerResourceName: campaignId,
+    providerBudgetId: adGroupId,
+    receipt: {
+      ...(row.receipt || {}),
+      campaignId,
+      adGroupId,
+      pinId,
+      adId,
       state: "PAUSED",
     },
   };
@@ -2447,6 +2757,72 @@ async function syncSnapchatStatus(row, accessToken) {
   return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
 }
 
+async function patchPinterestStatus(row, accessToken, resource, id, status) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const { payload } = await pinterestRequest(
+    `/ad_accounts/${encodeURIComponent(accountId)}/${resource}`,
+    accessToken,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ id, status }]),
+    },
+    `Pinterest ${resource} status update`
+  );
+  return pinterestBatchEntity(payload, resource);
+}
+
+async function updatePinterestStatus(row, accessToken, requestedStatus) {
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  const adGroupId = boundedText(row.receipt?.adGroupId || row.provider_budget_id, 120);
+  const adId = boundedText(row.receipt?.adId, 120);
+  if (![campaignId, adGroupId, adId].every((id) => /^\d{2,18}$/.test(id))) {
+    throw adsError("Pinterest campaign resources are incomplete.", 409, "GOODADS_PINTEREST_RESOURCES_INCOMPLETE");
+  }
+  const status = ["ACTIVE", "ARCHIVED"].includes(requestedStatus) ? requestedStatus : "PAUSED";
+  if (status === "ACTIVE") {
+    await patchPinterestStatus(row, accessToken, "ads", adId, status);
+    await patchPinterestStatus(row, accessToken, "ad_groups", adGroupId, status);
+    await patchPinterestStatus(row, accessToken, "campaigns", campaignId, status);
+  } else if (status === "ARCHIVED") {
+    await patchPinterestStatus(row, accessToken, "ads", adId, status);
+    await patchPinterestStatus(row, accessToken, "ad_groups", adGroupId, status);
+    await patchPinterestStatus(row, accessToken, "campaigns", campaignId, status);
+  } else {
+    await patchPinterestStatus(row, accessToken, "campaigns", campaignId, status);
+    await patchPinterestStatus(row, accessToken, "ad_groups", adGroupId, status);
+    await patchPinterestStatus(row, accessToken, "ads", adId, status);
+  }
+  return {
+    ...row.receipt,
+    state: status,
+    ...(status === "ARCHIVED" ? { remoteArchived: true, archivedAt: new Date().toISOString() } : {}),
+  };
+}
+
+async function syncPinterestStatus(row, accessToken) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  if (!/^\d{2,18}$/.test(campaignId)) {
+    throw adsError("Pinterest campaign ID is invalid.", 409, "GOODADS_PINTEREST_CAMPAIGN_ID_INVALID");
+  }
+  const { payload } = await pinterestRequest(
+    `/ad_accounts/${encodeURIComponent(accountId)}/campaigns/${encodeURIComponent(campaignId)}`,
+    accessToken,
+    {},
+    "Pinterest campaign status"
+  );
+  const providerStatus = boundedText(payload.status, 40).toUpperCase();
+  const status = providerStatus === "ACTIVE"
+    ? "active"
+    : ["ARCHIVED", "DELETED_DRAFT"].includes(providerStatus)
+      ? "archived"
+      : ["PAUSED", "DRAFT"].includes(providerStatus)
+        ? "paused"
+        : row.status;
+  return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
+}
+
 async function updateMetaStatus(row, accessToken, status) {
   const ids = [row.provider_campaign_id, row.receipt?.adSetId, row.receipt?.adId].filter(Boolean);
   for (const id of ids) await metaPost(id, accessToken, { status });
@@ -2543,6 +2919,12 @@ function nativeAdapter(provider) {
       create: createLinkedInDelivery,
       updateStatus: updateLinkedInStatus,
       sync: syncLinkedInStatus,
+      statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
+    },
+    pinterest: {
+      create: createPinterestDelivery,
+      updateStatus: updatePinterestStatus,
+      sync: syncPinterestStatus,
       statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
     },
     snapchat: {
@@ -2762,12 +3144,18 @@ module.exports = {
     normalizeMetaAccount,
     normalizeGoogleCustomer,
     normalizeLinkedInAccount,
+    normalizePinterestAccount,
     normalizeSnapchatAccount,
     metaObjective,
     linkedInObjective,
     linkedInCampaignPayload,
     linkedInCreativePayload,
     linkedInVersion,
+    pinterestObjective,
+    pinterestCampaignPayload,
+    pinterestAdGroupPayload,
+    pinterestPinPayload,
+    pinterestAdPayload,
     snapchatObjective,
     snapchatCampaignPayload,
     snapchatAdSquadPayload,
