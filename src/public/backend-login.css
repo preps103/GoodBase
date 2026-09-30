@@ -167,7 +167,26 @@ button { appearance: none; }
 }
 [data-goodbase-login-field] input::placeholder { color: color-mix(in srgb, var(--goodbase-login-muted) 72%, transparent) !important; }
 [data-goodbase-login-password] { position: relative; display: block; }
-[data-goodbase-login-password] input { padding-right: 64px !important; }
+[data-goodbase-login-password] input { padding-right: 116px !important; }
+[data-goodbase-login-passkey] {
+  position: absolute !important;
+  top: 50% !important;
+  right: 58px !important;
+  width: 44px !important;
+  min-width: 44px !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%) !important;
+  border: 1px solid color-mix(in srgb, var(--goodbase-login-accent) 48%, var(--goodbase-login-border)) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--goodbase-login-control-bg) 88%, var(--goodbase-login-accent)) !important;
+  padding: 0 !important;
+  color: var(--goodbase-login-accent) !important;
+  cursor: pointer;
+}
+[data-goodbase-login-passkey]:hover:not(:disabled) { filter: brightness(1.14); }
 [data-goodbase-login-password-toggle] {
   position: absolute !important;
   top: 50% !important;

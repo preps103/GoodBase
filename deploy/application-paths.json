@@ -10,7 +10,7 @@
   "canonicalLogin": {
     "owner": "goodbase",
     "package": "@goodos/topbar-widget",
-    "version": "4.9.0",
+    "version": "4.10.0",
     "sourceDirectory": "vendor/goodos-topbar-widget",
     "requiredComponents": ["GoodOSLoginShell", "GoodOSLoginWidget"],
     "allowedThemeProps": ["accent", "accentInk", "initialMode", "mobileBrand"]
@@ -92,6 +92,13 @@
       "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c45489fc81918557c2ae46a8934b",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/auth/GoodOSLogin.tsx",
       "theme": { "accent": "#ffb31a", "accentInk": "#111827" }
+    },
+    {
+      "id": "goodsigns", "name": "GoodSigns", "domain": "signs.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": "https://github.com/preps103/GoodSigns.git", "localDirectory": "goodsigns-source",
+      "deploymentType": "worker", "deploymentManaged": false,
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#0c766e", "accentInk": "#ffffff" }
     },
     {
       "id": "goodspeech", "name": "GoodSpeech", "domain": "speech.goodos.app", "status": "active", "classification": "product",

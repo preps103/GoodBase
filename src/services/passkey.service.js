@@ -12,6 +12,28 @@ const RP_NAME = "GoodOS";
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const EXPECTED_ORIGINS = Array.from(new Set([
   "https://goodos.app",
+  "https://base.goodos.app",
+  "https://ads.goodos.app",
+  "https://boost.goodos.app",
+  "https://builder.goodos.app",
+  "https://buyblack.goodos.app",
+  "https://custom.goodos.app",
+  "https://designer.goodos.app",
+  "https://editor.goodos.app",
+  "https://escrow.goodos.app",
+  "https://fleet.goodos.app",
+  "https://gearhead.goodos.app",
+  "https://mac.goodos.app",
+  "https://panel.goodos.app",
+  "https://qr.goodos.app",
+  "https://scan.goodos.app",
+  "https://signs.goodos.app",
+  "https://speech.goodos.app",
+  "https://supply.goodos.app",
+  "https://sure.goodos.app",
+  "https://swapz.goodos.app",
+  "https://trading.goodos.app",
+  "https://trust.goodos.app",
   "https://voice.goodos.app",
   ...String(process.env.GOODOS_PASSKEY_ORIGINS || "")
     .split(",")

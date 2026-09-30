@@ -69,12 +69,17 @@
           </div>
           <label data-goodbase-login-field id="email-field">
             Email address
-            <input id="email" type="email" autocomplete="username" maxlength="320" required placeholder="you@company.com">
+            <input id="email" type="email" autocomplete="username webauthn" maxlength="320" required placeholder="you@company.com">
           </label>
           <label data-goodbase-login-field id="password-field">
             <span><span id="password-label">Password</span><button data-goodbase-login-recovery id="forgot" type="button">Forgot your password?</button></span>
             <span data-goodbase-login-password>
-              <input id="password" type="password" autocomplete="current-password" maxlength="128" required placeholder="Enter your password">
+              <input id="password" type="password" autocomplete="current-password webauthn" maxlength="128" required placeholder="Enter your password">
+              <button data-goodbase-login-passkey id="passkey" type="button" class="hidden" aria-label="Sign in with a fingerprint or passkey" title="Sign in with a fingerprint or passkey">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 10a2 2 0 0 0-2 2c0 1-.2 2.4-.8 3.5"></path><path d="M14 13.1c0 2.2-.5 4.2-1.5 5.9"></path><path d="M16.8 15.4c.2-1.1.2-2.3.2-3.4a5 5 0 0 0-10 0c0 .6-.1 1.2-.2 1.8"></path><path d="M19.4 17a12 12 0 0 0 .6-5 8 8 0 0 0-16 0c0 1.3-.2 2.6-.7 3.8"></path><path d="M5 20a13 13 0 0 0 2-5.8"></path><path d="M8.9 21a10 10 0 0 0 2.4-6.7"></path><path d="M16.1 20.1a14 14 0 0 0 1-2.7"></path>
+                </svg>
+              </button>
               <button data-goodbase-login-password-toggle id="password-toggle" type="button" aria-label="Show password" aria-pressed="false">Show</button>
             </span>
           </label>
@@ -92,6 +97,6 @@
       </div>
     </section>
   </main>
-  <script src="/goodbase-auth.js?v=20260830-no-passkey-1" defer></script>
+  <script src="/goodbase-auth.js?v=20260930-passkey-2" defer></script>
 </body>
 </html>
