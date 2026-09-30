@@ -282,6 +282,51 @@ function tiktokMetricsFromPayload(payload, period) {
   };
 }
 
+function linkedInVersion() {
+  const value = boundedText(process.env.GOODADS_LINKEDIN_API_VERSION || "202608", 6);
+  if (!/^20\d{4}$/.test(value)) {
+    throw analyticsError(
+      "LinkedIn Marketing API version must use YYYYMM format.",
+      503,
+      "GOODADS_LINKEDIN_VERSION_INVALID"
+    );
+  }
+  return value;
+}
+
+function linkedInDate(value) {
+  const [year, month, day] = String(value).split("-").map(Number);
+  return `(year:${year},month:${month},day:${day})`;
+}
+
+function linkedInMetricsFromPayload(payload, period) {
+  const records = Array.isArray(payload?.elements) ? payload.elements : [];
+  const metrics = records.reduce((totals, record) => {
+    totals.impressions += metricTotal(record?.impressions);
+    totals.clicks += metricTotal(record?.clicks);
+    totals.conversions += metricTotal(record?.externalWebsiteConversions);
+    totals.spendMicros += decimalToMicros(record?.costInLocalCurrency);
+    totals.conversionValueMicros += decimalToMicros(record?.conversionValueInLocalCurrency);
+    return totals;
+  }, {
+    impressions: 0,
+    clicks: 0,
+    conversions: 0,
+    spendMicros: 0,
+    conversionValueMicros: 0,
+  });
+  return {
+    ...metrics,
+    raw: {
+      dateStart: period.start,
+      dateEnd: period.end,
+      entity: "CAMPAIGN",
+      granularity: "ALL",
+      recordCount: records.length,
+    },
+  };
+}
+
 async function metaMetrics(row, accessToken, period) {
   const fields = "impressions,clicks,spend,actions,action_values,date_start,date_stop";
   const timeRange = encodeURIComponent(JSON.stringify({ since: period.start, until: period.end }));
@@ -511,6 +556,44 @@ async function tiktokMetrics(row, accessToken, period) {
   return tiktokMetricsFromPayload(payload, period);
 }
 
+async function linkedInMetrics(row, accessToken, period) {
+  const campaignId = boundedText(row.provider_campaign_id, 300).match(/(\d+)$/)?.[1] || "";
+  if (!campaignId) {
+    throw analyticsError(
+      "LinkedIn campaign reporting requires a valid provider campaign ID.",
+      409,
+      "GOODADS_LINKEDIN_CAMPAIGN_ID_INVALID"
+    );
+  }
+  const url = new URL("https://api.linkedin.com/rest/adAnalytics");
+  url.searchParams.set("q", "analytics");
+  url.searchParams.set("pivot", "CAMPAIGN");
+  url.searchParams.set("timeGranularity", "ALL");
+  url.searchParams.set(
+    "dateRange",
+    `(start:${linkedInDate(period.start)},end:${linkedInDate(period.end)})`
+  );
+  url.searchParams.set("campaigns", `List(urn:li:sponsoredCampaign:${campaignId})`);
+  url.searchParams.set(
+    "fields",
+    "impressions,clicks,externalWebsiteConversions,costInLocalCurrency,conversionValueInLocalCurrency,pivotValues,dateRange"
+  );
+  const payload = await requestJson(
+    url,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Linkedin-Version": linkedInVersion(),
+        "X-Restli-Protocol-Version": "2.0.0",
+        Accept: "application/json",
+        "User-Agent": "GoodAds/1.0",
+      },
+    },
+    "LinkedIn campaign metrics"
+  );
+  return linkedInMetricsFromPayload(payload, period);
+}
+
 async function campaignRows(organizationId = null) {
   const values = [];
   let tenantClause = "";
@@ -542,6 +625,7 @@ function providerMetricsAdapter(provider) {
     meta: metaMetrics,
     google: googleMetrics,
     youtube: googleMetrics,
+    linkedin: linkedInMetrics,
     pinterest: pinterestMetrics,
     tiktok: tiktokMetrics,
     x: xMetrics,
@@ -754,7 +838,7 @@ function capabilities() {
   return {
     providerAnalytics: {
       available: true,
-      supportedProviders: ["google", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"],
+      supportedProviders: ["google", "linkedin", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"],
       verifiedProviderReceipts: true,
       durableSnapshots: true,
       maximumRangeDays: 93,
@@ -780,6 +864,7 @@ module.exports = {
     splitPeriod,
     decimalToMicros,
     tiktokMetricsFromPayload,
+    linkedInMetricsFromPayload,
     providerMetricsAdapter,
   },
 };

@@ -71,7 +71,7 @@ test("X Ads analytics sums only verified campaign metrics and keeps money in mic
 test("analytics capabilities include native X Ads reporting", () => {
   assert.deepEqual(
     analytics.capabilities().providerAnalytics.supportedProviders,
-    ["google", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"]
+    ["google", "linkedin", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"]
   );
 });
 
@@ -79,6 +79,45 @@ test("YouTube campaigns use the verified Google Ads reporting adapter", () => {
   const googleAdapter = analytics._test.providerMetricsAdapter("google");
   assert.equal(typeof googleAdapter, "function");
   assert.equal(analytics._test.providerMetricsAdapter("youtube"), googleAdapter);
+});
+
+test("LinkedIn analytics maps campaign performance and preserves local-currency micros", () => {
+  assert.equal(typeof analytics._test.providerMetricsAdapter("linkedin"), "function");
+  const metrics = analytics._test.linkedInMetricsFromPayload({
+    elements: [
+      {
+        pivotValues: ["urn:li:sponsoredCampaign:12345"],
+        impressions: 1500,
+        clicks: 75,
+        externalWebsiteConversions: 4,
+        costInLocalCurrency: "19.91833",
+        conversionValueInLocalCurrency: "125.500001",
+      },
+      {
+        pivotValues: ["urn:li:sponsoredCampaign:12345"],
+        impressions: 500,
+        clicks: 25,
+        externalWebsiteConversions: 2,
+        costInLocalCurrency: "5.08167",
+        conversionValueInLocalCurrency: "24.499999",
+      },
+    ],
+  }, { start: "2026-09-01", end: "2026-09-30" });
+
+  assert.deepEqual(metrics, {
+    impressions: 2000,
+    clicks: 100,
+    conversions: 6,
+    spendMicros: 25000000,
+    conversionValueMicros: 150000000,
+    raw: {
+      dateStart: "2026-09-01",
+      dateEnd: "2026-09-30",
+      entity: "CAMPAIGN",
+      granularity: "ALL",
+      recordCount: 2,
+    },
+  });
 });
 
 test("Snapchat analytics maps swipe and conversion metrics without changing microcurrency", () => {

@@ -142,7 +142,7 @@ test("LinkedIn delivery requires an approved OAuth app with advertising scopes",
     });
     const withoutScopes = ads._test.providerAvailability("linkedin");
     assert.equal(withoutScopes.available, false);
-    assert.deepEqual(withoutScopes.missingOAuthScopes, ["r_ads", "rw_ads"]);
+    assert.deepEqual(withoutScopes.missingOAuthScopes, ["r_ads", "r_ads_reporting", "rw_ads"]);
 
     process.env.GOODADS_LINKEDIN_ADS_OAUTH_ENABLED = "true";
     const withScopes = ads._test.providerAvailability("linkedin");

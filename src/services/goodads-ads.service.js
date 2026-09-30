@@ -65,7 +65,7 @@ const PROVIDERS = Object.freeze({
     name: "LinkedIn Ads",
     connectionProviders: ["linkedin"],
     requiredEnvironment: [],
-    requiredOAuthScopes: ["r_ads", "rw_ads"],
+    requiredOAuthScopes: ["r_ads", "r_ads_reporting", "rw_ads"],
     platforms: ["linkedin"],
     safePausedCreation: true,
     deliveryAdapter: "sponsored_content",
