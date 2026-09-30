@@ -96,7 +96,7 @@ router.get("/oauth/:platform/callback", (req, res) => {
   }
   return social.completeAuthorization({
     provider: req.params.platform,
-    code: req.query.code,
+    code: req.query.code || req.query.auth_code,
     state: req.query.state,
   }).then(({ connection, returnOrigin }) => {
     const targetOrigin = returnOrigin === "https://ads.goodos.app" ? returnOrigin : "https://ads.goodos.app";

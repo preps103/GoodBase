@@ -54,12 +54,12 @@ const PROVIDERS = Object.freeze({
   },
   tiktok: {
     name: "TikTok Ads",
-    connectionProviders: ["tiktok"],
+    connectionProviders: ["tiktok_ads"],
     requiredEnvironment: [],
     platforms: ["tiktok"],
     safePausedCreation: true,
     deliveryAdapter: "video",
-    adapterType: "not_installed",
+    adapterType: "native",
   },
   linkedin: {
     name: "LinkedIn Ads",
@@ -705,6 +705,159 @@ async function discoverSnapchatAccounts(accessToken) {
   return { accounts, pages };
 }
 
+function tiktokHeaders(accessToken, extra = {}) {
+  return {
+    "Access-Token": accessToken,
+    Accept: "application/json",
+    "User-Agent": "GoodAds/1.0",
+    ...extra,
+  };
+}
+
+async function tiktokRequest(path, accessToken, options = {}, fallback = "TikTok Ads operation") {
+  const result = await requestJson(
+    `https://business-api.tiktok.com/open_api/v1.3${path}`,
+    {
+      ...options,
+      headers: tiktokHeaders(accessToken, options.headers || {}),
+    },
+    fallback
+  );
+  if (Number(result.payload?.code) !== 0) {
+    throw adsError(
+      boundedText(result.payload?.message || fallback, 2000),
+      502,
+      "GOODADS_TIKTOK_REQUEST_FAILED",
+      false
+    );
+  }
+  return result;
+}
+
+function normalizeTikTokAccount(account = {}) {
+  const providerAccountId = boundedText(account.advertiser_id || account.id, 120);
+  const providerStatus = boundedText(account.status || "UNKNOWN", 60).toUpperCase();
+  const currency = boundedText(account.currency, 12).toUpperCase();
+  const timezone = boundedText(account.timezone || account.display_timezone, 120);
+  const enabled = ["STATUS_ENABLE", "ENABLE", "ACTIVE"].includes(providerStatus);
+  const eligible = /^\d{2,30}$/.test(providerAccountId) && enabled && Boolean(currency) && Boolean(timezone);
+  let status = providerStatus.toLowerCase();
+  if (!/^\d{2,30}$/.test(providerAccountId)) status = "invalid_account_id";
+  else if (!enabled) status = providerStatus === "UNKNOWN" ? "provider_status_unknown" : status;
+  else if (!currency || !timezone) status = "account_locale_required";
+  return {
+    providerAccountId,
+    name: boundedText(account.advertiser_name || account.name || `TikTok Ads ${providerAccountId}`, 240),
+    currency,
+    timezone,
+    eligible,
+    status,
+    metadata: {
+      role: boundedText(account.role, 80).toUpperCase() || null,
+      country: boundedText(account.country, 2).toUpperCase() || null,
+      providerStatus,
+      deliveryReady: false,
+      channelType: "TIKTOK_VIDEO",
+    },
+  };
+}
+
+function normalizeTikTokIdentity(identity = {}, providerAccountId = "") {
+  const id = boundedText(identity.identity_id || identity.id, 120);
+  const identityType = boundedText(identity.identity_type || identity.type, 40).toUpperCase();
+  const availableStatus = boundedText(identity.available_status || "AVAILABLE", 60).toUpperCase();
+  if (
+    !ACCOUNT_ID_PATTERN.test(id)
+    || !["CUSTOMIZED_USER", "AUTH_CODE", "TT_USER", "BC_AUTH_TT"].includes(identityType)
+    || availableStatus !== "AVAILABLE"
+  ) return null;
+  const username = boundedText(identity.username, 240);
+  const displayName = boundedText(identity.display_name || identity.name || username, 240);
+  return {
+    id,
+    name: displayName ? `${displayName}${username && username !== displayName ? ` · @${username}` : ""}` : `TikTok identity ${id}`,
+    providerAccountId,
+    identityType,
+    identityAuthorizedBcId: boundedText(identity.identity_authorized_bc_id, 120) || null,
+  };
+}
+
+async function discoverTikTokIdentities(accessToken, providerAccountId) {
+  const parameters = new URLSearchParams({
+    advertiser_id: providerAccountId,
+    page: "1",
+    page_size: "100",
+  });
+  const { payload } = await tiktokRequest(
+    `/identity/get/?${parameters}`,
+    accessToken,
+    {},
+    "TikTok identity discovery"
+  );
+  const items = Array.isArray(payload.data?.identity_list)
+    ? payload.data.identity_list
+    : Array.isArray(payload.data?.list)
+      ? payload.data.list
+      : [];
+  return items.map((identity) => normalizeTikTokIdentity(identity, providerAccountId)).filter(Boolean);
+}
+
+async function discoverTikTokAccounts(accessToken) {
+  const config = social.providerConfig("tiktok_ads");
+  const authorizedParameters = new URLSearchParams({ app_id: config.clientId, secret: config.clientSecret });
+  const { payload: authorizedPayload } = await tiktokRequest(
+    `/oauth2/advertiser/get/?${authorizedParameters}`,
+    accessToken,
+    {},
+    "TikTok authorized-advertiser discovery"
+  );
+  const authorized = Array.isArray(authorizedPayload.data?.list)
+    ? authorizedPayload.data.list
+    : Array.isArray(authorizedPayload.data?.advertisers)
+      ? authorizedPayload.data.advertisers
+      : [];
+  const advertiserIds = [...new Set(authorized
+    .map((item) => boundedText(item.advertiser_id || item.id, 120))
+    .filter((id) => /^\d{2,30}$/.test(id)))].slice(0, 100);
+  if (!advertiserIds.length) return { accounts: [], pages: [] };
+
+  const accounts = [];
+  const pages = [];
+  for (let index = 0; index < advertiserIds.length; index += 50) {
+    const batch = advertiserIds.slice(index, index + 50);
+    const parameters = new URLSearchParams({ advertiser_ids: JSON.stringify(batch) });
+    const { payload } = await tiktokRequest(
+      `/advertiser/info/?${parameters}`,
+      accessToken,
+      {},
+      "TikTok ad-account details"
+    );
+    const details = Array.isArray(payload.data?.list) ? payload.data.list : [];
+    const detailsById = new Map(details.map((item) => [String(item.advertiser_id || item.id), item]));
+    for (const providerAccountId of batch) {
+      const authorizedSummary = authorized.find((item) => String(item.advertiser_id || item.id) === providerAccountId) || {};
+      const account = normalizeTikTokAccount({ ...authorizedSummary, ...detailsById.get(providerAccountId), advertiser_id: providerAccountId });
+      let identities = [];
+      if (account.eligible) {
+        try {
+          identities = await discoverTikTokIdentities(accessToken, providerAccountId);
+        } catch {
+          account.eligible = false;
+          account.status = "identity_discovery_unavailable";
+        }
+        if (!identities.length && account.eligible) {
+          account.eligible = false;
+          account.status = "advertising_identity_required";
+        }
+      }
+      account.metadata.identityCount = identities.length;
+      accounts.push(account);
+      pages.push(...identities);
+    }
+  }
+  return { accounts, pages };
+}
+
 function requireConnectionScopes(connection, requiredScopes = []) {
   const granted = new Set(Array.isArray(connection.scopes) ? connection.scopes : []);
   const missing = requiredScopes.filter((scope) => !granted.has(scope));
@@ -746,6 +899,8 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
           ? await discoverPinterestAccounts(accessToken)
           : id === "snapchat"
             ? await discoverSnapchatAccounts(accessToken)
+            : id === "tiktok"
+              ? await discoverTikTokAccounts(accessToken)
             : (() => {
               throw adsError(
                 `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
@@ -815,10 +970,10 @@ async function saveAdAccount({ payload, context, userId }) {
     );
   }
   const pageId = boundedText(payload?.pageId, 120);
-  const selectedPage = ["meta", "snapchat"].includes(provider) && pageId
+  const selectedPage = ["meta", "snapchat", "tiktok"].includes(provider) && pageId
     ? discovered.pages.find((page) => (
         page.id === pageId
-        && (provider !== "snapchat" || page.providerAccountId === providerAccountId)
+        && (!["snapchat", "tiktok"].includes(provider) || page.providerAccountId === providerAccountId)
       ))
     : null;
   if (provider === "meta" && pageId && !selectedPage) {
@@ -829,6 +984,13 @@ async function saveAdAccount({ payload, context, userId }) {
       "Select a Snapchat Public Profile shared with this ad account.",
       409,
       "GOODADS_SNAPCHAT_PROFILE_REQUIRED"
+    );
+  }
+  if (provider === "tiktok" && !selectedPage) {
+    throw adsError(
+      "Select an available TikTok advertising identity for this ad account.",
+      409,
+      "GOODADS_TIKTOK_IDENTITY_REQUIRED"
     );
   }
   const metadata = provider === "meta"
@@ -851,6 +1013,16 @@ async function saveAdAccount({ payload, context, userId }) {
               deliveryReady: true,
               channelType: "SNAP_AD",
             }
+          : provider === "tiktok"
+            ? {
+                ...(account.metadata || {}),
+                identityId: selectedPage.id,
+                identityName: selectedPage.name,
+                identityType: selectedPage.identityType,
+                identityAuthorizedBcId: selectedPage.identityAuthorizedBcId,
+                deliveryReady: true,
+                channelType: "TIKTOK_VIDEO",
+              }
           : {
               deliveryReady: true,
               channelType: provider === "youtube" ? "DEMAND_GEN_YOUTUBE" : "SEARCH",
@@ -1035,6 +1207,51 @@ function validateCampaignForAccount(campaign, account) {
       409,
       "GOODADS_VIDEO_REQUIRED"
     );
+  }
+  if (account.provider === "tiktok") {
+    const identityType = boundedText(account.metadata?.identityType, 40).toUpperCase();
+    if (
+      !account.metadata?.deliveryReady
+      || !ACCOUNT_ID_PATTERN.test(boundedText(account.metadata?.identityId, 120))
+      || !["CUSTOMIZED_USER", "AUTH_CODE", "TT_USER", "BC_AUTH_TT"].includes(identityType)
+      || (identityType === "BC_AUTH_TT" && !ACCOUNT_ID_PATTERN.test(boundedText(account.metadata?.identityAuthorizedBcId, 120)))
+    ) {
+      throw adsError(
+        "TikTok delivery requires an available advertising identity linked to this ad account.",
+        409,
+        "GOODADS_TIKTOK_IDENTITY_REQUIRED"
+      );
+    }
+    const minimumBudget = Math.max(Number(process.env.GOODADS_TIKTOK_MIN_DAILY_BUDGET || 20), 1);
+    if (dailyBudget < minimumBudget) {
+      throw adsError(
+        `TikTok requires a daily budget of at least ${minimumBudget} account-currency units.`,
+        409,
+        "GOODADS_TIKTOK_BUDGET_MINIMUM"
+      );
+    }
+    if (String(data.objective || "traffic").toLowerCase() !== "traffic") {
+      throw adsError(
+        "TikTok one-click setup currently supports website-traffic campaigns. Conversion, sales, and lead objectives require a verified TikTok Pixel or lead form.",
+        409,
+        "GOODADS_TIKTOK_EVENT_SOURCE_REQUIRED"
+      );
+    }
+    if (!isManagedGoodOsHttpsUrl(creative.videoUrl)) {
+      throw adsError(
+        "TikTok creative video must be stored on a managed GoodOS HTTPS address.",
+        409,
+        "GOODADS_TIKTOK_VIDEO_HOST_INVALID"
+      );
+    }
+    const primaryText = String(creative.primaryText || "").trim();
+    if (!primaryText || primaryText.length > 100) {
+      throw adsError(
+        "TikTok delivery requires ad text of 100 characters or fewer.",
+        409,
+        "GOODADS_TIKTOK_COPY_INVALID"
+      );
+    }
   }
   if (account.provider === "youtube") {
     googlePoliticalAdvertisingStatus(data.containsEuPoliticalAdvertising);
@@ -2154,6 +2371,271 @@ async function createYouTubeDelivery(row, accessToken) {
   };
 }
 
+function tiktokRequestId(row, resource) {
+  return boundedText(`goodads-${row.provider_campaign_record_id}-${resource}`, 64);
+}
+
+function tiktokCampaignPayload(row) {
+  return {
+    advertiser_id: boundedText(row.provider_account_id, 120),
+    campaign_name: boundedText(`${row.campaign_name} [GoodAds]`, 512),
+    objective_type: "TRAFFIC",
+    budget_mode: "BUDGET_MODE_INFINITE",
+    budget_optimize_on: false,
+    operation_status: "DISABLE",
+    request_id: tiktokRequestId(row, "campaign"),
+  };
+}
+
+function tiktokCampaignDays(data = {}) {
+  const start = new Date(`${data.startDate}T00:00:00.000Z`);
+  const end = new Date(`${data.endDate}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+    throw adsError("TikTok campaign schedule is invalid.", 409, "GOODADS_TIKTOK_SCHEDULE_INVALID");
+  }
+  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
+function tiktokAdGroupPayload(row, campaignId, locationIds) {
+  const data = row.campaign_data || {};
+  const identityType = boundedText(row.account_metadata?.identityType, 40).toUpperCase();
+  const identityAuthorizedBcId = boundedText(row.account_metadata?.identityAuthorizedBcId, 120);
+  return {
+    advertiser_id: boundedText(row.provider_account_id, 120),
+    campaign_id: campaignId,
+    adgroup_name: boundedText(`${row.campaign_name} audience [GoodAds]`, 512),
+    promotion_type: "WEBSITE",
+    optimization_goal: "CLICK",
+    billing_event: "CPC",
+    bid_type: "BID_TYPE_NO_BID",
+    pacing: "PACING_MODE_SMOOTH",
+    budget_mode: "BUDGET_MODE_TOTAL",
+    budget: Number((Number(data.dailyBudget) * tiktokCampaignDays(data)).toFixed(2)),
+    schedule_type: "SCHEDULE_START_END",
+    schedule_start_time: `${data.startDate} 00:00:00`,
+    schedule_end_time: `${data.endDate} 23:59:59`,
+    placement_type: "PLACEMENT_TYPE_NORMAL",
+    placements: ["PLACEMENT_TIKTOK"],
+    brand_safety_type: "EXPANDED_INVENTORY",
+    location_ids: locationIds,
+    identity_id: boundedText(row.account_metadata?.identityId, 120),
+    identity_type: identityType,
+    ...(identityType === "BC_AUTH_TT" ? { identity_authorized_bc_id: identityAuthorizedBcId } : {}),
+    operation_status: "DISABLE",
+    request_id: tiktokRequestId(row, "adgroup"),
+  };
+}
+
+function tiktokCallToAction(value) {
+  return {
+    "Shop Now": "SHOP_NOW",
+    "Sign Up": "SIGN_UP",
+    "Book Now": "BOOK_NOW",
+    "Get Offer": "GET_OFFER",
+    Download: "DOWNLOAD",
+  }[value] || "LEARN_MORE";
+}
+
+function tiktokAdPayload(row, adGroupId, videoId) {
+  const creative = row.campaign_data?.creative || {};
+  const identityType = boundedText(row.account_metadata?.identityType, 40).toUpperCase();
+  const identityAuthorizedBcId = boundedText(row.account_metadata?.identityAuthorizedBcId, 120);
+  return {
+    advertiser_id: boundedText(row.provider_account_id, 120),
+    adgroup_id: adGroupId,
+    creatives: [{
+      ad_format: "SINGLE_VIDEO",
+      ad_name: boundedText(`${row.campaign_name} video [GoodAds]`, 512),
+      ad_text: boundedText(creative.primaryText, 100),
+      call_to_action: tiktokCallToAction(creative.callToAction),
+      landing_page_url: boundedText(creative.destinationUrl, 2048),
+      video_id: videoId,
+      identity_id: boundedText(row.account_metadata?.identityId, 120),
+      identity_type: identityType,
+      ...(identityType === "BC_AUTH_TT" ? { identity_authorized_bc_id: identityAuthorizedBcId } : {}),
+      creative_authorized: false,
+      aigc_disclosure_type: "NOT_DECLARED",
+      operation_status: "DISABLE",
+    }],
+  };
+}
+
+function tiktokCountryLocationIds(payload, targetCountries) {
+  const locations = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (value.location_id || value.geo_id) locations.push(value);
+    for (const nested of Object.values(value)) {
+      if (nested && typeof nested === "object") visit(nested);
+    }
+  };
+  visit(payload?.data || {});
+  const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
+  const simplify = (value) => String(value || "").normalize("NFKD").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+  const countries = [...new Set((targetCountries || [])
+    .map((country) => boundedText(country, 2).toUpperCase())
+    .filter((country) => /^[A-Z]{2}$/.test(country)))];
+  const ids = [];
+  const missing = [];
+  for (const country of countries) {
+    const expectedName = simplify(displayNames.of(country));
+    const match = locations.find((location) => {
+      const code = boundedText(
+        location.region_code || location.country_code || location.code || location.iso_code,
+        2
+      ).toUpperCase();
+      const level = boundedText(location.level || location.geo_type, 40).toUpperCase();
+      return (code === country || (!code && simplify(location.name) === expectedName))
+        && (!level || level === "COUNTRY");
+    });
+    const id = boundedText(match?.location_id || match?.geo_id, 120);
+    if (id) ids.push(id);
+    else missing.push(country);
+  }
+  if (missing.length) {
+    throw adsError(
+      `TikTok Ads could not resolve country targeting for: ${missing.join(", ")}.`,
+      409,
+      "GOODADS_TIKTOK_COUNTRY_TARGET_INVALID"
+    );
+  }
+  return ids;
+}
+
+async function resolveTikTokCountryLocations(row, accessToken) {
+  const parameters = new URLSearchParams({
+    advertiser_id: boundedText(row.provider_account_id, 120),
+    placements: JSON.stringify(["PLACEMENT_TIKTOK"]),
+    objective_type: "TRAFFIC",
+    brand_safety_type: "EXPANDED_INVENTORY",
+    level_range: "TO_COUNTRY",
+  });
+  const { payload } = await tiktokRequest(
+    `/tool/region/?${parameters}`,
+    accessToken,
+    {},
+    "TikTok country-target resolution"
+  );
+  return tiktokCountryLocationIds(payload, row.campaign_data?.targetCountries);
+}
+
+function tiktokEntityId(payload, key) {
+  const id = boundedText(payload?.data?.[key], 120);
+  if (!/^\d{2,30}$/.test(id)) {
+    throw adsError(
+      `TikTok Ads did not return a valid ${key.replaceAll("_", " ")}.`,
+      502,
+      "GOODADS_TIKTOK_RESPONSE_INVALID"
+    );
+  }
+  return id;
+}
+
+async function uploadTikTokVideo(row, accessToken) {
+  const videoUrl = boundedText(row.campaign_data?.creative?.videoUrl, 4000);
+  const form = new FormData();
+  form.append("advertiser_id", boundedText(row.provider_account_id, 120));
+  form.append("upload_type", "UPLOAD_BY_URL");
+  form.append("video_url", videoUrl);
+  form.append("file_name", boundedText(`${row.campaign_name}-${row.provider_campaign_record_id}.mp4`, 200));
+  const { payload } = await tiktokRequest(
+    "/file/video/ad/upload/",
+    accessToken,
+    { method: "POST", body: form },
+    "TikTok video upload"
+  );
+  return tiktokEntityId(payload, "video_id");
+}
+
+async function createTikTokDelivery(row, accessToken) {
+  let locationIds = Array.isArray(row.receipt?.locationIds) ? row.receipt.locationIds : [];
+  if (!locationIds.length) {
+    locationIds = await resolveTikTokCountryLocations(row, accessToken);
+    await mergeProviderReceipt(row, { locationIds });
+  }
+
+  let videoId = boundedText(row.receipt?.videoId, 120);
+  if (!videoId) {
+    videoId = await uploadTikTokVideo(row, accessToken);
+    await mergeProviderReceipt(row, { videoId });
+  }
+
+  let campaignId = boundedText(row.receipt?.campaignId || row.provider_campaign_id, 120);
+  if (!campaignId) {
+    const { payload } = await tiktokRequest(
+      "/campaign/create/",
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tiktokCampaignPayload(row)),
+      },
+      "TikTok disabled-campaign creation"
+    );
+    campaignId = tiktokEntityId(payload, "campaign_id");
+    await mergeProviderReceipt(
+      row,
+      { campaignId },
+      { providerCampaignId: campaignId, providerResourceName: campaignId }
+    );
+  }
+
+  let adGroupId = boundedText(row.receipt?.adGroupId || row.provider_budget_id, 120);
+  if (!adGroupId) {
+    const { payload } = await tiktokRequest(
+      "/adgroup/create/",
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tiktokAdGroupPayload(row, campaignId, locationIds)),
+      },
+      "TikTok disabled-ad-group creation"
+    );
+    adGroupId = tiktokEntityId(payload, "adgroup_id");
+    await mergeProviderReceipt(row, { adGroupId }, { providerBudgetId: adGroupId });
+  }
+
+  let adId = boundedText(row.receipt?.adId, 120);
+  if (!adId) {
+    const { payload } = await tiktokRequest(
+      "/ad/create/",
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tiktokAdPayload(row, adGroupId, videoId)),
+      },
+      "TikTok disabled-ad creation"
+    );
+    adId = tiktokEntityId(payload, "ad_id");
+    await mergeProviderReceipt(row, { adId });
+  }
+
+  return {
+    providerCampaignId: campaignId,
+    providerResourceName: campaignId,
+    providerBudgetId: adGroupId,
+    receipt: {
+      ...(row.receipt || {}),
+      campaignId,
+      adGroupId,
+      adId,
+      videoId,
+      locationIds,
+      identityId: row.account_metadata?.identityId,
+      identityType: row.account_metadata?.identityType,
+      deliveryAdapter: "video",
+      tiktokOnly: true,
+      state: "DISABLE",
+    },
+  };
+}
+
 function pinterestObjective(value) {
   const objective = String(value || "traffic").toLowerCase();
   return objective === "awareness"
@@ -3192,6 +3674,101 @@ async function syncSnapchatStatus(row, accessToken) {
   return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
 }
 
+async function updateTikTokEntityStatus(path, body, accessToken, fallback) {
+  await tiktokRequest(
+    path,
+    accessToken,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    fallback
+  );
+}
+
+async function updateTikTokStatus(row, accessToken, requestedStatus) {
+  const advertiserId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  const adGroupId = boundedText(row.receipt?.adGroupId || row.provider_budget_id, 120);
+  const adId = boundedText(row.receipt?.adId, 120);
+  if (![advertiserId, campaignId, adGroupId, adId].every((id) => /^\d{2,30}$/.test(id))) {
+    throw adsError("TikTok campaign resources are incomplete.", 409, "GOODADS_TIKTOK_RESOURCES_INCOMPLETE");
+  }
+  const campaign = () => updateTikTokEntityStatus(
+    "/campaign/status/update/",
+    { advertiser_id: advertiserId, campaign_ids: [campaignId], operation_status: requestedStatus },
+    accessToken,
+    "TikTok campaign status update"
+  );
+  const adGroup = () => updateTikTokEntityStatus(
+    "/adgroup/status/update/",
+    { advertiser_id: advertiserId, adgroup_ids: [adGroupId], operation_status: requestedStatus },
+    accessToken,
+    "TikTok ad-group status update"
+  );
+  const ad = () => updateTikTokEntityStatus(
+    "/ad/status/update/",
+    { advertiser_id: advertiserId, ad_ids: [adId], operation_status: requestedStatus },
+    accessToken,
+    "TikTok ad status update"
+  );
+  if (requestedStatus === "ENABLE") {
+    await ad();
+    await adGroup();
+    await campaign();
+  } else if (requestedStatus === "DELETE") {
+    await ad();
+    await adGroup();
+    await campaign();
+  } else {
+    await campaign();
+    await adGroup();
+    await ad();
+  }
+  return {
+    ...row.receipt,
+    state: requestedStatus,
+    ...(requestedStatus === "DELETE" ? { remoteArchived: true, archivedAt: new Date().toISOString() } : {}),
+  };
+}
+
+async function syncTikTokStatus(row, accessToken) {
+  const advertiserId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  if (![advertiserId, campaignId].every((id) => /^\d{2,30}$/.test(id))) {
+    throw adsError("TikTok campaign ID is invalid.", 409, "GOODADS_TIKTOK_CAMPAIGN_ID_INVALID");
+  }
+  const parameters = new URLSearchParams({
+    advertiser_id: advertiserId,
+    filtering: JSON.stringify({ campaign_ids: [campaignId] }),
+    fields: JSON.stringify(["campaign_id", "operation_status", "secondary_status"]),
+    page: "1",
+    page_size: "1",
+  });
+  const { payload } = await tiktokRequest(
+    `/campaign/get/?${parameters}`,
+    accessToken,
+    {},
+    "TikTok campaign status"
+  );
+  const campaign = Array.isArray(payload.data?.list) ? payload.data.list[0] : null;
+  if (!campaign || String(campaign.campaign_id) !== campaignId) {
+    throw adsError("TikTok Ads did not return this campaign.", 502, "GOODADS_TIKTOK_CAMPAIGN_NOT_FOUND");
+  }
+  const operationStatus = boundedText(campaign.operation_status, 60).toUpperCase();
+  const secondaryStatus = boundedText(campaign.secondary_status, 100).toUpperCase();
+  const status = operationStatus === "ENABLE" || secondaryStatus === "CAMPAIGN_STATUS_ENABLE"
+    ? "active"
+    : operationStatus === "DELETE" || secondaryStatus.includes("DELETE")
+      ? "archived"
+      : operationStatus === "DISABLE" || secondaryStatus.includes("DISABLE")
+        ? "paused"
+        : row.status;
+  const providerStatus = secondaryStatus || operationStatus;
+  return { receipt: { ...row.receipt, providerStatus, state: operationStatus || providerStatus }, status };
+}
+
 async function patchPinterestStatus(row, accessToken, resource, id, status) {
   const accountId = boundedText(row.provider_account_id, 120);
   const { payload } = await pinterestRequest(
@@ -3373,6 +3950,12 @@ function nativeAdapter(provider) {
       updateStatus: updateSnapchatStatus,
       sync: syncSnapchatStatus,
       statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
+    },
+    tiktok: {
+      create: createTikTokDelivery,
+      updateStatus: updateTikTokStatus,
+      sync: syncTikTokStatus,
+      statuses: { pause: "DISABLE", activate: "ENABLE", archive: "DELETE" },
     },
   };
   const adapter = adapters[provider];
@@ -3592,6 +4175,8 @@ module.exports = {
     normalizeLinkedInAccount,
     normalizePinterestAccount,
     normalizeSnapchatAccount,
+    normalizeTikTokAccount,
+    normalizeTikTokIdentity,
     metaObjective,
     linkedInObjective,
     linkedInCampaignPayload,
@@ -3607,6 +4192,10 @@ module.exports = {
     snapchatAdSquadPayload,
     snapchatCreativePayload,
     snapchatAdPayload,
+    tiktokCampaignPayload,
+    tiktokAdGroupPayload,
+    tiktokAdPayload,
+    tiktokCountryLocationIds,
     nativeAdapter,
     snapshotHash,
     validateCampaignForAccount,

@@ -80,6 +80,14 @@ const PROVIDERS = {
     scopes: ["user.info.basic", "video.publish", "video.upload"],
     clientIdParameter: "client_key",
   },
+  tiktok_ads: {
+    label: "TikTok Ads",
+    authUrl: "https://business-api.tiktok.com/portal/auth",
+    tokenUrl: "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+    userUrl: "https://business-api.tiktok.com/open_api/v1.3/oauth2/advertiser/get/",
+    scopes: [],
+    oauthStyle: "tiktok_business",
+  },
   pinterest: {
     label: "Pinterest",
     authUrl: "https://www.pinterest.com/oauth/",
@@ -120,6 +128,7 @@ const PROVIDER_PUBLISH_CAPABILITIES = Object.freeze({
   linkedin: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
   x: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
   tiktok: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  tiktok_ads: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   pinterest: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   snapchat: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   reddit: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
@@ -138,7 +147,10 @@ function providerConfig(provider) {
   const definition = PROVIDERS[id];
   if (!definition) throw socialError("Unsupported social provider.", 404, "GOODADS_PROVIDER_NOT_FOUND");
   const prefix = `GOODADS_${id.toUpperCase()}_`;
-  const clientId = process.env[`${prefix}CLIENT_ID`] || process.env[`${prefix}CLIENT_KEY`] || "";
+  const clientId = process.env[`${prefix}CLIENT_ID`]
+    || process.env[`${prefix}CLIENT_KEY`]
+    || process.env[`${prefix}APP_ID`]
+    || "";
   const clientSecret = process.env[`${prefix}CLIENT_SECRET`] || "";
   const advertisingEnabled = String(process.env[`GOODADS_${id.toUpperCase()}_ADS_OAUTH_ENABLED`] || "").toLowerCase() === "true";
   const scopes = [
@@ -204,11 +216,17 @@ async function beginAuthorization({ provider, context, userId, returnOrigin = "h
     [stateHash(state), config.id, context.organizationId, userId, verifier, returnOrigin]
   );
   const url = new URL(config.authUrl);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set(config.clientIdParameter || "client_id", config.clientId);
-  url.searchParams.set("redirect_uri", callbackUrl(config.id));
-  url.searchParams.set("scope", config.scopes.join(" "));
-  url.searchParams.set("state", state);
+  if (config.oauthStyle === "tiktok_business") {
+    url.searchParams.set("app_id", config.clientId);
+    url.searchParams.set("redirect_uri", callbackUrl(config.id));
+    url.searchParams.set("state", state);
+  } else {
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set(config.clientIdParameter || "client_id", config.clientId);
+    url.searchParams.set("redirect_uri", callbackUrl(config.id));
+    url.searchParams.set("scope", config.scopes.join(" "));
+    url.searchParams.set("state", state);
+  }
   for (const [key, value] of Object.entries(config.extraAuth || {})) url.searchParams.set(key, value);
   if (verifier) {
     url.searchParams.set("code_challenge", codeChallenge(verifier));
@@ -230,6 +248,24 @@ async function consumeState(provider, state) {
 }
 
 async function exchangeCode(config, code, stateRow) {
+  if (config.oauthStyle === "tiktok_business") {
+    const response = await fetch(config.tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ app_id: config.clientId, auth_code: code, secret: config.clientSecret }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const token = payload.data || {};
+    if (!response.ok || Number(payload.code) !== 0 || !token.access_token) {
+      throw socialError(
+        payload.message || `${config.label} rejected the authorization code.`,
+        502,
+        "GOODADS_TOKEN_EXCHANGE_FAILED"
+      );
+    }
+    return token;
+  }
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -250,7 +286,49 @@ async function exchangeCode(config, code, stateRow) {
   return payload;
 }
 
-async function fetchIdentity(config, accessToken) {
+async function fetchIdentity(config, accessToken, token = {}) {
+  if (config.oauthStyle === "tiktok_business") {
+    const parameters = new URLSearchParams({ app_id: config.clientId, secret: config.clientSecret });
+    const response = await fetch(`${config.userUrl}?${parameters}`, {
+      headers: { "Access-Token": accessToken, Accept: "application/json", "User-Agent": "GoodAds/1.0" },
+      signal: AbortSignal.timeout(15000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || Number(payload.code) !== 0) {
+      throw socialError(
+        payload.message || `${config.label} account identity could not be loaded.`,
+        502,
+        "GOODADS_IDENTITY_FAILED"
+      );
+    }
+    const advertised = Array.isArray(payload.data?.list)
+      ? payload.data.list
+      : Array.isArray(payload.data?.advertisers)
+        ? payload.data.advertisers
+        : [];
+    const tokenAdvertiserIds = Array.isArray(token.advertiser_ids) ? token.advertiser_ids : [];
+    const advertiserIds = [...new Set([
+      ...advertised.map((item) => item.advertiser_id || item.id),
+      ...tokenAdvertiserIds,
+    ].map((value) => String(value || "").trim()).filter(Boolean))].sort();
+    if (!advertiserIds.length) {
+      throw socialError(
+        "TikTok Ads did not return an authorized advertiser account.",
+        409,
+        "GOODADS_TIKTOK_ADS_ACCOUNT_REQUIRED"
+      );
+    }
+    const first = advertised.find((item) => String(item.advertiser_id || item.id) === advertiserIds[0]) || {};
+    const fingerprint = crypto.createHash("sha256").update(advertiserIds.join(":"), "utf8").digest("hex").slice(0, 32);
+    return {
+      id: advertiserIds.length === 1 ? advertiserIds[0] : `grant_${fingerprint}`,
+      name: advertiserIds.length === 1
+        ? String(first.advertiser_name || first.name || `TikTok Ads ${advertiserIds[0]}`)
+        : `${advertiserIds.length} authorized TikTok ad accounts`,
+      avatarUrl: null,
+      raw: { advertiserIds },
+    };
+  }
   const response = await fetch(config.userUrl, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json", "User-Agent": "GoodAds/1.0" },
     signal: AbortSignal.timeout(15000),
@@ -271,7 +349,7 @@ async function completeAuthorization({ provider, code, state }) {
   if (!code) throw socialError("OAuth authorization code is missing.");
   const stateRow = await consumeState(config.id, state);
   const token = await exchangeCode(config, code, stateRow);
-  const identity = await fetchIdentity(config, token.access_token);
+  const identity = await fetchIdentity(config, token.access_token, token);
   if (!identity.id) throw socialError(`${config.label} did not return an account identifier.`, 502, "GOODADS_ACCOUNT_ID_MISSING");
   const access = encrypt(token.access_token);
   const refresh = encrypt(token.refresh_token);

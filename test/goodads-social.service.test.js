@@ -7,7 +7,7 @@ const path = require("node:path");
 const social = require("../src/services/goodads-social.service");
 
 test("GoodAds social registry includes major publishing networks", () => {
-  for (const provider of ["google", "facebook", "instagram", "threads", "linkedin", "x", "tiktok", "pinterest", "snapchat", "reddit"]) {
+  for (const provider of ["google", "facebook", "instagram", "threads", "linkedin", "x", "tiktok", "tiktok_ads", "pinterest", "snapchat", "reddit"]) {
     assert.ok(social.PROVIDERS[provider]);
     assert.ok(social.PROVIDERS[provider].authUrl.startsWith("https://"));
     assert.ok(social.PROVIDERS[provider].tokenUrl.startsWith("https://"));
@@ -33,7 +33,7 @@ test("provider capability registry reports only installed publishing adapters", 
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].text, true);
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].immediate, true);
   }
-  for (const provider of ["google", "facebook", "instagram", "tiktok", "pinterest"]) {
+  for (const provider of ["google", "facebook", "instagram", "tiktok", "tiktok_ads", "pinterest"]) {
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].text, false);
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].immediate, false);
   }

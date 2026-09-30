@@ -41,7 +41,7 @@ test("all major paid platforms are explicit and unfinished adapters cannot fall 
     ads.publicProviders().map((provider) => provider.id),
     ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]
   );
-  for (const provider of ["tiktok", "x"]) {
+  for (const provider of ["x"]) {
     const availability = ads._test.providerAvailability(provider);
     assert.equal(availability.available, false);
     assert.equal(availability.adapterConfigured, false);
@@ -50,6 +50,33 @@ test("all major paid platforms are explicit and unfinished adapters cannot fall 
       () => ads._test.nativeAdapter(provider),
       (error) => error.code === "GOODADS_ADAPTER_NOT_INSTALLED"
     );
+  }
+});
+
+test("TikTok Ads delivery requires an approved Business API OAuth app", () => {
+  const names = ["GOODADS_TIKTOK_ADS_APP_ID", "GOODADS_TIKTOK_ADS_CLIENT_SECRET"];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    delete process.env.GOODADS_TIKTOK_ADS_APP_ID;
+    delete process.env.GOODADS_TIKTOK_ADS_CLIENT_SECRET;
+    assert.equal(ads._test.providerAvailability("tiktok").available, false);
+
+    Object.assign(process.env, {
+      GOODADS_TIKTOK_ADS_APP_ID: "test-app",
+      GOODADS_TIKTOK_ADS_CLIENT_SECRET: "test-secret",
+    });
+    const availability = ads._test.providerAvailability("tiktok");
+    assert.equal(availability.available, true);
+    assert.equal(availability.adapterConfigured, true);
+    assert.equal(availability.adapterType, "native");
+    assert.equal(availability.safePausedCreation, true);
+    assert.equal(availability.activationSupported, true);
+    assert.equal(typeof ads._test.nativeAdapter("tiktok").create, "function");
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
   }
 });
 
@@ -407,6 +434,48 @@ test("Snapchat account discovery requires campaign write access and funding", ()
   assert.equal(readOnly.status, "campaign_write_role_required");
 });
 
+test("TikTok Ads discovery requires an enabled localized account and advertising identity", () => {
+  const account = ads._test.normalizeTikTokAccount({
+    advertiser_id: "7491234567890123456",
+    advertiser_name: "GoodOS TikTok",
+    status: "STATUS_ENABLE",
+    currency: "usd",
+    timezone: "America/Los_Angeles",
+    country: "us",
+    role: "ADMIN",
+  });
+  assert.equal(account.eligible, true);
+  assert.equal(account.status, "status_enable");
+  assert.equal(account.currency, "USD");
+  assert.equal(account.timezone, "America/Los_Angeles");
+  assert.equal(account.metadata.deliveryReady, false);
+
+  assert.deepEqual(
+    ads._test.normalizeTikTokIdentity({
+      identity_id: "7422222222222222222",
+      identity_type: "TT_USER",
+      available_status: "AVAILABLE",
+      display_name: "GoodOS",
+      username: "goodos",
+    }, account.providerAccountId),
+    {
+      id: "7422222222222222222",
+      name: "GoodOS · @goodos",
+      providerAccountId: "7491234567890123456",
+      identityType: "TT_USER",
+      identityAuthorizedBcId: null,
+    }
+  );
+  assert.equal(
+    ads._test.normalizeTikTokIdentity({
+      identity_id: "7422222222222222222",
+      identity_type: "TT_USER",
+      available_status: "UNAVAILABLE",
+    }, account.providerAccountId),
+    null
+  );
+});
+
 test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creative", () => {
   const row = {
     provider_account_id: "518121035",
@@ -504,6 +573,62 @@ test("Snapchat adapter builds a fully paused campaign stack with a shared Public
   );
   assert.equal(ad.type, "REMOTE_WEBPAGE");
   assert.equal(ad.status, "PAUSED");
+});
+
+test("TikTok adapter builds a fully disabled traffic campaign stack", () => {
+  const row = {
+    provider_campaign_record_id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    provider_account_id: "7491234567890123456",
+    account_metadata: {
+      deliveryReady: true,
+      identityId: "7422222222222222222",
+      identityType: "TT_USER",
+    },
+    campaign_name: "GoodOS Launch",
+    campaign_data: {
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US", "CA"],
+      creative: {
+        primaryText: "Run your business in one governed workspace.",
+        headline: "Meet GoodOS",
+        callToAction: "Learn More",
+        destinationUrl: "https://goodos.app/?utm_source=tiktok",
+        videoUrl: "https://cdn.goodos.app/goodads/launch.mp4",
+      },
+    },
+  };
+  const campaign = ads._test.tiktokCampaignPayload(row);
+  assert.equal(campaign.objective_type, "TRAFFIC");
+  assert.equal(campaign.operation_status, "DISABLE");
+  assert.equal(campaign.budget_mode, "BUDGET_MODE_INFINITE");
+
+  const locationIds = ads._test.tiktokCountryLocationIds({
+    data: {
+      list: [
+        { location_id: "6252001", region_code: "US", level: "COUNTRY" },
+        { location_id: "6251999", region_code: "CA", level: "COUNTRY" },
+      ],
+    },
+  }, row.campaign_data.targetCountries);
+  assert.deepEqual(locationIds, ["6252001", "6251999"]);
+
+  const adGroup = ads._test.tiktokAdGroupPayload(row, "1850000000000001", locationIds);
+  assert.equal(adGroup.operation_status, "DISABLE");
+  assert.equal(adGroup.budget_mode, "BUDGET_MODE_TOTAL");
+  assert.equal(adGroup.budget, 200);
+  assert.deepEqual(adGroup.placements, ["PLACEMENT_TIKTOK"]);
+  assert.equal(adGroup.schedule_end_time, "2026-10-12 23:59:59");
+  assert.equal(adGroup.identity_id, row.account_metadata.identityId);
+
+  const ad = ads._test.tiktokAdPayload(row, "1850000000000002", "v10044g50000ct2lj6bc77u74fl8vlt0");
+  assert.equal(ad.creatives[0].operation_status, "DISABLE");
+  assert.equal(ad.creatives[0].video_id, "v10044g50000ct2lj6bc77u74fl8vlt0");
+  assert.equal(ad.creatives[0].identity_id, row.account_metadata.identityId);
+  assert.equal(ad.creatives[0].call_to_action, "LEARN_MORE");
+  assert.equal(ad.creatives[0].creative_authorized, false);
 });
 
 test("Pinterest adapter builds a paused CBO campaign, targeted ad group, ad-only Pin, and ad", () => {
@@ -642,6 +767,63 @@ test("Snapchat setup fails closed on unsafe budgets, objectives, profiles, and m
       data: { ...campaign.data, creative: { ...campaign.data.creative, videoUrl: "https://example.com/ad.mp4" } },
     }, account),
     (error) => error.code === "GOODADS_SNAPCHAT_MEDIA_HOST_INVALID"
+  );
+});
+
+test("TikTok setup fails closed on unsafe budgets, objectives, identities, media hosts, and copy", () => {
+  const campaign = {
+    status: "ready",
+    data: {
+      platforms: ["tiktok"],
+      objective: "traffic",
+      dailyBudget: 20,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      creative: {
+        headline: "Meet GoodOS",
+        primaryText: "Run your business in one governed workspace.",
+        destinationUrl: "https://goodos.app/",
+        videoUrl: "https://cdn.goodos.app/goodads/launch.mp4",
+      },
+    },
+  };
+  const account = {
+    provider: "tiktok",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: {
+      deliveryReady: true,
+      identityId: "7422222222222222222",
+      identityType: "TT_USER",
+    },
+  };
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, account));
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, dailyBudget: 19.99 } }, account),
+    (error) => error.code === "GOODADS_TIKTOK_BUDGET_MINIMUM"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
+    (error) => error.code === "GOODADS_TIKTOK_EVENT_SOURCE_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount(campaign, { ...account, metadata: {} }),
+    (error) => error.code === "GOODADS_TIKTOK_IDENTITY_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, creative: { ...campaign.data.creative, videoUrl: "https://example.com/ad.mp4" } },
+    }, account),
+    (error) => error.code === "GOODADS_TIKTOK_VIDEO_HOST_INVALID"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, creative: { ...campaign.data.creative, primaryText: "x".repeat(101) } },
+    }, account),
+    (error) => error.code === "GOODADS_TIKTOK_COPY_INVALID"
   );
 });
 

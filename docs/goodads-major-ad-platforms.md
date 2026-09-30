@@ -26,14 +26,14 @@ native GoodBase adapter are all installed.
 | Google Search | Google | Native | Native | Native |
 | Meta (Facebook and Instagram) | Meta | Native | Native | Native |
 | YouTube | Google | Native | Native, paused by default | Native campaign state |
-| TikTok | TikTok | Registered | Not installed | Not installed |
+| TikTok | TikTok Business | Native | Native, disabled by default | Native campaign state |
 | LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
 | X | X | Registered | Not installed | Not installed |
 | Pinterest | Pinterest | Native | Native, paused by default | Not installed |
 | Snapchat | Snapchat Marketing API | Native | Native, paused by default | Not installed |
 
-The two unfinished providers remain visible in the readiness contract so the
-GoodAds interface can show the exact setup gap. They are deliberately excluded
+The unfinished X provider remains visible in the readiness contract so the
+GoodAds interface can show the exact setup gap. It is deliberately excluded
 from `supportedProviders` until an in-process adapter passes the paused-create,
 lifecycle, analytics, retry, and approval-gate tests.
 
@@ -52,6 +52,24 @@ and description within Google's current limits. Conversion objectives fail
 closed until GoodAds can verify an eligible Google conversion action. Google
 Search and YouTube both require an explicit EU political-advertising
 declaration and use the ad account's local time zone for start and end times.
+
+TikTok uses a separate TikTok for Business authorization, configured with
+`GOODADS_TIKTOK_ADS_APP_ID` and `GOODADS_TIKTOK_ADS_CLIENT_SECRET`. It discovers
+authorized advertiser accounts and their available advertising identities,
+then creates a traffic campaign, ad group, uploaded-by-URL video, and ad with
+every remotely spend-capable resource explicitly `DISABLE`. GoodAds persists
+each provider identifier before creating the next resource so a retry resumes
+the same stack instead of duplicating it. Country targets are resolved through
+TikTok's region catalog for the selected account and placement.
+
+TikTok setup currently requires a managed GoodOS HTTPS video, an available
+advertising identity, ad text of at most 100 characters, and a daily budget of
+at least 20 account-currency units (overridable with
+`GOODADS_TIKTOK_MIN_DAILY_BUDGET`). The total ad-group budget is capped from the
+selected daily budget and inclusive schedule. Conversion, sales, and lead
+objectives fail closed until GoodAds can verify a TikTok Pixel or lead form.
+Activation remains protected by the exact-snapshot approval gate; children are
+enabled before the campaign, while pause and delete stop the parent first.
 
 LinkedIn's native adapter discovers organization-backed ad accounts, resolves
 current Bing geo targets, uploads managed GoodOS images, and creates a paused
