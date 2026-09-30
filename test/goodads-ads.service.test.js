@@ -36,20 +36,40 @@ test("GoodAds paid providers fail closed until server credentials are complete",
   }
 });
 
-test("all major paid platforms are explicit and unfinished adapters cannot fall through", () => {
+test("all major paid platforms have explicit native delivery adapters", () => {
   assert.deepEqual(
     ads.publicProviders().map((provider) => provider.id),
     ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]
   );
-  for (const provider of ["x"]) {
+  for (const provider of ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]) {
     const availability = ads._test.providerAvailability(provider);
-    assert.equal(availability.available, false);
-    assert.equal(availability.adapterConfigured, false);
-    assert.equal(availability.adapterType, "not_installed");
-    assert.throws(
-      () => ads._test.nativeAdapter(provider),
-      (error) => error.code === "GOODADS_ADAPTER_NOT_INSTALLED"
-    );
+    assert.equal(availability.adapterConfigured, true);
+    assert.equal(availability.adapterType, "native");
+    assert.equal(typeof ads._test.nativeAdapter(provider).create, "function");
+  }
+});
+
+test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
+  const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    delete process.env.GOODADS_X_ADS_CONSUMER_KEY;
+    delete process.env.GOODADS_X_ADS_CONSUMER_SECRET;
+    assert.equal(ads._test.providerAvailability("x").available, false);
+    Object.assign(process.env, {
+      GOODADS_X_ADS_CONSUMER_KEY: "consumer-key",
+      GOODADS_X_ADS_CONSUMER_SECRET: "consumer-secret",
+    });
+    const availability = ads._test.providerAvailability("x");
+    assert.equal(availability.available, true);
+    assert.deepEqual(availability.connectionProviders, ["x_ads"]);
+    assert.equal(availability.safePausedCreation, true);
+    assert.equal(availability.activationSupported, true);
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
   }
 });
 
@@ -631,6 +651,65 @@ test("TikTok adapter builds a fully disabled traffic campaign stack", () => {
   assert.equal(ad.creatives[0].creative_authorized, false);
 });
 
+test("X Ads adapter builds a paused website-click stack and promoted-only post", () => {
+  const row = {
+    provider_campaign_record_id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    provider_account_id: "18ce54d4x5t",
+    account_metadata: {
+      deliveryReady: true,
+      fundingInstrumentId: "lygyi",
+      advertiserUserId: "756201191646691328",
+    },
+    campaign_name: "GoodOS Launch",
+    campaign_data: {
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US", "CA"],
+      creative: {
+        primaryText: "Run your business in one governed workspace.",
+        destinationUrl: "https://goodos.app/?utm_source=x",
+      },
+    },
+  };
+  const budget = ads._test.xAdsBudget(row);
+  assert.deepEqual(budget, { daily: 25000000, total: 200000000 });
+  const campaign = ads._test.xCampaignParameters(row);
+  assert.equal(campaign.entity_status, "PAUSED");
+  assert.equal(campaign.budget_optimization, "LINE_ITEM");
+  assert.equal(campaign.funding_instrument_id, "lygyi");
+  const lineItem = ads._test.xLineItemParameters(row, "hwtbm");
+  assert.equal(lineItem.entity_status, "PAUSED");
+  assert.equal(lineItem.objective, "WEBSITE_CLICKS");
+  assert.equal(lineItem.product_type, "PROMOTED_TWEETS");
+  assert.equal(lineItem.placements, "ALL_ON_TWITTER");
+  assert.equal(lineItem.bid_strategy, "AUTO");
+  assert.equal(lineItem.goal, "LINK_CLICKS");
+  assert.equal(lineItem.end_time, "2026-10-13T00:00:00.000Z");
+  const post = ads._test.xTweetParameters(row);
+  assert.equal(post.as_user_id, "756201191646691328");
+  assert.equal(post.nullcast, true);
+  assert.match(post.text, /utm_source=x$/);
+  assert.ok(post.name.length <= 80);
+});
+
+test("X Ads accounts fail closed without approval, funding, or a full promotable user", () => {
+  const account = { id: "18ce54d4x5t", name: "GoodOS", approval_status: "ACCEPTED", timezone: "America/Los_Angeles" };
+  const funding = { id: "lygyi", entity_status: "ACTIVE", able_to_fund: true, deleted: false, currency: "USD" };
+  const user = { user_id: "756201191646691328", promotable_user_type: "FULL", deleted: false };
+  const access = { permissions: ["AD_MANAGER", "TWEET_COMPOSER"] };
+  const ready = ads._test.normalizeXAccount(account, funding, user, access);
+  assert.equal(ready.eligible, true);
+  assert.equal(ready.metadata.deliveryReady, true);
+  assert.equal(ready.metadata.fundingInstrumentId, "lygyi");
+  assert.equal(ready.metadata.advertiserUserId, "756201191646691328");
+  assert.equal(ads._test.normalizeXAccount({ ...account, approval_status: "PENDING" }, funding, user, access).eligible, false);
+  assert.equal(ads._test.normalizeXAccount(account, { ...funding, able_to_fund: false }, user, access).eligible, false);
+  assert.equal(ads._test.normalizeXAccount(account, funding, { ...user, promotable_user_type: "RETWEETS_ONLY" }, access).eligible, false);
+  assert.equal(ads._test.normalizeXAccount(account, funding, user, { permissions: ["CAMPAIGN_ANALYST"] }).eligible, false);
+});
+
 test("Pinterest adapter builds a paused CBO campaign, targeted ad group, ad-only Pin, and ad", () => {
   const row = {
     provider_account_id: "549755885175",
@@ -824,6 +903,53 @@ test("TikTok setup fails closed on unsafe budgets, objectives, identities, media
       data: { ...campaign.data, creative: { ...campaign.data.creative, primaryText: "x".repeat(101) } },
     }, account),
     (error) => error.code === "GOODADS_TIKTOK_COPY_INVALID"
+  );
+});
+
+test("X Ads setup fails closed on objectives, funding prerequisites, and oversized post copy", () => {
+  const campaign = {
+    status: "ready",
+    data: {
+      platforms: ["x"],
+      objective: "traffic",
+      dailyBudget: 5,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      creative: {
+        primaryText: "Run your business in one governed workspace.",
+        destinationUrl: "https://goodos.app/?utm_source=x",
+      },
+    },
+  };
+  const account = {
+    provider: "x",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: {
+      deliveryReady: true,
+      fundingInstrumentId: "lygyi",
+      advertiserUserId: "756201191646691328",
+    },
+  };
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, account));
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
+    (error) => error.code === "GOODADS_X_EVENT_SOURCE_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount(campaign, { ...account, metadata: {} }),
+    (error) => error.code === "GOODADS_X_DELIVERY_PREREQUISITES_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: {
+        ...campaign.data,
+        creative: { ...campaign.data.creative, primaryText: "x".repeat(260) },
+      },
+    }, account),
+    (error) => error.code === "GOODADS_X_COPY_INVALID"
   );
 });
 

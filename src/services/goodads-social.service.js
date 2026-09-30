@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const OAuth = require("oauth-1.0a");
 const database = require("../config/database");
 const { query } = database;
 
@@ -72,6 +73,15 @@ const PROVIDERS = {
     scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
     pkce: true,
   },
+  x_ads: {
+    label: "X Ads",
+    authUrl: "https://api.x.com/oauth/authorize",
+    requestTokenUrl: "https://api.x.com/oauth/request_token",
+    tokenUrl: "https://api.x.com/oauth/access_token",
+    userUrl: "https://ads-api.x.com/12/accounts",
+    scopes: ["ads.read", "ads.write"],
+    oauthStyle: "oauth1",
+  },
   tiktok: {
     label: "TikTok",
     authUrl: "https://www.tiktok.com/v2/auth/authorize/",
@@ -127,6 +137,7 @@ const PROVIDER_PUBLISH_CAPABILITIES = Object.freeze({
   threads: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
   linkedin: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
   x: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
+  x_ads: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   tiktok: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   tiktok_ads: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   pinterest: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
@@ -150,8 +161,13 @@ function providerConfig(provider) {
   const clientId = process.env[`${prefix}CLIENT_ID`]
     || process.env[`${prefix}CLIENT_KEY`]
     || process.env[`${prefix}APP_ID`]
+    || process.env[`${prefix}CONSUMER_KEY`]
+    || process.env[`${prefix}API_KEY`]
     || "";
-  const clientSecret = process.env[`${prefix}CLIENT_SECRET`] || "";
+  const clientSecret = process.env[`${prefix}CLIENT_SECRET`]
+    || process.env[`${prefix}CONSUMER_SECRET`]
+    || process.env[`${prefix}API_SECRET`]
+    || "";
   const advertisingEnabled = String(process.env[`GOODADS_${id.toUpperCase()}_ADS_OAUTH_ENABLED`] || "").toLowerCase() === "true";
   const scopes = [
     ...definition.scopes,
@@ -203,18 +219,82 @@ function codeChallenge(verifier) {
   return crypto.createHash("sha256").update(verifier).digest("base64url");
 }
 
+function oauth1Client(config) {
+  return OAuth({
+    consumer: { key: config.clientId, secret: config.clientSecret },
+    signature_method: "HMAC-SHA1",
+    hash_function(baseString, signingKey) {
+      return crypto.createHmac("sha1", signingKey).update(baseString).digest("base64");
+    },
+  });
+}
+
+function oauth1AuthorizationHeader(config, url, method = "GET", token, tokenSecret, data = {}) {
+  const client = oauth1Client(config);
+  const authorization = client.authorize(
+    { url, method, data },
+    token ? { key: token, secret: tokenSecret || "" } : undefined
+  );
+  return client.toHeader(authorization).Authorization;
+}
+
+async function oauth1FormRequest(config, url, { data = {}, token, tokenSecret } = {}) {
+  const method = "POST";
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(data)) body.set(key, String(value));
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: oauth1AuthorizationHeader(config, url, method, token, tokenSecret, data),
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/x-www-form-urlencoded",
+      "User-Agent": "GoodAds/1.0",
+    },
+    body,
+    signal: AbortSignal.timeout(15000),
+  });
+  const payload = new URLSearchParams(await response.text());
+  if (!response.ok || !payload.get("oauth_token") || !payload.get("oauth_token_secret")) {
+    throw socialError(
+      payload.get("error") || `${config.label} rejected the OAuth 1.0a request.`,
+      response.status === 401 || response.status === 403 ? 409 : 502,
+      "GOODADS_TOKEN_EXCHANGE_FAILED"
+    );
+  }
+  return payload;
+}
+
 async function beginAuthorization({ provider, context, userId, returnOrigin = "https://ads.goodos.app" }) {
   const config = providerConfig(provider);
   if (!config.configured) throw socialError(`${config.label} OAuth credentials are not configured.`, 503, "GOODADS_PROVIDER_NOT_CONFIGURED");
   encryptionKey();
   const state = crypto.randomBytes(32).toString("base64url");
   const verifier = config.pkce ? crypto.randomBytes(48).toString("base64url") : null;
+  let stateVerifier = verifier;
+  let authorizationUrl;
+  if (config.oauthStyle === "oauth1") {
+    const callback = new URL(callbackUrl(config.id));
+    callback.searchParams.set("state", state);
+    const requestToken = await oauth1FormRequest(config, config.requestTokenUrl, {
+      data: { oauth_callback: callback.toString() },
+    });
+    if (requestToken.get("oauth_callback_confirmed") !== "true") {
+      throw socialError("X Ads did not confirm the secure OAuth callback.", 502, "GOODADS_OAUTH_CALLBACK_UNCONFIRMED");
+    }
+    const oauthToken = requestToken.get("oauth_token");
+    const encryptedSecret = encrypt(requestToken.get("oauth_token_secret"));
+    stateVerifier = JSON.stringify({ oauthToken, encryptedSecret });
+    const url = new URL(config.authUrl);
+    url.searchParams.set("oauth_token", oauthToken);
+    authorizationUrl = url.toString();
+  }
   await query(
     `INSERT INTO goodads_oauth_states (
        state_hash, provider, organization_id, user_id, code_verifier, return_origin
      ) VALUES ($1, $2, $3, $4::uuid, $5, $6)`,
-    [stateHash(state), config.id, context.organizationId, userId, verifier, returnOrigin]
+    [stateHash(state), config.id, context.organizationId, userId, stateVerifier, returnOrigin]
   );
+  if (authorizationUrl) return authorizationUrl;
   const url = new URL(config.authUrl);
   if (config.oauthStyle === "tiktok_business") {
     url.searchParams.set("app_id", config.clientId);
@@ -247,7 +327,40 @@ async function consumeState(provider, state) {
   return result.rows[0];
 }
 
-async function exchangeCode(config, code, stateRow) {
+async function exchangeCode(config, code, stateRow, oauthToken) {
+  if (config.oauthStyle === "oauth1") {
+    let requestToken;
+    try {
+      requestToken = JSON.parse(stateRow.code_verifier || "{}");
+    } catch {
+      requestToken = {};
+    }
+    if (!requestToken.oauthToken || requestToken.oauthToken !== oauthToken || !requestToken.encryptedSecret) {
+      throw socialError("X Ads returned an invalid OAuth request token.", 401, "GOODADS_OAUTH_TOKEN_INVALID");
+    }
+    let tokenSecret;
+    try {
+      tokenSecret = decrypt(
+        requestToken.encryptedSecret.ciphertext,
+        requestToken.encryptedSecret.iv,
+        requestToken.encryptedSecret.tag
+      );
+    } catch {
+      throw socialError("X Ads OAuth request credentials could not be verified.", 401, "GOODADS_OAUTH_TOKEN_INVALID");
+    }
+    const token = await oauth1FormRequest(config, config.tokenUrl, {
+      token: requestToken.oauthToken,
+      tokenSecret,
+      data: { oauth_verifier: code },
+    });
+    return {
+      access_token: token.get("oauth_token"),
+      refresh_token: token.get("oauth_token_secret"),
+      scope: config.scopes.join(" "),
+      user_id: token.get("user_id"),
+      screen_name: token.get("screen_name"),
+    };
+  }
   if (config.oauthStyle === "tiktok_business") {
     const response = await fetch(config.tokenUrl, {
       method: "POST",
@@ -287,6 +400,39 @@ async function exchangeCode(config, code, stateRow) {
 }
 
 async function fetchIdentity(config, accessToken, token = {}) {
+  if (config.oauthStyle === "oauth1") {
+    const url = `${config.userUrl}?count=1000`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: oauth1AuthorizationHeader(config, url, "GET", accessToken, token.refresh_token),
+        Accept: "application/json",
+        "User-Agent": "GoodAds/1.0",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw socialError(
+        payload?.errors?.[0]?.message || "X Ads account identity could not be loaded. Confirm Ads API access for this app and reconnect.",
+        response.status === 401 || response.status === 403 ? 409 : 502,
+        "GOODADS_IDENTITY_FAILED"
+      );
+    }
+    const accounts = Array.isArray(payload.data) ? payload.data : [];
+    const accountIds = accounts.map((account) => String(account.id || "")).filter(Boolean).sort();
+    if (!accountIds.length) {
+      throw socialError("X Ads did not return an accessible advertising account.", 409, "GOODADS_X_ADS_ACCOUNT_REQUIRED");
+    }
+    const fingerprint = crypto.createHash("sha256").update(accountIds.join(":"), "utf8").digest("hex").slice(0, 32);
+    return {
+      id: accountIds.length === 1 ? accountIds[0] : `grant_${fingerprint}`,
+      name: accountIds.length === 1
+        ? String(accounts[0]?.name || `X Ads ${accountIds[0]}`)
+        : `${accountIds.length} authorized X ad accounts`,
+      avatarUrl: null,
+      raw: { accountIds, userId: token.user_id || null, screenName: token.screen_name || null },
+    };
+  }
   if (config.oauthStyle === "tiktok_business") {
     const parameters = new URLSearchParams({ app_id: config.clientId, secret: config.clientSecret });
     const response = await fetch(`${config.userUrl}?${parameters}`, {
@@ -344,11 +490,11 @@ async function fetchIdentity(config, accessToken, token = {}) {
   };
 }
 
-async function completeAuthorization({ provider, code, state }) {
+async function completeAuthorization({ provider, code, state, oauthToken }) {
   const config = providerConfig(provider);
   if (!code) throw socialError("OAuth authorization code is missing.");
   const stateRow = await consumeState(config.id, state);
-  const token = await exchangeCode(config, code, stateRow);
+  const token = await exchangeCode(config, code, stateRow, oauthToken);
   const identity = await fetchIdentity(config, token.access_token, token);
   if (!identity.id) throw socialError(`${config.label} did not return an account identifier.`, 502, "GOODADS_ACCOUNT_ID_MISSING");
   const access = encrypt(token.access_token);
@@ -1163,6 +1309,17 @@ async function accessTokenForConnection(connection) {
   return payload.access_token;
 }
 
+async function oauth1CredentialsForConnection(connection) {
+  const config = providerConfig(connection.provider);
+  if (config.oauthStyle !== "oauth1" || !connection.refresh_token_ciphertext) {
+    throw socialError("This connection does not contain OAuth 1.0a advertising credentials.", 409, "GOODADS_OAUTH1_CREDENTIALS_REQUIRED");
+  }
+  return {
+    accessToken: decrypt(connection.access_token_ciphertext, connection.access_token_iv, connection.access_token_tag),
+    tokenSecret: decrypt(connection.refresh_token_ciphertext, connection.refresh_token_iv, connection.refresh_token_tag),
+  };
+}
+
 async function claimPublishJob(workerId) {
   const result = await query(
     `WITH selected AS (
@@ -1380,6 +1537,8 @@ module.exports = {
   processDuePublishJobs,
   providerPost,
   accessTokenForConnection,
+  oauth1AuthorizationHeader,
+  oauth1CredentialsForConnection,
   normalizePublishContent,
   normalizeSchedule,
   normalizeConnectionIds,

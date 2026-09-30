@@ -98,6 +98,7 @@ router.get("/oauth/:platform/callback", (req, res) => {
     provider: req.params.platform,
     code: req.query.code || req.query.auth_code,
     state: req.query.state,
+    oauthToken: req.query.oauth_token,
   }).then(({ connection, returnOrigin }) => {
     const targetOrigin = returnOrigin === "https://ads.goodos.app" ? returnOrigin : "https://ads.goodos.app";
     const payload = JSON.stringify({ type: "goodads-oauth-complete", provider: connection.provider, success: true });

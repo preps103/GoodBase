@@ -28,14 +28,31 @@ native GoodBase adapter are all installed.
 | YouTube | Google | Native | Native, paused by default | Native campaign state |
 | TikTok | TikTok Business | Native | Native, disabled by default | Native campaign state |
 | LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
-| X | X | Registered | Not installed | Not installed |
+| X | X Ads (OAuth 1.0a) | Native | Native, paused by default | Native campaign state |
 | Pinterest | Pinterest | Native | Native, paused by default | Not installed |
 | Snapchat | Snapchat Marketing API | Native | Native, paused by default | Not installed |
 
-The unfinished X provider remains visible in the readiness contract so the
-GoodAds interface can show the exact setup gap. It is deliberately excluded
-from `supportedProviders` until an in-process adapter passes the paused-create,
-lifecycle, analytics, retry, and approval-gate tests.
+X uses a separate X Ads authorization because the Ads API requires OAuth 1.0a
+user context and approved Ads API access; the OAuth 2.0 connection used for
+ordinary posting cannot be reused. Configure the approved application with
+`GOODADS_X_ADS_CONSUMER_KEY` and `GOODADS_X_ADS_CONSUMER_SECRET` (the equivalent
+`API_KEY`/`API_SECRET` names are also accepted), then reconnect after X grants
+Ads API access.
+
+The native v12 adapter discovers only approved ad accounts, verifies an active
+funding instrument, a full promotable user, campaign-management access, and the
+`TWEET_COMPOSER` permission, resolves current country targets,
+and creates a paused campaign, paused website-click line item, promoted-only
+post, and promoted-post association. Stable GoodAds names plus progressive
+provider receipts recover campaigns, line items, posts, targeting, and
+associations after interrupted responses without silently duplicating the stack.
+Traffic campaigns require bounded post text plus a public HTTPS destination;
+conversion objectives fail closed until a verified X website tag exists.
+Activation first confirms that X accepted the promoted post, then enables the
+line item before the campaign, while pause stops the campaign first. Archive
+pauses the stack before disassociating the post and
+deleting the line item and campaign; the promoted-only post is retained for
+provider auditability.
 
 YouTube uses the approved Google Ads connection and creates an atomic Demand
 Gen video stack: non-shared daily budget, paused campaign, YouTube-only ad

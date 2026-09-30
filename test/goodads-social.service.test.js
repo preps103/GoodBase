@@ -7,7 +7,7 @@ const path = require("node:path");
 const social = require("../src/services/goodads-social.service");
 
 test("GoodAds social registry includes major publishing networks", () => {
-  for (const provider of ["google", "facebook", "instagram", "threads", "linkedin", "x", "tiktok", "tiktok_ads", "pinterest", "snapchat", "reddit"]) {
+  for (const provider of ["google", "facebook", "instagram", "threads", "linkedin", "x", "x_ads", "tiktok", "tiktok_ads", "pinterest", "snapchat", "reddit"]) {
     assert.ok(social.PROVIDERS[provider]);
     assert.ok(social.PROVIDERS[provider].authUrl.startsWith("https://"));
     assert.ok(social.PROVIDERS[provider].tokenUrl.startsWith("https://"));
@@ -33,7 +33,7 @@ test("provider capability registry reports only installed publishing adapters", 
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].text, true);
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].immediate, true);
   }
-  for (const provider of ["google", "facebook", "instagram", "tiktok", "tiktok_ads", "pinterest"]) {
+  for (const provider of ["google", "facebook", "instagram", "x_ads", "tiktok", "tiktok_ads", "pinterest"]) {
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].text, false);
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].immediate, false);
   }
@@ -41,6 +41,36 @@ test("provider capability registry reports only installed publishing adapters", 
     assert.equal(capabilities.media, false);
     assert.equal(capabilities.scheduling, false);
     assert.equal(capabilities.paidAds, false);
+  }
+});
+
+test("X Ads uses a separate OAuth 1.0a business authorization", () => {
+  const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      GOODADS_X_ADS_CONSUMER_KEY: "consumer-key",
+      GOODADS_X_ADS_CONSUMER_SECRET: "consumer-secret",
+    });
+    const config = social.providerConfig("x_ads");
+    assert.equal(config.oauthStyle, "oauth1");
+    assert.equal(config.configured, true);
+    assert.deepEqual(config.scopes, ["ads.read", "ads.write"]);
+    const header = social.oauth1AuthorizationHeader(
+      config,
+      "https://ads-api.x.com/12/accounts?count=1000",
+      "GET",
+      "access-token",
+      "token-secret"
+    );
+    assert.match(header, /^OAuth /);
+    assert.match(header, /oauth_signature_method="HMAC-SHA1"/);
+    assert.match(header, /oauth_token="access-token"/);
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
   }
 });
 

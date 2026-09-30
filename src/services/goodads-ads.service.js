@@ -74,12 +74,12 @@ const PROVIDERS = Object.freeze({
   },
   x: {
     name: "X Ads",
-    connectionProviders: ["x"],
+    connectionProviders: ["x_ads"],
     requiredEnvironment: [],
     platforms: ["x", "twitter"],
     safePausedCreation: true,
     deliveryAdapter: "promoted_post",
-    adapterType: "not_installed",
+    adapterType: "native",
   },
   pinterest: {
     name: "Pinterest Ads",
@@ -858,6 +858,131 @@ async function discoverTikTokAccounts(accessToken) {
   return { accounts, pages };
 }
 
+async function xAdsRequest(path, credentials, { method = "GET", parameters = {}, fallback = "X Ads request", allowNotFound = false } = {}) {
+  const url = new URL(`https://ads-api.x.com/12${path}`);
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+  }
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: social.oauth1AuthorizationHeader(
+          social.providerConfig("x_ads"),
+          url.toString(),
+          method,
+          credentials.accessToken,
+          credentials.tokenSecret
+        ),
+        Accept: "application/json",
+        "User-Agent": "GoodAds/1.0",
+      },
+      signal: AbortSignal.timeout(25000),
+    });
+  } catch (error) {
+    throw adsError(
+      error.name === "TimeoutError" ? `${fallback} timed out.` : `${fallback} could not reach X Ads.`,
+      502,
+      "GOODADS_AD_PROVIDER_REQUEST_FAILED",
+      true
+    );
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (allowNotFound && response.status === 404) return { payload: {}, response };
+  if (!response.ok || payload.errors?.length) throw providerRequestError(response, payload, fallback);
+  return { payload, response };
+}
+
+function normalizeXAccount(account = {}, fundingInstrument = {}, promotableUser = {}, authenticatedAccess = {}) {
+  const providerAccountId = boundedText(account.id, 120);
+  const approved = boundedText(account.approval_status, 40).toUpperCase() === "ACCEPTED";
+  const funded = fundingInstrument.deleted !== true
+    && boundedText(fundingInstrument.entity_status, 40).toUpperCase() === "ACTIVE"
+    && fundingInstrument.able_to_fund === true;
+  const promotable = promotableUser.deleted !== true
+    && boundedText(promotableUser.promotable_user_type, 40).toUpperCase() === "FULL"
+    && /^\d{2,30}$/.test(String(promotableUser.user_id || ""));
+  const permissions = Array.isArray(authenticatedAccess.permissions)
+    ? authenticatedAccess.permissions.map((permission) => boundedText(permission, 60).toUpperCase())
+    : [];
+  const campaignAccess = permissions.some((permission) => ["ACCOUNT_ADMIN", "AD_MANAGER"].includes(permission));
+  const composerAccess = permissions.includes("TWEET_COMPOSER");
+  const eligible = Boolean(
+    providerAccountId
+    && account.deleted !== true
+    && approved
+    && funded
+    && promotable
+    && campaignAccess
+    && composerAccess
+  );
+  return {
+    providerAccountId,
+    name: boundedText(account.name || `X Ads ${providerAccountId}`, 240),
+    currency: boundedText(fundingInstrument.currency || account.currency, 12).toUpperCase(),
+    timezone: boundedText(account.timezone, 120),
+    eligible,
+    status: account.deleted === true
+      ? "deleted"
+      : !approved
+        ? boundedText(account.approval_status, 40).toLowerCase() || "not_approved"
+        : !funded
+          ? "funding_unavailable"
+          : !promotable
+            ? "full_promotable_user_required"
+            : !campaignAccess || !composerAccess
+              ? "campaign_and_tweet_permissions_required"
+            : "accepted",
+    metadata: {
+      fundingInstrumentId: funded ? boundedText(fundingInstrument.id, 120) : null,
+      advertiserUserId: promotable ? String(promotableUser.user_id) : null,
+      deliveryReady: eligible,
+      approvalStatus: boundedText(account.approval_status, 40).toUpperCase(),
+      authenticatedPermissions: permissions,
+    },
+  };
+}
+
+async function discoverXAccounts(credentials) {
+  const { payload } = await xAdsRequest("/accounts", credentials, {
+    parameters: { count: 1000 },
+    fallback: "X Ads account discovery",
+  });
+  const accounts = [];
+  for (const account of Array.isArray(payload.data) ? payload.data.slice(0, 100) : []) {
+    const accountId = boundedText(account.id, 120);
+    if (!ACCOUNT_ID_PATTERN.test(accountId)) continue;
+    let fundingInstrument = {};
+    let promotableUser = {};
+    let authenticatedAccess = {};
+    try {
+      const [fundingResult, usersResult, accessResult] = await Promise.all([
+        xAdsRequest(`/accounts/${encodeURIComponent(accountId)}/funding_instruments`, credentials, {
+          parameters: { count: 1000 },
+          fallback: "X Ads funding discovery",
+        }),
+        xAdsRequest(`/accounts/${encodeURIComponent(accountId)}/promotable_users`, credentials, {
+          parameters: { count: 1000 },
+          fallback: "X Ads promotable-user discovery",
+        }),
+        xAdsRequest(`/accounts/${encodeURIComponent(accountId)}/authenticated_user_access`, credentials, {
+          fallback: "X Ads authenticated-user access discovery",
+        }),
+      ]);
+      fundingInstrument = (Array.isArray(fundingResult.payload.data) ? fundingResult.payload.data : [])
+        .find((item) => item.deleted !== true && item.able_to_fund === true && String(item.entity_status).toUpperCase() === "ACTIVE") || {};
+      promotableUser = (Array.isArray(usersResult.payload.data) ? usersResult.payload.data : [])
+        .find((item) => item.deleted !== true && String(item.promotable_user_type).toUpperCase() === "FULL") || {};
+      authenticatedAccess = accessResult.payload.data || {};
+    } catch {
+      // Keep the account visible but ineligible when its delivery prerequisites cannot be verified.
+    }
+    accounts.push(normalizeXAccount(account, fundingInstrument, promotableUser, authenticatedAccess));
+  }
+  return { accounts, pages: [] };
+}
+
 function requireConnectionScopes(connection, requiredScopes = []) {
   const granted = new Set(Array.isArray(connection.scopes) ? connection.scopes : []);
   const missing = requiredScopes.filter((scope) => !granted.has(scope));
@@ -888,7 +1013,9 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
     allowedProviders: PROVIDERS[id].connectionProviders,
   });
   requireConnectionScopes(connection, PROVIDERS[id].requiredOAuthScopes || []);
-  const accessToken = await social.accessTokenForConnection(connection);
+  const accessToken = id === "x"
+    ? await social.oauth1CredentialsForConnection(connection)
+    : await social.accessTokenForConnection(connection);
   const discovered = id === "meta"
     ? await discoverMetaAccounts(accessToken)
     : ["google", "youtube"].includes(id)
@@ -901,6 +1028,8 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
             ? await discoverSnapchatAccounts(accessToken)
             : id === "tiktok"
               ? await discoverTikTokAccounts(accessToken)
+              : id === "x"
+                ? await discoverXAccounts(accessToken)
             : (() => {
               throw adsError(
                 `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
@@ -1003,7 +1132,7 @@ async function saveAdAccount({ payload, context, userId }) {
       }
     : provider === "linkedin"
       ? { ...(account.metadata || {}), deliveryReady: account.metadata?.deliveryReady === true }
-      : provider === "pinterest"
+      : ["pinterest", "x"].includes(provider)
         ? { ...(account.metadata || {}), deliveryReady: account.metadata?.deliveryReady === true }
         : provider === "snapchat"
           ? {
@@ -1357,6 +1486,43 @@ function validateCampaignForAccount(campaign, account) {
       );
     }
   }
+  if (account.provider === "x") {
+    if (
+      !account.metadata?.deliveryReady
+      || !ACCOUNT_ID_PATTERN.test(boundedText(account.metadata?.fundingInstrumentId, 120))
+      || !/^\d{2,30}$/.test(String(account.metadata?.advertiserUserId || ""))
+    ) {
+      throw adsError(
+        "X Ads delivery requires an accepted account, active funding, a full promotable user, and campaign plus Tweet Composer access.",
+        409,
+        "GOODADS_X_DELIVERY_PREREQUISITES_REQUIRED"
+      );
+    }
+    const minimumBudget = Math.max(Number(process.env.GOODADS_X_MIN_DAILY_BUDGET || 1), 1);
+    if (dailyBudget < minimumBudget) {
+      throw adsError(
+        `X Ads requires a daily budget of at least ${minimumBudget} account-currency units for this GoodAds installation.`,
+        409,
+        "GOODADS_X_BUDGET_MINIMUM"
+      );
+    }
+    if (String(data.objective || "traffic").toLowerCase() !== "traffic") {
+      throw adsError(
+        "X Ads one-click setup currently supports website-traffic campaigns. Conversion objectives require a verified X website tag and event source.",
+        409,
+        "GOODADS_X_EVENT_SOURCE_REQUIRED"
+      );
+    }
+    const primaryText = String(creative.primaryText || "").trim();
+    const promotedText = `${primaryText}\n${String(creative.destinationUrl || "").trim()}`;
+    if (!primaryText || promotedText.length > 280) {
+      throw adsError(
+        "X Ads delivery requires primary text whose combined text and destination URL are 280 characters or fewer.",
+        409,
+        "GOODADS_X_COPY_INVALID"
+      );
+    }
+  }
   if (account.provider === "snapchat") {
     if (!account.metadata?.deliveryReady || !UUID_PATTERN.test(account.metadata?.profileId || "")) {
       throw adsError(
@@ -1395,7 +1561,7 @@ function validateCampaignForAccount(campaign, account) {
       );
     }
   }
-  if (["x", "snapchat"].includes(account.provider)
+  if (account.provider === "snapchat"
     && !isPublicHttpsUrl(creative.imageUrl)
     && !isPublicHttpsUrl(creative.videoUrl)) {
     throw adsError(
@@ -2636,6 +2802,262 @@ async function createTikTokDelivery(row, accessToken) {
   };
 }
 
+function xAdsStableName(row, resource, maximum = 255) {
+  const record = boundedText(row.provider_campaign_record_id, 36).slice(0, 8);
+  return boundedText(`[GoodAds ${record} ${resource}] ${row.campaign_name}`, maximum);
+}
+
+function xAdsSchedule(value, exclusiveEnd = false) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) throw adsError("X Ads campaign schedule is invalid.");
+  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString();
+}
+
+function xAdsBudget(row) {
+  const data = row.campaign_data || {};
+  const daily = Math.round(Number(data.dailyBudget) * 1_000_000);
+  const start = new Date(`${data.startDate}T00:00:00.000Z`);
+  const end = new Date(`${data.endDate}T00:00:00.000Z`);
+  const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  if (!Number.isSafeInteger(daily) || daily < 1 || !Number.isInteger(days) || days < 1) {
+    throw adsError("X Ads budget or schedule is invalid.", 409, "GOODADS_X_BUDGET_INVALID");
+  }
+  const total = daily * days;
+  if (!Number.isSafeInteger(total)) throw adsError("X Ads total budget is too large.", 409, "GOODADS_X_BUDGET_INVALID");
+  return { daily, total };
+}
+
+function xCampaignParameters(row) {
+  const { daily, total } = xAdsBudget(row);
+  return {
+    funding_instrument_id: boundedText(row.account_metadata?.fundingInstrumentId, 120),
+    name: xAdsStableName(row, "campaign"),
+    daily_budget_amount_local_micro: daily,
+    total_budget_amount_local_micro: total,
+    budget_optimization: "LINE_ITEM",
+    entity_status: "PAUSED",
+  };
+}
+
+function xLineItemParameters(row, campaignId) {
+  const { daily, total } = xAdsBudget(row);
+  return {
+    campaign_id: campaignId,
+    name: xAdsStableName(row, "line item"),
+    objective: "WEBSITE_CLICKS",
+    product_type: "PROMOTED_TWEETS",
+    placements: "ALL_ON_TWITTER",
+    bid_strategy: "AUTO",
+    goal: "LINK_CLICKS",
+    entity_status: "PAUSED",
+    standard_delivery: true,
+    daily_budget_amount_local_micro: daily,
+    total_budget_amount_local_micro: total,
+    start_time: xAdsSchedule(row.campaign_data?.startDate),
+    end_time: xAdsSchedule(row.campaign_data?.endDate, true),
+  };
+}
+
+function xTweetParameters(row) {
+  const creative = row.campaign_data?.creative || {};
+  return {
+    as_user_id: String(row.account_metadata?.advertiserUserId || ""),
+    text: `${String(creative.primaryText || "").trim()}\n${String(creative.destinationUrl || "").trim()}`,
+    name: xAdsStableName(row, "post", 80),
+    nullcast: true,
+    trim_user: true,
+    tweet_mode: "extended",
+  };
+}
+
+function xEntityId(payload, label, { array = false, tweet = false } = {}) {
+  const entity = array ? payload?.data?.[0] : payload?.data;
+  const id = boundedText(tweet ? entity?.id_str || entity?.tweet_id || entity?.id : entity?.id, 120);
+  if (!ACCOUNT_ID_PATTERN.test(id)) {
+    throw adsError(`X Ads did not return a valid ${label}.`, 502, "GOODADS_X_RESPONSE_INVALID");
+  }
+  return id;
+}
+
+async function findExistingXEntity(path, credentials, parameters, name) {
+  const { payload } = await xAdsRequest(path, credentials, {
+    parameters: { ...parameters, count: 1000 },
+    fallback: "X Ads retry recovery",
+  });
+  return (Array.isArray(payload.data) ? payload.data : [])
+    .find((item) => item.deleted !== true && String(item.name || "") === name) || null;
+}
+
+async function resolveXCountryTargets(row, credentials) {
+  const targets = [];
+  for (const value of row.campaign_data?.targetCountries || []) {
+    const countryCode = boundedText(value, 2).toUpperCase();
+    const { payload } = await xAdsRequest("/targeting_criteria/locations", credentials, {
+      parameters: { country_code: countryCode, location_type: "COUNTRIES", count: 1000 },
+      fallback: "X Ads country-target resolution",
+    });
+    const match = (Array.isArray(payload.data) ? payload.data : []).find((item) => (
+      boundedText(item.country_code, 2).toUpperCase() === countryCode
+      && boundedText(item.location_type, 30).toUpperCase() === "COUNTRIES"
+      && boundedText(item.targeting_type, 30).toUpperCase() === "LOCATION"
+    ));
+    if (!match?.targeting_value) {
+      throw adsError(
+        `X Ads could not resolve country targeting for ${countryCode}.`,
+        409,
+        "GOODADS_X_COUNTRY_TARGET_INVALID"
+      );
+    }
+    targets.push({ countryCode, targetingValue: boundedText(match.targeting_value, 120) });
+  }
+  return targets;
+}
+
+async function createXDelivery(row, credentials) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const accountPath = `/accounts/${encodeURIComponent(accountId)}`;
+  let campaignId = boundedText(row.receipt?.campaignId || row.provider_campaign_id, 120);
+  if (!campaignId) {
+    const parameters = xCampaignParameters(row);
+    const existing = await findExistingXEntity(`${accountPath}/campaigns`, credentials, {}, parameters.name);
+    if (existing) campaignId = boundedText(existing.id, 120);
+    else {
+      const { payload } = await xAdsRequest(`${accountPath}/campaigns`, credentials, {
+        method: "POST",
+        parameters,
+        fallback: "X Ads paused-campaign creation",
+      });
+      campaignId = xEntityId(payload, "campaign ID");
+    }
+    await mergeProviderReceipt(
+      row,
+      { campaignId, campaignRecovered: Boolean(existing) },
+      { providerCampaignId: campaignId, providerResourceName: campaignId }
+    );
+  }
+
+  let lineItemId = boundedText(row.receipt?.lineItemId || row.provider_budget_id, 120);
+  if (!lineItemId) {
+    const parameters = xLineItemParameters(row, campaignId);
+    const existing = await findExistingXEntity(
+      `${accountPath}/line_items`,
+      credentials,
+      { campaign_ids: campaignId },
+      parameters.name
+    );
+    if (existing) lineItemId = boundedText(existing.id, 120);
+    else {
+      const { payload } = await xAdsRequest(`${accountPath}/line_items`, credentials, {
+        method: "POST",
+        parameters,
+        fallback: "X Ads paused-line-item creation",
+      });
+      lineItemId = xEntityId(payload, "line-item ID");
+    }
+    await mergeProviderReceipt(row, { lineItemId, lineItemRecovered: Boolean(existing) }, { providerBudgetId: lineItemId });
+  }
+
+  let countryTargets = Array.isArray(row.receipt?.countryTargets) ? row.receipt.countryTargets : [];
+  if (!countryTargets.length) {
+    countryTargets = await resolveXCountryTargets(row, credentials);
+    await mergeProviderReceipt(row, { countryTargets });
+  }
+  const { payload: currentTargeting } = await xAdsRequest(`${accountPath}/targeting_criteria`, credentials, {
+    parameters: { line_item_ids: lineItemId, count: 1000 },
+    fallback: "X Ads targeting retry recovery",
+  });
+  const installedTargets = Array.isArray(currentTargeting.data) ? currentTargeting.data : [];
+  const targetingCriteria = Array.isArray(row.receipt?.targetingCriteria) ? [...row.receipt.targetingCriteria] : [];
+  for (const target of countryTargets) {
+    let criterion = installedTargets.find((item) => (
+      item.deleted !== true
+      && item.line_item_id === lineItemId
+      && item.targeting_type === "LOCATION"
+      && item.targeting_value === target.targetingValue
+    ));
+    if (!criterion) {
+      const { payload } = await xAdsRequest(`${accountPath}/targeting_criteria`, credentials, {
+        method: "POST",
+        parameters: {
+          line_item_id: lineItemId,
+          operator_type: "EQ",
+          targeting_type: "LOCATION",
+          targeting_value: target.targetingValue,
+        },
+        fallback: "X Ads country-target creation",
+      });
+      criterion = payload.data;
+    }
+    const criterionId = boundedText(criterion?.id, 120);
+    if (!ACCOUNT_ID_PATTERN.test(criterionId)) throw adsError("X Ads did not return a targeting-criterion ID.", 502, "GOODADS_X_RESPONSE_INVALID");
+    if (!targetingCriteria.some((item) => item.id === criterionId)) {
+      targetingCriteria.push({ ...target, id: criterionId });
+      await mergeProviderReceipt(row, { targetingCriteria });
+    }
+  }
+
+  let tweetId = boundedText(row.receipt?.tweetId, 120);
+  if (!tweetId) {
+    const parameters = xTweetParameters(row);
+    const existing = await findExistingXEntity(
+      `${accountPath}/tweets`,
+      credentials,
+      { tweet_type: "PUBLISHED", timeline_type: "NULLCAST", user_id: parameters.as_user_id },
+      parameters.name
+    );
+    if (existing) tweetId = boundedText(existing.id_str || existing.tweet_id || existing.id, 120);
+    else {
+      const { payload } = await xAdsRequest(`${accountPath}/tweet`, credentials, {
+        method: "POST",
+        parameters,
+        fallback: "X Ads promoted-only post creation",
+      });
+      tweetId = xEntityId(payload, "post ID", { tweet: true });
+    }
+    await mergeProviderReceipt(row, { tweetId, tweetRecovered: Boolean(existing) });
+  }
+
+  let promotedTweetId = boundedText(row.receipt?.promotedTweetId, 120);
+  if (!promotedTweetId) {
+    const { payload: promoted } = await xAdsRequest(`${accountPath}/promoted_tweets`, credentials, {
+      parameters: { line_item_ids: lineItemId, count: 1000 },
+      fallback: "X Ads promoted-post retry recovery",
+    });
+    const existing = (Array.isArray(promoted.data) ? promoted.data : []).find((item) => (
+      item.deleted !== true && item.line_item_id === lineItemId && String(item.tweet_id) === tweetId
+    ));
+    if (existing) promotedTweetId = boundedText(existing.id, 120);
+    else {
+      const { payload } = await xAdsRequest(`${accountPath}/promoted_tweets`, credentials, {
+        method: "POST",
+        parameters: { line_item_id: lineItemId, tweet_ids: tweetId },
+        fallback: "X Ads promoted-post association",
+      });
+      promotedTweetId = xEntityId(payload, "promoted-post ID", { array: true });
+    }
+    await mergeProviderReceipt(row, { promotedTweetId, promotedTweetRecovered: Boolean(existing) });
+  }
+
+  return {
+    providerCampaignId: campaignId,
+    providerResourceName: campaignId,
+    providerBudgetId: lineItemId,
+    receipt: {
+      ...(row.receipt || {}),
+      campaignId,
+      lineItemId,
+      tweetId,
+      promotedTweetId,
+      countryTargets,
+      targetingCriteria,
+      deliveryAdapter: "promoted_post",
+      promotedOnly: true,
+      state: "PAUSED",
+    },
+  };
+}
+
 function pinterestObjective(value) {
   const objective = String(value || "traffic").toLowerCase();
   return objective === "awareness"
@@ -3769,6 +4191,99 @@ async function syncTikTokStatus(row, accessToken) {
   return { receipt: { ...row.receipt, providerStatus, state: operationStatus || providerStatus }, status };
 }
 
+async function updateXStatus(row, credentials, requestedStatus) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  const lineItemId = boundedText(row.receipt?.lineItemId || row.provider_budget_id, 120);
+  if (![accountId, campaignId, lineItemId].every((id) => ACCOUNT_ID_PATTERN.test(id))) {
+    throw adsError("X Ads campaign resources are incomplete.", 409, "GOODADS_X_RESOURCES_INCOMPLETE");
+  }
+  const accountPath = `/accounts/${encodeURIComponent(accountId)}`;
+  const setCampaign = (status) => xAdsRequest(`${accountPath}/campaigns/${encodeURIComponent(campaignId)}`, credentials, {
+    method: "PUT",
+    parameters: { entity_status: status },
+    fallback: "X Ads campaign status update",
+  });
+  const setLineItem = (status) => xAdsRequest(`${accountPath}/line_items/${encodeURIComponent(lineItemId)}`, credentials, {
+    method: "PUT",
+    parameters: { entity_status: status },
+    fallback: "X Ads line-item status update",
+  });
+  if (requestedStatus === "ACTIVE") {
+    const promotedTweetId = boundedText(row.receipt?.promotedTweetId, 120);
+    if (!ACCOUNT_ID_PATTERN.test(promotedTweetId)) {
+      throw adsError("X Ads promoted-post approval cannot be verified.", 409, "GOODADS_X_CREATIVE_NOT_APPROVED");
+    }
+    const { payload } = await xAdsRequest(
+      `${accountPath}/promoted_tweets/${encodeURIComponent(promotedTweetId)}`,
+      credentials,
+      { fallback: "X Ads promoted-post approval verification" }
+    );
+    if (payload.data?.deleted === true || boundedText(payload.data?.approval_status, 40).toUpperCase() !== "ACCEPTED") {
+      throw adsError(
+        "X Ads has not approved the promoted post. The campaign remains paused.",
+        409,
+        "GOODADS_X_CREATIVE_NOT_APPROVED"
+      );
+    }
+    await setLineItem("ACTIVE");
+    await setCampaign("ACTIVE");
+  } else {
+    await setCampaign("PAUSED");
+    await setLineItem("PAUSED");
+  }
+  if (requestedStatus === "ARCHIVED") {
+    const promotedTweetId = boundedText(row.receipt?.promotedTweetId, 120);
+    if (promotedTweetId) {
+      await xAdsRequest(`${accountPath}/promoted_tweets/${encodeURIComponent(promotedTweetId)}`, credentials, {
+        method: "DELETE",
+        fallback: "X Ads promoted-post removal",
+        allowNotFound: true,
+      });
+    }
+    await xAdsRequest(`${accountPath}/line_items/${encodeURIComponent(lineItemId)}`, credentials, {
+      method: "DELETE",
+      fallback: "X Ads line-item removal",
+      allowNotFound: true,
+    });
+    await xAdsRequest(`${accountPath}/campaigns/${encodeURIComponent(campaignId)}`, credentials, {
+      method: "DELETE",
+      fallback: "X Ads campaign removal",
+      allowNotFound: true,
+    });
+  }
+  return {
+    ...row.receipt,
+    state: requestedStatus,
+    ...(requestedStatus === "ARCHIVED" ? { remoteArchived: true, archivedAt: new Date().toISOString() } : {}),
+  };
+}
+
+async function syncXStatus(row, credentials) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  if (![accountId, campaignId].every((id) => ACCOUNT_ID_PATTERN.test(id))) {
+    throw adsError("X Ads campaign ID is invalid.", 409, "GOODADS_X_CAMPAIGN_ID_INVALID");
+  }
+  const { payload } = await xAdsRequest(
+    `/accounts/${encodeURIComponent(accountId)}/campaigns/${encodeURIComponent(campaignId)}`,
+    credentials,
+    { parameters: { with_deleted: true }, fallback: "X Ads campaign status" }
+  );
+  const campaign = payload.data || {};
+  const providerStatus = campaign.deleted === true
+    ? "DELETED"
+    : boundedText(campaign.effective_status || campaign.entity_status, 60).toUpperCase();
+  const status = providerStatus === "ACTIVE"
+    ? "active"
+    : providerStatus === "DELETED"
+      ? "archived"
+      : ["PAUSED", "UNKNOWN"].includes(providerStatus)
+        ? "paused"
+        : row.status;
+  return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
+}
+
 async function patchPinterestStatus(row, accessToken, resource, id, status) {
   const accountId = boundedText(row.provider_account_id, 120);
   const { payload } = await pinterestRequest(
@@ -3957,6 +4472,12 @@ function nativeAdapter(provider) {
       sync: syncTikTokStatus,
       statuses: { pause: "DISABLE", activate: "ENABLE", archive: "DELETE" },
     },
+    x: {
+      create: createXDelivery,
+      updateStatus: updateXStatus,
+      sync: syncXStatus,
+      statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
+    },
   };
   const adapter = adapters[provider];
   if (!adapter) {
@@ -3972,7 +4493,9 @@ function nativeAdapter(provider) {
 
 async function executeOperation(row) {
   const adapter = nativeAdapter(row.provider);
-  const accessToken = await social.accessTokenForConnection(row);
+  const accessToken = row.provider === "x"
+    ? await social.oauth1CredentialsForConnection(row)
+    : await social.accessTokenForConnection(row);
   if (row.operation_type === "create") {
     return adapter.create(row, accessToken);
   }
@@ -4177,6 +4700,7 @@ module.exports = {
     normalizeSnapchatAccount,
     normalizeTikTokAccount,
     normalizeTikTokIdentity,
+    normalizeXAccount,
     metaObjective,
     linkedInObjective,
     linkedInCampaignPayload,
@@ -4196,6 +4720,11 @@ module.exports = {
     tiktokAdGroupPayload,
     tiktokAdPayload,
     tiktokCountryLocationIds,
+    xAdsStableName,
+    xAdsBudget,
+    xCampaignParameters,
+    xLineItemParameters,
+    xTweetParameters,
     nativeAdapter,
     snapshotHash,
     validateCampaignForAccount,
