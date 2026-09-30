@@ -56,7 +56,7 @@ function isTemporaryGoodBaseRecoverySite(site) {
     path.resolve(site.appPath || "") === "/var/www/GoodBase" &&
     site.processManager === "pm2" &&
     site.processName === "goodbase-api-ha" &&
-    repositoryUrl === "git@github.com:preps103/GoodBase.git"
+    repositoryUrl === "https://github.com/preps103/GoodBase.git"
   );
 }
 

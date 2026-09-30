@@ -130,7 +130,7 @@ function normalizeGithubRepository(value, { allowLocalTest = false } = {}) {
     );
   }
 
-  return `git@github.com:${match[1]}/${match[2]}.git`;
+  return `https://github.com/${match[1]}/${match[2]}.git`;
 }
 
 function comparableRepository(value) {

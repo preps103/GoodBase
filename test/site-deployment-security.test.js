@@ -38,6 +38,24 @@ test("deployment commands scope Git safe.directory to the selected application",
   assert.deepEqual(invocation.args.slice(2), ["status", "--short"]);
 });
 
+test("deployment repositories use HTTPS without requiring server SSH host keys", () => {
+  delete require.cache[require.resolve("../src/services/site-deployment.service")];
+  const deployment = require("../src/services/site-deployment.service");
+
+  assert.equal(
+    deployment.normalizeGithubRepository("https://github.com/preps103/GoodBase"),
+    "https://github.com/preps103/GoodBase.git"
+  );
+  assert.equal(
+    deployment.normalizeGithubRepository("git@github.com:preps103/GoodBase.git"),
+    "https://github.com/preps103/GoodBase.git"
+  );
+  assert.throws(
+    () => deployment.normalizeGithubRepository("https://example.com/preps103/GoodBase.git"),
+    (error) => error.code === "INVALID_GITHUB_REPOSITORY"
+  );
+});
+
 test("deployment npm commands use the guarded deployment cache", () => {
   const deploymentSource = fs.readFileSync(
     path.join(__dirname, "..", "src", "services", "site-deployment.service.js"),
@@ -318,7 +336,7 @@ test("GoodBase self-deployment recovery is lock-protected and owner-controlled",
   assert.match(routes, /site\.name === "GoodBase Recovery"/);
   assert.match(routes, /site\.domain === "base\.goodos\.app"/);
   assert.match(routes, /site\.processName === "goodbase-api-ha"/);
-  assert.match(routes, /git@github\.com:preps103\/GoodBase\.git/);
+  assert.match(routes, /https:\/\/github\.com\/preps103\/GoodBase\.git/);
   assert.match(routes, /restart-goodbase-services/);
   assert.match(page, /Recover Stale Run/);
   assert.match(page, /Restart Services/);
