@@ -1005,6 +1005,10 @@ test("paid campaign migration installs verified accounts, durable operations, an
   );
   const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
   const jobs = fs.readFileSync(path.join(__dirname, "../src/services/job.service.js"), "utf8");
+  const runner = fs.readFileSync(
+    path.join(__dirname, "../scripts/apply-goodads-paid-campaigns-migration.js"),
+    "utf8"
+  );
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../package.json"), "utf8"));
   const majorPlatformsMigration = fs.readFileSync(
     path.join(__dirname, "../migrations/20260930_goodads_major_ad_platforms.sql"),
@@ -1015,6 +1019,10 @@ test("paid campaign migration installs verified accounts, durable operations, an
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_ad_operations/);
   assert.match(migration, /idx_goodads_ad_operations_open_mutation/);
   assert.match(migration, /operation_type IN \('create', 'pause', 'activate', 'archive'\)/);
+  assert.match(runner, /OPEN_MUTATION_INDEX_SQL/);
+  assert.match(runner, /"\/usr\/sbin\/runuser"/);
+  assert.match(runner, /"-u", "postgres"/);
+  assert.match(runner, /process\.getuid\(\) !== 0/);
   assert.match(migration, /activation_approval_id/);
   assert.match(migration, /'goodads\.ads\.dispatch'/);
   assert.match(jobs, /case "goodads\.ads\.dispatch"/);

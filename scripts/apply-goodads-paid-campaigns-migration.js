@@ -2,12 +2,17 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const database = require("../src/config/database");
 const env = require("../src/config/env");
 
 const MIGRATION_NAME = "20260729_goodads_paid_campaigns.sql";
 const MIGRATION_PATH = path.join(__dirname, "..", "migrations", MIGRATION_NAME);
 const LOCK_NAME = "goodbase:migration:goodads-paid-campaigns";
+const OPEN_MUTATION_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_goodads_ad_operations_open_mutation
+  ON public.goodads_ad_operations (provider_campaign_id)
+  WHERE operation_type IN ('create', 'pause', 'activate', 'archive')
+    AND status IN ('queued', 'processing', 'retrying')`;
 
 async function schemaState(client) {
   const result = await client.query(
@@ -32,6 +37,30 @@ function ready(state) {
     .every((key) => state[key] === true);
 }
 
+function coreReady(state) {
+  return ["ad_accounts", "provider_campaigns", "ad_operations", "dispatch_index", "dispatch_job"]
+    .every((key) => state[key] === true);
+}
+
+function applyOwnerIndex(databaseName) {
+  if (typeof process.getuid !== "function" || process.getuid() !== 0) {
+    throw new Error("The GoodAds operation guard requires the root-owned production migration runner.");
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(databaseName)) {
+    throw new Error("The production database name is invalid.");
+  }
+  execFileSync(
+    "/usr/sbin/runuser",
+    [
+      "-u", "postgres", "--", "/usr/bin/psql", "-X",
+      "--dbname", databaseName,
+      "--set", "ON_ERROR_STOP=1",
+      "--command", OPEN_MUTATION_INDEX_SQL,
+    ],
+    { encoding: "utf8", stdio: "pipe" }
+  );
+}
+
 async function main() {
   if (!env.databaseUrl) throw new Error("DATABASE_URL is required to apply production migrations.");
   const sql = fs.readFileSync(MIGRATION_PATH, "utf8");
@@ -41,7 +70,14 @@ async function main() {
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [LOCK_NAME]);
     locked = true;
     const before = await schemaState(client);
-    if (!ready(before)) await client.query(sql);
+    if (!ready(before)) {
+      if (coreReady(before) && !before.open_mutation_index) {
+        const databaseName = (await client.query("SELECT current_database() AS name")).rows[0]?.name || "";
+        applyOwnerIndex(databaseName);
+      } else {
+        await client.query(sql);
+      }
+    }
     const after = await schemaState(client);
     if (!ready(after)) throw new Error("GoodAds paid-campaign schema was not installed completely.");
     console.log(JSON.stringify({
