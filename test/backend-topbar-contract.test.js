@@ -118,6 +118,8 @@ test("master top bar is responsive and themeable without changing structure", ()
   assert.match(styles, /@media \(max-width:\s*760px\)/);
   assert.match(styles, /\[data-goodos-topbar-workspace\][\s\S]*font-size:\s*13px\s*!important\s*;/);
   assert.match(styles, /@media \(max-width:\s*1120px\)[\s\S]*\[data-goodos-topbar-workspace\][\s\S]*display:\s*none\s*!important\s*;/);
+  const mobileContract = styles.slice(styles.lastIndexOf("@media (max-width: 760px)"));
+  assert.match(mobileContract, /\[data-goodos-topbar-workspace\]\s*\{\s*display:\s*none\s*!important\s*;\s*\}/);
 });
 
 test("master top bar stylesheet is delivered as a cross-origin shared asset", () => {

@@ -775,6 +775,10 @@
     max-width: min(45vw, 260px) !important;
   }
 
+  [data-goodos-topbar-workspace] {
+    display: none !important;
+  }
+
   [data-goodos-topbar] > [data-goodos-topbar-search] {
     grid-column: 1 / 3 !important;
     grid-row: 2 !important;
