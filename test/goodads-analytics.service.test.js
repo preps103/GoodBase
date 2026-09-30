@@ -31,6 +31,50 @@ test("Meta conversion parsing counts only explicit result actions", () => {
   assert.equal(analytics._test.actionTotal(actions, new Set(["purchase"])), 2);
 });
 
+test("X Ads analytics sums only verified campaign metrics and keeps money in micros", () => {
+  const metrics = analytics._test.xMetricsFromPayload({
+    data: [{
+      id: "x-campaign",
+      id_data: [{
+        segment: null,
+        metrics: {
+          impressions: ["110", null, "40"],
+          clicks: ["9", "3"],
+          billed_charge_local_micro: ["1250000", "750000"],
+          conversion_purchases: ["2"],
+          conversion_sign_ups: ["3"],
+          conversion_site_visits: ["4"],
+          conversion_custom: ["1"],
+          conversion_purchases_sale_amount_local_micro: ["9000000"],
+          follows: ["999"],
+        },
+      }],
+    }],
+  }, { start: "2026-09-01", end: "2026-09-30" });
+
+  assert.deepEqual(metrics, {
+    impressions: 150,
+    clicks: 12,
+    conversions: 10,
+    spendMicros: 2000000,
+    conversionValueMicros: 9000000,
+    raw: {
+      dateStart: "2026-09-01",
+      dateEnd: "2026-09-30",
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: 1,
+    },
+  });
+});
+
+test("analytics capabilities include native X Ads reporting", () => {
+  assert.deepEqual(
+    analytics.capabilities().providerAnalytics.supportedProviders,
+    ["google", "meta", "x"]
+  );
+});
+
 test("analytics migration persists provider snapshots and automatic sync", () => {
   const migration = fs.readFileSync(
     path.join(__dirname, "../migrations/20260729_goodads_analytics.sql"),

@@ -96,6 +96,47 @@ function actionTotal(actions, accepted) {
   ), 0);
 }
 
+function metricTotal(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values.reduce((total, item) => total + Math.max(Number(item) || 0, 0), 0);
+}
+
+function xMetricsFromPayload(payload, period) {
+  const records = Array.isArray(payload?.data) ? payload.data : [];
+  const metrics = records.flatMap((record) => (
+    Array.isArray(record?.id_data) ? record.id_data : []
+  )).reduce((totals, item) => {
+    const values = item?.metrics && typeof item.metrics === "object" ? item.metrics : {};
+    totals.impressions += metricTotal(values.impressions);
+    totals.clicks += metricTotal(values.clicks);
+    totals.spendMicros += metricTotal(values.billed_charge_local_micro);
+    totals.conversions += [
+      "conversion_purchases",
+      "conversion_sign_ups",
+      "conversion_site_visits",
+      "conversion_custom",
+    ].reduce((total, key) => total + metricTotal(values[key]), 0);
+    totals.conversionValueMicros += metricTotal(values.conversion_purchases_sale_amount_local_micro);
+    return totals;
+  }, {
+    impressions: 0,
+    clicks: 0,
+    conversions: 0,
+    spendMicros: 0,
+    conversionValueMicros: 0,
+  });
+  return {
+    ...metrics,
+    raw: {
+      dateStart: period.start,
+      dateEnd: period.end,
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: records.length,
+    },
+  };
+}
+
 async function metaMetrics(row, accessToken, period) {
   const fields = "impressions,clicks,spend,actions,action_values,date_start,date_stop";
   const timeRange = encodeURIComponent(JSON.stringify({ since: period.start, until: period.end }));
@@ -163,6 +204,39 @@ async function googleMetrics(row, accessToken, period) {
   });
 }
 
+async function xMetrics(row, credentials, period) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id, 120);
+  const endExclusive = new Date(`${period.end}T00:00:00.000Z`);
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+  const url = new URL(`https://ads-api.x.com/12/stats/accounts/${encodeURIComponent(accountId)}`);
+  url.searchParams.set("entity", "CAMPAIGN");
+  url.searchParams.set("entity_ids", campaignId);
+  url.searchParams.set("start_time", `${period.start}T00:00:00Z`);
+  url.searchParams.set("end_time", endExclusive.toISOString().replace(".000Z", "Z"));
+  url.searchParams.set("granularity", "TOTAL");
+  url.searchParams.set("placement", "ALL_ON_TWITTER");
+  url.searchParams.set("metric_groups", "ENGAGEMENT,BILLING,CONVERSION");
+  const payload = await requestJson(
+    url,
+    {
+      headers: {
+        Authorization: social.oauth1AuthorizationHeader(
+          social.providerConfig("x_ads"),
+          url.toString(),
+          "GET",
+          credentials.accessToken,
+          credentials.tokenSecret
+        ),
+        Accept: "application/json",
+        "User-Agent": "GoodAds/1.0",
+      },
+    },
+    "X Ads campaign metrics"
+  );
+  return xMetricsFromPayload(payload, period);
+}
+
 async function campaignRows(organizationId = null) {
   const values = [];
   let tenantClause = "";
@@ -193,7 +267,7 @@ async function syncRows(rows, period) {
   const results = [];
   for (const row of rows) {
     try {
-      const adapter = { meta: metaMetrics, google: googleMetrics }[row.provider];
+      const adapter = { meta: metaMetrics, google: googleMetrics, x: xMetrics }[row.provider];
       if (!adapter) {
         throw analyticsError(
           `Analytics adapter is not installed for ${boundedText(row.provider, 40)}.`,
@@ -201,8 +275,10 @@ async function syncRows(rows, period) {
           "GOODADS_ANALYTICS_ADAPTER_NOT_INSTALLED"
         );
       }
-      const accessToken = await social.accessTokenForConnection(row);
-      const metrics = await adapter(row, accessToken, period);
+      const authorization = row.provider === "x"
+        ? await social.oauth1CredentialsForConnection(row)
+        : await social.accessTokenForConnection(row);
+      const metrics = await adapter(row, authorization, period);
       await query(
         `INSERT INTO goodads_analytics_snapshots (
            organization_id, provider_campaign_id, provider, provider_account_id,
@@ -392,7 +468,7 @@ function capabilities() {
   return {
     providerAnalytics: {
       available: true,
-      supportedProviders: ["google", "meta"],
+      supportedProviders: ["google", "meta", "x"],
       verifiedProviderReceipts: true,
       durableSnapshots: true,
       maximumRangeDays: 93,
@@ -411,5 +487,7 @@ module.exports = {
   _test: {
     normalizePeriod,
     actionTotal,
+    metricTotal,
+    xMetricsFromPayload,
   },
 };
