@@ -71,7 +71,7 @@ test("X Ads analytics sums only verified campaign metrics and keeps money in mic
 test("analytics capabilities include native X Ads reporting", () => {
   assert.deepEqual(
     analytics.capabilities().providerAnalytics.supportedProviders,
-    ["google", "meta", "snapchat", "x"]
+    ["google", "meta", "pinterest", "snapchat", "x"]
   );
 });
 
@@ -119,6 +119,43 @@ test("Snapchat analytics fails closed on a rejected provider sub-request", () =>
       total_stats: [{ sub_request_status: "ERROR" }],
     }, { start: "2026-09-01", end: "2026-09-30" }),
     /could not produce verified metrics/
+  );
+});
+
+test("Pinterest analytics preserves microcurrency and ignores unrelated engagement", () => {
+  const metrics = analytics._test.pinterestMetricsFromPayload([{
+    CAMPAIGN_ID: "pin-campaign",
+    IMPRESSION_1: 7500,
+    CLICKTHROUGH_1: 320,
+    SPEND_IN_MICRO_DOLLAR: 8800000,
+    TOTAL_CONVERSIONS: 12,
+    TOTAL_CONVERSIONS_VALUE_IN_MICRO_DOLLAR: 42000000,
+    SAVE_1: 999,
+  }], { start: "2026-09-01", end: "2026-09-30" });
+
+  assert.deepEqual(metrics, {
+    impressions: 7500,
+    clicks: 320,
+    conversions: 12,
+    spendMicros: 8800000,
+    conversionValueMicros: 42000000,
+    raw: {
+      dateStart: "2026-09-01",
+      dateEnd: "2026-09-30",
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: 1,
+    },
+  });
+});
+
+test("Pinterest analytics splits the global reporting window at its 90-day boundary", () => {
+  assert.deepEqual(
+    analytics._test.splitPeriod({ start: "2026-06-30", end: "2026-09-30" }, 90),
+    [
+      { start: "2026-06-30", end: "2026-09-27" },
+      { start: "2026-09-28", end: "2026-09-30" },
+    ]
   );
 });
 

@@ -186,6 +186,56 @@ function snapchatMetricsFromPayload(payload, period) {
   };
 }
 
+function pinterestMetricsFromPayload(payload, period) {
+  const records = Array.isArray(payload)
+    ? payload
+    : (Array.isArray(payload?.items) ? payload.items : []);
+  const metrics = records.reduce((totals, values) => {
+    const row = values && typeof values === "object" ? values : {};
+    totals.impressions += metricTotal(row.IMPRESSION_1);
+    totals.clicks += metricTotal(row.CLICKTHROUGH_1);
+    totals.spendMicros += metricTotal(row.SPEND_IN_MICRO_DOLLAR);
+    totals.conversions += metricTotal(row.TOTAL_CONVERSIONS);
+    totals.conversionValueMicros += metricTotal(row.TOTAL_CONVERSIONS_VALUE_IN_MICRO_DOLLAR);
+    return totals;
+  }, {
+    impressions: 0,
+    clicks: 0,
+    conversions: 0,
+    spendMicros: 0,
+    conversionValueMicros: 0,
+  });
+  return {
+    ...metrics,
+    raw: {
+      dateStart: period.start,
+      dateEnd: period.end,
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: records.length,
+    },
+  };
+}
+
+function splitPeriod(period, maximumDays) {
+  const chunks = [];
+  let cursor = new Date(`${period.start}T00:00:00.000Z`);
+  const end = new Date(`${period.end}T00:00:00.000Z`);
+  while (cursor <= end) {
+    const chunkStart = new Date(cursor);
+    const chunkEnd = new Date(cursor);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + maximumDays - 1);
+    if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+    chunks.push({
+      start: chunkStart.toISOString().slice(0, 10),
+      end: chunkEnd.toISOString().slice(0, 10),
+    });
+    cursor = new Date(chunkEnd);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return chunks;
+}
+
 async function metaMetrics(row, accessToken, period) {
   const fields = "impressions,clicks,spend,actions,action_values,date_start,date_stop";
   const timeRange = encodeURIComponent(JSON.stringify({ since: period.start, until: period.end }));
@@ -320,6 +370,68 @@ async function snapchatMetrics(row, accessToken, period) {
   return snapchatMetricsFromPayload(payload, period);
 }
 
+async function pinterestMetrics(row, accessToken, period) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id, 120);
+  const totals = {
+    impressions: 0,
+    clicks: 0,
+    conversions: 0,
+    spendMicros: 0,
+    conversionValueMicros: 0,
+  };
+  let recordCount = 0;
+  const chunks = splitPeriod(period, 90);
+  for (const chunk of chunks) {
+    const url = new URL(`https://api.pinterest.com/v5/ad_accounts/${encodeURIComponent(accountId)}/campaigns/analytics`);
+    url.searchParams.set("start_date", chunk.start);
+    url.searchParams.set("end_date", chunk.end);
+    url.searchParams.set("campaign_ids", campaignId);
+    url.searchParams.set("columns", [
+      "IMPRESSION_1",
+      "CLICKTHROUGH_1",
+      "SPEND_IN_MICRO_DOLLAR",
+      "TOTAL_CONVERSIONS",
+      "TOTAL_CONVERSIONS_VALUE_IN_MICRO_DOLLAR",
+    ].join(","));
+    url.searchParams.set("granularity", "TOTAL");
+    url.searchParams.set("click_window_days", "30");
+    url.searchParams.set("engagement_window_days", "30");
+    url.searchParams.set("view_window_days", "1");
+    url.searchParams.set("conversion_report_time", "TIME_OF_AD_ACTION");
+    url.searchParams.set("reporting_timezone", "UTC");
+    const payload = await requestJson(
+      url,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "User-Agent": "GoodAds/1.0",
+        },
+      },
+      "Pinterest campaign metrics"
+    );
+    const metrics = pinterestMetricsFromPayload(payload, chunk);
+    totals.impressions += metrics.impressions;
+    totals.clicks += metrics.clicks;
+    totals.conversions += metrics.conversions;
+    totals.spendMicros += metrics.spendMicros;
+    totals.conversionValueMicros += metrics.conversionValueMicros;
+    recordCount += metrics.raw.recordCount;
+  }
+  return {
+    ...totals,
+    raw: {
+      dateStart: period.start,
+      dateEnd: period.end,
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount,
+      requestCount: chunks.length,
+    },
+  };
+}
+
 async function campaignRows(organizationId = null) {
   const values = [];
   let tenantClause = "";
@@ -353,6 +465,7 @@ async function syncRows(rows, period) {
       const adapter = {
         meta: metaMetrics,
         google: googleMetrics,
+        pinterest: pinterestMetrics,
         x: xMetrics,
         snapchat: snapchatMetrics,
       }[row.provider];
@@ -556,7 +669,7 @@ function capabilities() {
   return {
     providerAnalytics: {
       available: true,
-      supportedProviders: ["google", "meta", "snapchat", "x"],
+      supportedProviders: ["google", "meta", "pinterest", "snapchat", "x"],
       verifiedProviderReceipts: true,
       durableSnapshots: true,
       maximumRangeDays: 93,
@@ -578,5 +691,7 @@ module.exports = {
     metricTotal,
     xMetricsFromPayload,
     snapchatMetricsFromPayload,
+    pinterestMetricsFromPayload,
+    splitPeriod,
   },
 };
