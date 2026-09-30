@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.7.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.8.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
@@ -511,6 +511,31 @@ function ProviderMark({ provider }) {
   );
 }
 
+function FingerprintMark({ size = 20 }) {
+  return createElement(
+    "svg",
+    {
+      width: size,
+      height: size,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: 2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true",
+      "data-goodos-passkey-icon": "fingerprint",
+    },
+    createElement("path", { d: "M12 10a2 2 0 0 0-2 2c0 1-.2 2.4-.8 3.5" }),
+    createElement("path", { d: "M14 13.1c0 2.2-.5 4.2-1.5 5.9" }),
+    createElement("path", { d: "M16.8 15.4c.2-1.1.2-2.3.2-3.4a5 5 0 0 0-10 0c0 .6-.1 1.2-.2 1.8" }),
+    createElement("path", { d: "M19.4 17a12 12 0 0 0 .6-5 8 8 0 0 0-16 0c0 1.3-.2 2.6-.7 3.8" }),
+    createElement("path", { d: "M5 20a13 13 0 0 0 2-5.8" }),
+    createElement("path", { d: "M8.9 21a10 10 0 0 0 2.4-6.7" }),
+    createElement("path", { d: "M16.1 20.1a14 14 0 0 0 1-2.7" }),
+  );
+}
+
 function ProviderButton({ provider, label, disabled, onClick, goodos = false, passkey = false }) {
   return createElement(
     "button",
@@ -553,7 +578,7 @@ export function GoodOSLoginWidget({
   onSetupPasskeyAfterSignInChange,
   passkeyEnrollmentAvailable = false,
   passkeyEnrollmentLoading = false,
-  passkeyEnrollmentLabel = "Set up Touch ID on this Mac",
+  passkeyEnrollmentLabel = "Create a passkey on this device",
   onPasskeyEnroll,
   providerAvailability = {},
   onForgotPassword,
@@ -753,13 +778,13 @@ export function GoodOSLoginWidget({
                     disabled: loading || passkeyLoading,
                     onClick: beginPasskeySignIn,
                     "aria-label": passkeyLoading
-                      ? "Waiting for Touch ID or passkey"
-                      : "Sign in with Touch ID or passkey",
+                      ? "Waiting for your device passkey"
+                      : "Sign in with a passkey",
                     title: passkeyLoading
-                      ? "Waiting for Touch ID or passkey"
-                      : "Sign in with Touch ID or passkey",
+                      ? "Waiting for your device passkey"
+                      : "Sign in with a passkey",
                   },
-                  createElement("span", { "aria-hidden": "true" }, "◎"),
+                  createElement(FingerprintMark, { size: 20 }),
                 ),
                 createElement("button", {
                   className: "goodos-login-widget__toggle",
@@ -782,8 +807,8 @@ export function GoodOSLoginWidget({
               createElement(
                 "span",
                 { className: "goodos-login-widget__passkey-setup-copy" },
-                createElement("span", null, "Set up Touch ID after signing in"),
-                createElement("small", null, "Verify your account once, then create the passkey immediately."),
+                createElement("span", null, "Create a passkey after signing in"),
+                createElement("small", null, "Use Face ID, Touch ID, Windows Hello, a fingerprint, or your device PIN."),
               ),
             ),
             passkeyEnrollmentAvailable && createElement(
@@ -794,8 +819,8 @@ export function GoodOSLoginWidget({
                 disabled: loading || passkeyEnrollmentLoading,
                 onClick: onPasskeyEnroll,
               },
-              createElement("span", { "aria-hidden": "true" }, "◎"),
-              passkeyEnrollmentLoading ? "Setting up Touch ID…" : passkeyEnrollmentLabel,
+              createElement(FingerprintMark, { size: 20 }),
+              passkeyEnrollmentLoading ? "Creating passkey…" : passkeyEnrollmentLabel,
             ),
             error && createElement("div", { className: "goodos-login-widget__error", role: "alert" }, error),
             createElement(

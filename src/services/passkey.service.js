@@ -154,7 +154,7 @@ async function verifyRegistration({ user, challengeId, response, label }) {
       JSON.stringify(transports),
       credentialDeviceType,
       credentialBackedUp,
-      String(label || "Touch ID / fingerprint").trim().slice(0, 80),
+      String(label || "Passkey on this device").trim().slice(0, 80),
     ]
   );
   return publicCredential(result.rows[0]);

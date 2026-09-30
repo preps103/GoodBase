@@ -23,9 +23,9 @@ availability from GoodBase, `goodOSIdentityProviderUrl` to start a configured
 provider, and `goodOSAccountUrl` for shared sign-in, registration, and recovery
 routes. Product code must not assume that a provider is enabled.
 
-The shared login widget intentionally does not render a full-width Touch ID or
+The shared login widget intentionally does not render a full-width biometric or
 passkey provider button. On supported devices it exposes the same passkey flow
-through a compact biometric control inside the password field. Existing passkey
+through a compact, standardized fingerprint control inside the password field. Existing passkey
 helpers, enrollment controls, and callback properties remain available.
 
 Product repositories keep a vendored snapshot so production builds remain
