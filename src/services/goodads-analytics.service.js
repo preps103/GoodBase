@@ -137,6 +137,55 @@ function xMetricsFromPayload(payload, period) {
   };
 }
 
+function snapchatMetricsFromPayload(payload, period) {
+  const requestStatus = boundedText(payload?.request_status, 40).toLowerCase();
+  if (requestStatus && requestStatus !== "success") {
+    throw analyticsError(
+      "Snapchat rejected the campaign metrics request.",
+      502,
+      "GOODADS_ANALYTICS_PROVIDER_FAILED"
+    );
+  }
+  const records = Array.isArray(payload?.total_stats) ? payload.total_stats : [];
+  const metrics = records.reduce((totals, record) => {
+    const subRequestStatus = boundedText(record?.sub_request_status, 40).toLowerCase();
+    if (subRequestStatus && subRequestStatus !== "success") {
+      throw analyticsError(
+        "Snapchat could not produce verified metrics for this campaign.",
+        502,
+        "GOODADS_ANALYTICS_PROVIDER_FAILED"
+      );
+    }
+    const values = record?.total_stat?.stats && typeof record.total_stat.stats === "object"
+      ? record.total_stat.stats
+      : {};
+    totals.impressions += metricTotal(values.impressions);
+    totals.clicks += metricTotal(values.swipes);
+    totals.spendMicros += metricTotal(values.spend);
+    totals.conversions += metricTotal(values.conversion_purchases)
+      + metricTotal(values.conversion_sign_ups);
+    totals.conversionValueMicros += metricTotal(values.conversion_purchases_value);
+    return totals;
+  }, {
+    impressions: 0,
+    clicks: 0,
+    conversions: 0,
+    spendMicros: 0,
+    conversionValueMicros: 0,
+  });
+  return {
+    ...metrics,
+    raw: {
+      dateStart: period.start,
+      dateEnd: period.end,
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: records.length,
+      requestId: boundedText(payload?.request_id, 200) || null,
+    },
+  };
+}
+
 async function metaMetrics(row, accessToken, period) {
   const fields = "impressions,clicks,spend,actions,action_values,date_start,date_stop";
   const timeRange = encodeURIComponent(JSON.stringify({ since: period.start, until: period.end }));
@@ -237,6 +286,40 @@ async function xMetrics(row, credentials, period) {
   return xMetricsFromPayload(payload, period);
 }
 
+async function snapchatMetrics(row, accessToken, period) {
+  const campaignId = boundedText(row.provider_campaign_id, 120);
+  const endExclusive = new Date(`${period.end}T00:00:00.000Z`);
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+  const url = new URL(`https://adsapi.snapchat.com/v1/campaigns/${encodeURIComponent(campaignId)}/stats`);
+  url.searchParams.set("granularity", "TOTAL");
+  url.searchParams.set("start_time", `${period.start}T00:00:00.000Z`);
+  url.searchParams.set("end_time", endExclusive.toISOString());
+  url.searchParams.set("fields", [
+    "impressions",
+    "swipes",
+    "spend",
+    "conversion_purchases",
+    "conversion_sign_ups",
+    "conversion_purchases_value",
+  ].join(","));
+  url.searchParams.set("swipe_up_attribution_window", "28_DAY");
+  url.searchParams.set("view_attribution_window", "1_DAY");
+  url.searchParams.set("action_report_time", "conversion");
+  url.searchParams.set("omit_empty", "true");
+  const payload = await requestJson(
+    url,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        "User-Agent": "GoodAds/1.0",
+      },
+    },
+    "Snapchat campaign metrics"
+  );
+  return snapchatMetricsFromPayload(payload, period);
+}
+
 async function campaignRows(organizationId = null) {
   const values = [];
   let tenantClause = "";
@@ -267,7 +350,12 @@ async function syncRows(rows, period) {
   const results = [];
   for (const row of rows) {
     try {
-      const adapter = { meta: metaMetrics, google: googleMetrics, x: xMetrics }[row.provider];
+      const adapter = {
+        meta: metaMetrics,
+        google: googleMetrics,
+        x: xMetrics,
+        snapchat: snapchatMetrics,
+      }[row.provider];
       if (!adapter) {
         throw analyticsError(
           `Analytics adapter is not installed for ${boundedText(row.provider, 40)}.`,
@@ -468,7 +556,7 @@ function capabilities() {
   return {
     providerAnalytics: {
       available: true,
-      supportedProviders: ["google", "meta", "x"],
+      supportedProviders: ["google", "meta", "snapchat", "x"],
       verifiedProviderReceipts: true,
       durableSnapshots: true,
       maximumRangeDays: 93,
@@ -489,5 +577,6 @@ module.exports = {
     actionTotal,
     metricTotal,
     xMetricsFromPayload,
+    snapchatMetricsFromPayload,
   },
 };

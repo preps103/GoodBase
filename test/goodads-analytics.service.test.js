@@ -71,7 +71,54 @@ test("X Ads analytics sums only verified campaign metrics and keeps money in mic
 test("analytics capabilities include native X Ads reporting", () => {
   assert.deepEqual(
     analytics.capabilities().providerAnalytics.supportedProviders,
-    ["google", "meta", "x"]
+    ["google", "meta", "snapchat", "x"]
+  );
+});
+
+test("Snapchat analytics maps swipe and conversion metrics without changing microcurrency", () => {
+  const metrics = analytics._test.snapchatMetricsFromPayload({
+    request_status: "SUCCESS",
+    request_id: "snap-report-1",
+    total_stats: [{
+      sub_request_status: "SUCCESS",
+      total_stat: {
+        stats: {
+          impressions: 2500,
+          swipes: 125,
+          spend: 4200000,
+          conversion_purchases: 7,
+          conversion_sign_ups: 3,
+          conversion_purchases_value: 21000000,
+          video_views: 999,
+        },
+      },
+    }],
+  }, { start: "2026-09-01", end: "2026-09-30" });
+
+  assert.deepEqual(metrics, {
+    impressions: 2500,
+    clicks: 125,
+    conversions: 10,
+    spendMicros: 4200000,
+    conversionValueMicros: 21000000,
+    raw: {
+      dateStart: "2026-09-01",
+      dateEnd: "2026-09-30",
+      entity: "CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: 1,
+      requestId: "snap-report-1",
+    },
+  });
+});
+
+test("Snapchat analytics fails closed on a rejected provider sub-request", () => {
+  assert.throws(
+    () => analytics._test.snapchatMetricsFromPayload({
+      request_status: "SUCCESS",
+      total_stats: [{ sub_request_status: "ERROR" }],
+    }, { start: "2026-09-01", end: "2026-09-30" }),
+    /could not produce verified metrics/
   );
 });
 
