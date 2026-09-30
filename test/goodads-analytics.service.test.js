@@ -71,8 +71,14 @@ test("X Ads analytics sums only verified campaign metrics and keeps money in mic
 test("analytics capabilities include native X Ads reporting", () => {
   assert.deepEqual(
     analytics.capabilities().providerAnalytics.supportedProviders,
-    ["google", "meta", "pinterest", "snapchat", "tiktok", "x"]
+    ["google", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"]
   );
+});
+
+test("YouTube campaigns use the verified Google Ads reporting adapter", () => {
+  const googleAdapter = analytics._test.providerMetricsAdapter("google");
+  assert.equal(typeof googleAdapter, "function");
+  assert.equal(analytics._test.providerMetricsAdapter("youtube"), googleAdapter);
 });
 
 test("Snapchat analytics maps swipe and conversion metrics without changing microcurrency", () => {

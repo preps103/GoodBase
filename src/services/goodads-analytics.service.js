@@ -537,18 +537,23 @@ async function campaignRows(organizationId = null) {
   return result.rows;
 }
 
+function providerMetricsAdapter(provider) {
+  return {
+    meta: metaMetrics,
+    google: googleMetrics,
+    youtube: googleMetrics,
+    pinterest: pinterestMetrics,
+    tiktok: tiktokMetrics,
+    x: xMetrics,
+    snapchat: snapchatMetrics,
+  }[provider];
+}
+
 async function syncRows(rows, period) {
   const results = [];
   for (const row of rows) {
     try {
-      const adapter = {
-        meta: metaMetrics,
-        google: googleMetrics,
-        pinterest: pinterestMetrics,
-        tiktok: tiktokMetrics,
-        x: xMetrics,
-        snapchat: snapchatMetrics,
-      }[row.provider];
+      const adapter = providerMetricsAdapter(row.provider);
       if (!adapter) {
         throw analyticsError(
           `Analytics adapter is not installed for ${boundedText(row.provider, 40)}.`,
@@ -749,7 +754,7 @@ function capabilities() {
   return {
     providerAnalytics: {
       available: true,
-      supportedProviders: ["google", "meta", "pinterest", "snapchat", "tiktok", "x"],
+      supportedProviders: ["google", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"],
       verifiedProviderReceipts: true,
       durableSnapshots: true,
       maximumRangeDays: 93,
@@ -775,5 +780,6 @@ module.exports = {
     splitPeriod,
     decimalToMicros,
     tiktokMetricsFromPayload,
+    providerMetricsAdapter,
   },
 };
