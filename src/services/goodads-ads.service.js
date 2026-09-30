@@ -14,6 +14,13 @@ const LINKEDIN_CAMPAIGN_ROLES = new Set([
 ]);
 const LINKEDIN_IMAGE_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png"]);
 const MAX_LINKEDIN_IMAGE_BYTES = 10 * 1024 * 1024;
+const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
+const SNAPCHAT_MEDIA_TYPES = Object.freeze({
+  "image/jpeg": { type: "IMAGE", extension: "jpg", maximumBytes: 5 * 1024 * 1024 },
+  "image/png": { type: "IMAGE", extension: "png", maximumBytes: 5 * 1024 * 1024 },
+  "video/mp4": { type: "VIDEO", extension: "mp4", maximumBytes: 32 * 1024 * 1024 },
+  "video/quicktime": { type: "VIDEO", extension: "mov", maximumBytes: 32 * 1024 * 1024 },
+});
 const PROVIDERS = Object.freeze({
   google: {
     name: "Google Ads",
@@ -87,7 +94,7 @@ const PROVIDERS = Object.freeze({
     platforms: ["snapchat"],
     safePausedCreation: true,
     deliveryAdapter: "snap_ad",
-    adapterType: "not_installed",
+    adapterType: "native",
   },
 });
 
@@ -188,6 +195,8 @@ function providerRequestError(response, payload, fallback) {
   const providerMessage = boundedText(
     payload?.error?.message
       || payload?.error?.details?.[0]?.errors?.[0]?.message
+      || payload?.display_message
+      || payload?.debug_message
       || payload?.message
       || fallback,
     2000
@@ -445,6 +454,178 @@ async function discoverLinkedInAccounts(accessToken) {
   return { accounts, pages: [] };
 }
 
+function snapchatHeaders(accessToken, extra = {}) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json",
+    "User-Agent": "GoodAds/1.0",
+    ...extra,
+  };
+}
+
+async function snapchatRequest(path, accessToken, options = {}, fallback = "Snapchat Ads operation", business = false) {
+  const baseUrl = business ? "https://businessapi.snapchat.com" : "https://adsapi.snapchat.com";
+  return requestJson(
+    `${baseUrl}${path}`,
+    {
+      ...options,
+      headers: snapchatHeaders(accessToken, options.headers || {}),
+    },
+    fallback
+  );
+}
+
+function snapchatEntity(payload, collection, key) {
+  const requestStatus = boundedText(payload?.request_status, 40).toUpperCase();
+  const wrapper = Array.isArray(payload?.[collection]) ? payload[collection][0] : null;
+  const subRequestStatus = boundedText(wrapper?.sub_request_status || requestStatus, 40).toUpperCase();
+  if (!wrapper || (requestStatus && requestStatus !== "SUCCESS") || subRequestStatus !== "SUCCESS") {
+    const message = boundedText(
+      wrapper?.errors?.[0]?.message
+        || wrapper?.errors?.[0]?.display_message
+        || payload?.display_message
+        || payload?.debug_message
+        || `Snapchat did not return a ${key}.`,
+      2000
+    );
+    throw adsError(message, 502, "GOODADS_SNAPCHAT_SUBREQUEST_FAILED", true);
+  }
+  const entity = wrapper[key];
+  if (!entity || !UUID_PATTERN.test(String(entity.id || ""))) {
+    throw adsError(`Snapchat did not return a valid ${key} ID.`, 502, "GOODADS_SNAPCHAT_RESPONSE_INVALID");
+  }
+  return entity;
+}
+
+function normalizeSnapchatAccount(account = {}, organization = {}) {
+  const providerAccountId = boundedText(account.id, 120);
+  const providerStatus = boundedText(account.status || "UNKNOWN", 40).toUpperCase();
+  const roles = [...new Set((Array.isArray(account.roles) ? account.roles : [])
+    .map((role) => boundedText(role, 40).toLowerCase())
+    .filter(Boolean))];
+  const fundingSourceIds = (Array.isArray(account.funding_source_ids) ? account.funding_source_ids : [])
+    .map((id) => boundedText(id, 120))
+    .filter((id) => UUID_PATTERN.test(id));
+  const canWrite = roles.some((role) => SNAPCHAT_WRITE_ROLES.has(role));
+  const hasFunding = fundingSourceIds.length > 0 || account.test === true;
+  const eligible = providerStatus === "ACTIVE" && canWrite && hasFunding;
+  let status = providerStatus.toLowerCase();
+  if (providerStatus === "ACTIVE" && !canWrite) status = "campaign_write_role_required";
+  if (providerStatus === "ACTIVE" && canWrite && !hasFunding) status = "funding_source_required";
+  return {
+    providerAccountId,
+    name: boundedText(account.name || `Snapchat Ads ${providerAccountId}`, 240),
+    currency: boundedText(account.currency, 12).toUpperCase(),
+    timezone: boundedText(account.timezone, 120),
+    eligible,
+    status,
+    metadata: {
+      organizationId: boundedText(account.organization_id || organization.id, 120) || null,
+      organizationName: boundedText(organization.name, 240) || null,
+      roles,
+      fundingSourceIds,
+      test: account.test === true,
+      deliveryReady: false,
+    },
+  };
+}
+
+async function discoverSnapchatProfiles(accessToken, providerAccountId) {
+  const { payload } = await snapchatRequest(
+    `/v1/adaccounts/${encodeURIComponent(providerAccountId)}/sharing_policies?shared_resource_types=public_profiles`,
+    accessToken,
+    {},
+    "Snapchat Public Profile discovery",
+    true
+  );
+  const profileIds = [...new Set((Array.isArray(payload.sharing_policies) ? payload.sharing_policies : [])
+    .map((wrapper) => wrapper?.sharing_policy?.source)
+    .filter((source) => source?.resource_type === "public_profiles")
+    .map((source) => boundedText(source.resource_id, 120))
+    .filter((id) => UUID_PATTERN.test(id)))].slice(0, 20);
+  const profiles = [];
+  for (const profileId of profileIds) {
+    let name = `Snapchat Public Profile ${profileId.slice(0, 8)}`;
+    try {
+      const { payload: profilePayload } = await snapchatRequest(
+        `/v1/public_profiles/${encodeURIComponent(profileId)}`,
+        accessToken,
+        {},
+        "Snapchat Public Profile details",
+        true
+      );
+      const profile = profilePayload?.public_profiles?.[0]?.public_profile
+        || profilePayload?.public_profile
+        || profilePayload?.profile
+        || {};
+      name = boundedText(profile.display_name || profile.title || profile.name || name, 240);
+    } catch {}
+    profiles.push({ id: profileId, name, providerAccountId });
+  }
+  return profiles;
+}
+
+async function discoverSnapchatAccounts(accessToken) {
+  const { payload } = await snapchatRequest(
+    "/v1/me/organizations?with_ad_accounts=true",
+    accessToken,
+    {},
+    "Snapchat Ads account discovery"
+  );
+  const organizations = (Array.isArray(payload.organizations) ? payload.organizations : [])
+    .map((wrapper) => wrapper?.organization)
+    .filter(Boolean);
+  const summaries = organizations.flatMap((organization) => (
+    (Array.isArray(organization.ad_accounts) ? organization.ad_accounts : [])
+      .map((account) => ({ account, organization }))
+  )).slice(0, 100);
+  const accounts = [];
+  const pages = [];
+  for (let index = 0; index < summaries.length; index += 10) {
+    const batch = await Promise.all(summaries.slice(index, index + 10).map(async ({ account, organization }) => {
+      const providerAccountId = boundedText(account.id, 120);
+      if (!UUID_PATTERN.test(providerAccountId)) return null;
+      let normalized;
+      try {
+        const { payload: accountPayload } = await snapchatRequest(
+          `/v1/adaccounts/${encodeURIComponent(providerAccountId)}`,
+          accessToken,
+          {},
+          "Snapchat Ads account details"
+        );
+        const detail = snapchatEntity(accountPayload, "adaccounts", "adaccount");
+        normalized = normalizeSnapchatAccount({ ...account, ...detail, roles: account.roles }, organization);
+      } catch {
+        normalized = {
+          ...normalizeSnapchatAccount(account, organization),
+          eligible: false,
+          status: "details_unavailable",
+        };
+      }
+      let profiles = [];
+      if (normalized.eligible) {
+        try {
+          profiles = await discoverSnapchatProfiles(accessToken, providerAccountId);
+        } catch {
+          normalized.eligible = false;
+          normalized.status = "public_profile_unavailable";
+        }
+        if (!profiles.length && normalized.eligible) {
+          normalized.eligible = false;
+          normalized.status = "public_profile_required";
+        }
+      }
+      normalized.metadata.profileCount = profiles.length;
+      return { account: normalized, profiles };
+    }));
+    for (const item of batch.filter(Boolean)) {
+      accounts.push(item.account);
+      pages.push(...item.profiles);
+    }
+  }
+  return { accounts, pages };
+}
+
 function requireConnectionScopes(connection, requiredScopes = []) {
   const granted = new Set(Array.isArray(connection.scopes) ? connection.scopes : []);
   const missing = requiredScopes.filter((scope) => !granted.has(scope));
@@ -482,13 +663,15 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
       ? await discoverGoogleAccounts(accessToken)
       : id === "linkedin"
         ? await discoverLinkedInAccounts(accessToken)
-      : (() => {
+        : id === "snapchat"
+          ? await discoverSnapchatAccounts(accessToken)
+          : (() => {
           throw adsError(
             `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
             503,
             "GOODADS_ADAPTER_NOT_INSTALLED"
           );
-        })();
+          })();
   return {
     provider: id,
     connectionId: connection.id,
@@ -545,17 +728,27 @@ async function saveAdAccount({ payload, context, userId }) {
   }
   if (!account.eligible) {
     throw adsError(
-      "The provider reports that this ad account is not active.",
+      `The provider reports that this ad account is not eligible for campaign setup (${account.status || "unavailable"}).`,
       409,
-      "GOODADS_AD_ACCOUNT_NOT_ACTIVE"
+      "GOODADS_AD_ACCOUNT_NOT_ELIGIBLE"
     );
   }
   const pageId = boundedText(payload?.pageId, 120);
-  const selectedPage = provider === "meta" && pageId
-    ? discovered.pages.find((page) => page.id === pageId)
+  const selectedPage = ["meta", "snapchat"].includes(provider) && pageId
+    ? discovered.pages.find((page) => (
+        page.id === pageId
+        && (provider !== "snapchat" || page.providerAccountId === providerAccountId)
+      ))
     : null;
   if (provider === "meta" && pageId && !selectedPage) {
     throw adsError("The selected Meta Page is not accessible to this connection.", 409, "GOODADS_META_PAGE_NOT_ACCESSIBLE");
+  }
+  if (provider === "snapchat" && !selectedPage) {
+    throw adsError(
+      "Select a Snapchat Public Profile shared with this ad account.",
+      409,
+      "GOODADS_SNAPCHAT_PROFILE_REQUIRED"
+    );
   }
   const metadata = provider === "meta"
     ? {
@@ -567,7 +760,15 @@ async function saveAdAccount({ payload, context, userId }) {
       }
     : provider === "linkedin"
       ? { ...(account.metadata || {}), deliveryReady: account.metadata?.deliveryReady === true }
-      : { deliveryReady: true, channelType: "SEARCH" };
+      : provider === "snapchat"
+        ? {
+            ...(account.metadata || {}),
+            profileId: selectedPage.id,
+            profileName: selectedPage.name,
+            deliveryReady: true,
+            channelType: "SNAP_AD",
+          }
+        : { deliveryReady: true, channelType: "SEARCH" };
   const result = await query(
     `INSERT INTO goodads_ad_accounts (
        organization_id, connection_id, provider, provider_account_id, name,
@@ -629,6 +830,20 @@ function isPublicHttpsUrl(value) {
   try {
     const url = new URL(String(value || ""));
     return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function isManagedGoodOsHttpsUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:"
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === "443")
+      && (hostname === "goodos.app" || hostname.endsWith(".goodos.app"));
   } catch {
     return false;
   }
@@ -732,6 +947,44 @@ function validateCampaignForAccount(campaign, account) {
         "LinkedIn delivery requires primary text and a headline.",
         409,
         "GOODADS_LINKEDIN_COPY_REQUIRED"
+      );
+    }
+  }
+  if (account.provider === "snapchat") {
+    if (!account.metadata?.deliveryReady || !UUID_PATTERN.test(account.metadata?.profileId || "")) {
+      throw adsError(
+        "Snapchat delivery requires a Public Profile shared with this ad account.",
+        409,
+        "GOODADS_SNAPCHAT_PROFILE_REQUIRED"
+      );
+    }
+    if (dailyBudget < 5) {
+      throw adsError(
+        "Snapchat requires a daily budget of at least 5 account-currency units.",
+        409,
+        "GOODADS_SNAPCHAT_BUDGET_MINIMUM"
+      );
+    }
+    const objective = String(data.objective || "traffic").toLowerCase();
+    if (!["traffic", "awareness", "engagement"].includes(objective)) {
+      throw adsError(
+        "Snapchat one-click setup currently supports traffic, awareness, and engagement campaigns. Sales, conversion, and lead campaigns require a verified Pixel or lead form.",
+        409,
+        "GOODADS_SNAPCHAT_EVENT_SOURCE_REQUIRED"
+      );
+    }
+    if (!boundedText(creative.headline, 34)) {
+      throw adsError("Snapchat delivery requires a headline of 34 characters or fewer.", 409, "GOODADS_SNAPCHAT_HEADLINE_REQUIRED");
+    }
+    if (String(creative.headline || "").trim().length > 34) {
+      throw adsError("Snapchat headlines cannot exceed 34 characters.", 409, "GOODADS_SNAPCHAT_HEADLINE_TOO_LONG");
+    }
+    const mediaUrl = isPublicHttpsUrl(creative.videoUrl) ? creative.videoUrl : creative.imageUrl;
+    if (!isManagedGoodOsHttpsUrl(mediaUrl)) {
+      throw adsError(
+        "Snapchat creative media must be stored on a managed GoodOS HTTPS address.",
+        409,
+        "GOODADS_SNAPCHAT_MEDIA_HOST_INVALID"
       );
     }
   }
@@ -1527,9 +1780,14 @@ function linkedInCreativePayload(row, { campaignUrn, imageUrn, organizationUrn }
   };
 }
 
-async function readBoundedBody(response, maximumBytes) {
+async function readBoundedBody(
+  response,
+  maximumBytes,
+  message = "LinkedIn creative image exceeds 10 MB.",
+  code = "GOODADS_LINKEDIN_IMAGE_TOO_LARGE"
+) {
   const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (declaredLength > maximumBytes) throw adsError("LinkedIn creative image exceeds 10 MB.", 413, "GOODADS_LINKEDIN_IMAGE_TOO_LARGE");
+  if (declaredLength > maximumBytes) throw adsError(message, 413, code);
   if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks = [];
@@ -1540,7 +1798,7 @@ async function readBoundedBody(response, maximumBytes) {
     size += value.byteLength;
     if (size > maximumBytes) {
       await reader.cancel().catch(() => {});
-      throw adsError("LinkedIn creative image exceeds 10 MB.", 413, "GOODADS_LINKEDIN_IMAGE_TOO_LARGE");
+      throw adsError(message, 413, code);
     }
     chunks.push(Buffer.from(value));
   }
@@ -1806,6 +2064,389 @@ async function syncLinkedInStatus(row, accessToken) {
   return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
 }
 
+function snapchatObjective(value) {
+  const objective = String(value || "traffic").toLowerCase();
+  if (objective === "awareness") {
+    return { objectiveV2Type: "AWARENESS_AND_ENGAGEMENT", optimizationGoal: "IMPRESSIONS" };
+  }
+  if (objective === "engagement") {
+    return { objectiveV2Type: "AWARENESS_AND_ENGAGEMENT", optimizationGoal: "SWIPES" };
+  }
+  return { objectiveV2Type: "TRAFFIC", optimizationGoal: "SWIPES" };
+}
+
+function snapchatScheduleDate(value, exclusiveEnd = false) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) throw adsError("Snapchat campaign schedule is invalid.");
+  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString();
+}
+
+function snapchatCampaignPayload(row) {
+  const data = row.campaign_data || {};
+  const { objectiveV2Type } = snapchatObjective(data.objective);
+  return {
+    ad_account_id: boundedText(row.provider_account_id, 120),
+    name: boundedText(row.campaign_name, 375),
+    status: "PAUSED",
+    buy_model: "AUCTION",
+    start_time: snapchatScheduleDate(data.startDate),
+    end_time: snapchatScheduleDate(data.endDate, true),
+    objective_v2_properties: { objective_v2_type: objectiveV2Type },
+  };
+}
+
+function snapchatAdSquadPayload(row, campaignId) {
+  const data = row.campaign_data || {};
+  const { optimizationGoal } = snapchatObjective(data.objective);
+  const countries = [...new Set((data.targetCountries || [])
+    .map((country) => boundedText(country, 2).toLowerCase())
+    .filter((country) => /^[a-z]{2}$/.test(country)))];
+  return {
+    campaign_id: campaignId,
+    name: boundedText(`${row.campaign_name} audience`, 375),
+    status: "PAUSED",
+    type: "SNAP_ADS",
+    placement_v2: { config: "AUTOMATIC" },
+    billing_event: "IMPRESSION",
+    bid_strategy: "AUTO_BID",
+    daily_budget_micro: Math.round(Number(data.dailyBudget) * 1000000),
+    start_time: snapchatScheduleDate(data.startDate),
+    end_time: snapchatScheduleDate(data.endDate, true),
+    optimization_goal: optimizationGoal,
+    conversion_window: "SWIPE_28DAY_VIEW_1DAY",
+    delivery_constraint: "DAILY_BUDGET",
+    pacing_type: "STANDARD",
+    targeting: {
+      regulated_content: false,
+      geos: countries.map((country_code) => ({ country_code })),
+    },
+  };
+}
+
+function snapchatCreativePayload(row, mediaId) {
+  const creative = row.campaign_data?.creative || {};
+  const callToAction = {
+    "Sign Up": "SIGN_UP",
+    Download: "DOWNLOAD",
+    "Shop Now": "SHOP_NOW",
+    "Book Now": "BOOK_NOW",
+    "Get Offer": "GET_OFFER",
+  }[creative.callToAction] || "LEARN_MORE";
+  return {
+    ad_account_id: boundedText(row.provider_account_id, 120),
+    name: boundedText(`${row.campaign_name} creative`, 375),
+    type: "WEB_VIEW",
+    brand_name: boundedText(row.account_metadata?.profileName || "GoodAds", 32),
+    headline: boundedText(creative.headline, 34),
+    call_to_action: callToAction,
+    shareable: true,
+    forced_view_eligibility: "NONE",
+    top_snap_media_id: mediaId,
+    top_snap_crop_position: "OPTIMIZED",
+    web_view_properties: {
+      url: boundedText(creative.destinationUrl, 2048),
+      block_preload: false,
+    },
+    profile_properties: { profile_id: boundedText(row.account_metadata?.profileId, 120) },
+  };
+}
+
+function snapchatAdPayload(row, adSquadId, creativeId) {
+  return {
+    ad_squad_id: adSquadId,
+    creative_id: creativeId,
+    name: boundedText(`${row.campaign_name} ad`, 375),
+    type: "REMOTE_WEBPAGE",
+    status: "PAUSED",
+  };
+}
+
+function snapchatMediaSource(row) {
+  const creative = row.campaign_data?.creative || {};
+  const candidates = [creative.videoUrl, creative.imageUrl].filter(Boolean);
+  const url = candidates.find(isManagedGoodOsHttpsUrl) || candidates[0];
+  if (!isManagedGoodOsHttpsUrl(url)) {
+    throw adsError(
+      "Snapchat creative media must be stored on a managed GoodOS HTTPS address.",
+      409,
+      "GOODADS_SNAPCHAT_MEDIA_HOST_INVALID"
+    );
+  }
+  return url;
+}
+
+function validSnapchatMediaSignature(buffer, mimeType) {
+  if (mimeType === "image/jpeg") return buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mimeType === "image/png") {
+    return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  return buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp";
+}
+
+async function loadSnapchatMedia(row) {
+  const url = snapchatMediaSource(row);
+  let response;
+  try {
+    response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(20000) });
+  } catch {
+    throw adsError("Snapchat creative media could not be downloaded.", 502, "GOODADS_SNAPCHAT_MEDIA_DOWNLOAD_FAILED", true);
+  }
+  if (!response.ok) {
+    throw adsError(
+      "Snapchat creative media could not be downloaded.",
+      502,
+      "GOODADS_SNAPCHAT_MEDIA_DOWNLOAD_FAILED",
+      response.status >= 500
+    );
+  }
+  const mimeType = boundedText(response.headers.get("content-type"), 100).split(";")[0].toLowerCase();
+  const mediaType = SNAPCHAT_MEDIA_TYPES[mimeType];
+  if (!mediaType) {
+    throw adsError(
+      "Snapchat creative media must be JPEG, PNG, MP4, or MOV.",
+      409,
+      "GOODADS_SNAPCHAT_MEDIA_TYPE_INVALID"
+    );
+  }
+  const buffer = await readBoundedBody(
+    response,
+    mediaType.maximumBytes,
+    `Snapchat ${mediaType.type.toLowerCase()} exceeds the direct-upload size limit.`,
+    "GOODADS_SNAPCHAT_MEDIA_TOO_LARGE"
+  );
+  if (!buffer.length || !validSnapchatMediaSignature(buffer, mimeType)) {
+    throw adsError("Snapchat creative media content is invalid.", 409, "GOODADS_SNAPCHAT_MEDIA_CONTENT_INVALID");
+  }
+  return {
+    buffer,
+    mimeType,
+    mediaType: mediaType.type,
+    filename: `goodads-${crypto.randomUUID()}.${mediaType.extension}`,
+  };
+}
+
+async function getSnapchatMedia(mediaId, accessToken) {
+  const { payload } = await snapchatRequest(
+    `/v1/media/${encodeURIComponent(mediaId)}`,
+    accessToken,
+    {},
+    "Snapchat media status"
+  );
+  return snapchatEntity(payload, "media", "media");
+}
+
+async function ensureSnapchatMedia(row, accessToken) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  let mediaId = row.receipt?.mediaId;
+  let loaded;
+  if (!mediaId) {
+    loaded = await loadSnapchatMedia(row);
+    const { payload } = await snapchatRequest(
+      `/v1/adaccounts/${encodeURIComponent(accountId)}/media`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          media: [{
+            name: boundedText(`${row.campaign_name} media`, 375),
+            type: loaded.mediaType,
+            ad_account_id: accountId,
+          }],
+        }),
+      },
+      "Snapchat media creation"
+    );
+    const media = snapchatEntity(payload, "media", "media");
+    mediaId = media.id;
+    await mergeProviderReceipt(row, { mediaId, mediaType: loaded.mediaType, mediaUploadSubmitted: false });
+  }
+
+  let media = await getSnapchatMedia(mediaId, accessToken);
+  let mediaStatus = boundedText(media.media_status, 40).toUpperCase();
+  if (mediaStatus === "READY") return mediaId;
+  if (row.receipt?.mediaUploadSubmitted || ["PROCESSING", "UPLOADED"].includes(mediaStatus)) {
+    throw adsError("Snapchat is still processing the creative media.", 409, "GOODADS_SNAPCHAT_MEDIA_PROCESSING", true);
+  }
+
+  loaded ||= await loadSnapchatMedia(row);
+  const form = new FormData();
+  form.append("file", new Blob([loaded.buffer], { type: loaded.mimeType }), loaded.filename);
+  const { payload: uploadPayload } = await snapchatRequest(
+    `/v1/media/${encodeURIComponent(mediaId)}/upload`,
+    accessToken,
+    { method: "POST", body: form },
+    "Snapchat media upload"
+  );
+  media = uploadPayload?.result || {};
+  if (!UUID_PATTERN.test(String(media.id || "")) || media.id !== mediaId) {
+    throw adsError("Snapchat did not confirm the media upload.", 502, "GOODADS_SNAPCHAT_MEDIA_UPLOAD_FAILED", true);
+  }
+  mediaStatus = boundedText(media.media_status, 40).toUpperCase();
+  await mergeProviderReceipt(row, { mediaUploadSubmitted: true, mediaStatus: mediaStatus || "PROCESSING" });
+  if (mediaStatus !== "READY") {
+    throw adsError("Snapchat is still processing the creative media.", 409, "GOODADS_SNAPCHAT_MEDIA_PROCESSING", true);
+  }
+  return mediaId;
+}
+
+async function createSnapchatDelivery(row, accessToken) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const mediaId = await ensureSnapchatMedia(row, accessToken);
+
+  let creativeId = row.receipt?.creativeId;
+  if (!creativeId) {
+    const { payload } = await snapchatRequest(
+      `/v1/adaccounts/${encodeURIComponent(accountId)}/creatives`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ creatives: [snapchatCreativePayload(row, mediaId)] }),
+      },
+      "Snapchat creative creation"
+    );
+    creativeId = snapchatEntity(payload, "creatives", "creative").id;
+    await mergeProviderReceipt(row, { creativeId });
+  }
+
+  let campaignId = row.receipt?.campaignId || row.provider_campaign_id;
+  if (!campaignId) {
+    const { payload } = await snapchatRequest(
+      `/v1/adaccounts/${encodeURIComponent(accountId)}/campaigns`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaigns: [snapchatCampaignPayload(row)] }),
+      },
+      "Snapchat paused-campaign creation"
+    );
+    campaignId = snapchatEntity(payload, "campaigns", "campaign").id;
+    await mergeProviderReceipt(
+      row,
+      { campaignId },
+      { providerCampaignId: campaignId, providerResourceName: campaignId }
+    );
+  }
+
+  let adSquadId = row.receipt?.adSquadId || row.provider_budget_id;
+  if (!adSquadId) {
+    const { payload } = await snapchatRequest(
+      `/v1/campaigns/${encodeURIComponent(campaignId)}/adsquads`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adsquads: [snapchatAdSquadPayload(row, campaignId)] }),
+      },
+      "Snapchat paused-ad-squad creation"
+    );
+    adSquadId = snapchatEntity(payload, "adsquads", "adsquad").id;
+    await mergeProviderReceipt(row, { adSquadId }, { providerBudgetId: adSquadId });
+  }
+
+  let adId = row.receipt?.adId;
+  if (!adId) {
+    const { payload } = await snapchatRequest(
+      `/v1/adsquads/${encodeURIComponent(adSquadId)}/ads`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ads: [snapchatAdPayload(row, adSquadId, creativeId)] }),
+      },
+      "Snapchat paused-ad creation"
+    );
+    adId = snapchatEntity(payload, "ads", "ad").id;
+    await mergeProviderReceipt(row, { adId });
+  }
+
+  return {
+    providerCampaignId: campaignId,
+    providerResourceName: campaignId,
+    providerBudgetId: adSquadId,
+    receipt: {
+      ...(row.receipt || {}),
+      mediaId,
+      creativeId,
+      campaignId,
+      adSquadId,
+      adId,
+      profileId: row.account_metadata?.profileId,
+      state: "PAUSED",
+    },
+  };
+}
+
+async function patchSnapchatStatus(path, collection, key, accessToken, status) {
+  const { payload } = await snapchatRequest(
+    path,
+    accessToken,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json-patch+json" },
+      body: JSON.stringify([{ op: "replace", path: "/status", value: status }]),
+    },
+    "Snapchat campaign status update"
+  );
+  return snapchatEntity(payload, collection, key);
+}
+
+async function updateSnapchatStatus(row, accessToken, requestedStatus) {
+  const accountId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  const adSquadId = boundedText(row.receipt?.adSquadId || row.provider_budget_id, 120);
+  const adId = boundedText(row.receipt?.adId, 120);
+  if (![campaignId, adSquadId, adId].every((id) => UUID_PATTERN.test(id))) {
+    throw adsError("Snapchat campaign resources are incomplete.", 409, "GOODADS_SNAPCHAT_RESOURCES_INCOMPLETE");
+  }
+  const status = requestedStatus === "ACTIVE" ? "ACTIVE" : "PAUSED";
+  const campaignPath = `/v1/adaccounts/${encodeURIComponent(accountId)}/campaigns/${encodeURIComponent(campaignId)}`;
+  const adSquadPath = `/v1/campaigns/${encodeURIComponent(campaignId)}/adsquads/${encodeURIComponent(adSquadId)}`;
+  const adPath = `/v1/adsquads/${encodeURIComponent(adSquadId)}/ads/${encodeURIComponent(adId)}`;
+  if (status === "ACTIVE") {
+    await patchSnapchatStatus(adPath, "ads", "ad", accessToken, status);
+    await patchSnapchatStatus(adSquadPath, "adsquads", "adsquad", accessToken, status);
+    await patchSnapchatStatus(campaignPath, "campaigns", "campaign", accessToken, status);
+  } else {
+    await patchSnapchatStatus(campaignPath, "campaigns", "campaign", accessToken, status);
+    await patchSnapchatStatus(adSquadPath, "adsquads", "adsquad", accessToken, status);
+    await patchSnapchatStatus(adPath, "ads", "ad", accessToken, status);
+  }
+  return {
+    ...row.receipt,
+    state: status,
+    ...(requestedStatus === "ARCHIVED"
+      ? { remoteArchived: false, remoteArchiveState: "PAUSED", archivedAt: new Date().toISOString() }
+      : {}),
+  };
+}
+
+async function syncSnapchatStatus(row, accessToken) {
+  const campaignId = boundedText(row.provider_campaign_id || row.receipt?.campaignId, 120);
+  if (!UUID_PATTERN.test(campaignId)) {
+    throw adsError("Snapchat campaign ID is invalid.", 409, "GOODADS_SNAPCHAT_CAMPAIGN_ID_INVALID");
+  }
+  const { payload } = await snapchatRequest(
+    `/v1/campaigns/${encodeURIComponent(campaignId)}`,
+    accessToken,
+    {},
+    "Snapchat campaign status"
+  );
+  const campaign = snapchatEntity(payload, "campaigns", "campaign");
+  const providerStatus = boundedText(campaign.status, 40).toUpperCase();
+  const status = providerStatus === "ACTIVE"
+    ? "active"
+    : campaign.deleted === true || (providerStatus === "PAUSED" && row.receipt?.archivedAt)
+      ? "archived"
+      : providerStatus === "PAUSED"
+        ? "paused"
+        : row.status;
+  return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
+}
+
 async function updateMetaStatus(row, accessToken, status) {
   const ids = [row.provider_campaign_id, row.receipt?.adSetId, row.receipt?.adId].filter(Boolean);
   for (const id of ids) await metaPost(id, accessToken, { status });
@@ -1902,6 +2543,12 @@ function nativeAdapter(provider) {
       create: createLinkedInDelivery,
       updateStatus: updateLinkedInStatus,
       sync: syncLinkedInStatus,
+      statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
+    },
+    snapchat: {
+      create: createSnapchatDelivery,
+      updateStatus: updateSnapchatStatus,
+      sync: syncSnapchatStatus,
       statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
     },
   };
@@ -2115,11 +2762,17 @@ module.exports = {
     normalizeMetaAccount,
     normalizeGoogleCustomer,
     normalizeLinkedInAccount,
+    normalizeSnapchatAccount,
     metaObjective,
     linkedInObjective,
     linkedInCampaignPayload,
     linkedInCreativePayload,
     linkedInVersion,
+    snapchatObjective,
+    snapchatCampaignPayload,
+    snapchatAdSquadPayload,
+    snapchatCreativePayload,
+    snapchatAdPayload,
     nativeAdapter,
     snapshotHash,
     validateCampaignForAccount,

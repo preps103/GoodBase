@@ -30,9 +30,9 @@ native GoodBase adapter are all installed.
 | LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
 | X | X | Registered | Not installed | Not installed |
 | Pinterest | Pinterest | Registered | Not installed | Not installed |
-| Snapchat | Snapchat Marketing API | Registered | Not installed | Not installed |
+| Snapchat | Snapchat Marketing API | Native | Native, paused by default | Not installed |
 
-The five unfinished providers remain visible in the readiness contract so the
+The four unfinished providers remain visible in the readiness contract so the
 GoodAds interface can show the exact setup gap. They are deliberately excluded
 from `supportedProviders` until an in-process adapter passes the paused-create,
 lifecycle, analytics, retry, and approval-gate tests.
@@ -53,7 +53,22 @@ contract while making the campaign fully reviewable in LinkedIn Campaign
 Manager.
 
 Pinterest advertising scopes can be enabled for an approved OAuth application
-with `GOODADS_PINTEREST_ADS_OAUTH_ENABLED=true`. Snapchat uses
-`GOODADS_SNAPCHAT_CLIENT_ID` and `GOODADS_SNAPCHAT_CLIENT_SECRET` with the
-`snapchat-marketing-api` scope. These settings prepare account authorization;
-they do not claim that delivery is installed.
+with `GOODADS_PINTEREST_ADS_OAUTH_ENABLED=true`.
+
+Snapchat's native adapter uses `GOODADS_SNAPCHAT_CLIENT_ID` and
+`GOODADS_SNAPCHAT_CLIENT_SECRET` with the `snapchat-marketing-api` scope. It
+verifies an active ad account, campaign-write role, funding source, currency,
+time zone, and an accessible shared Public Profile. The adapter accepts bounded
+JPEG, PNG, MP4, or MOV media from managed GoodOS HTTPS storage; creates the
+media, Web View creative, campaign, ad squad, and ad; and persists every
+provider identifier before continuing. Every campaign, ad squad, and ad is
+created `PAUSED`. Traffic, awareness, and engagement objectives are supported
+without claiming a Pixel or lead-form integration. Sales, conversion, and lead
+objectives fail closed until those event sources are verified.
+
+Snapchat activation follows the same exact-snapshot approval gate as Meta and
+Google. Child resources are activated before the parent campaign, so the parent
+remains the final no-spend barrier. Pause runs in the opposite order. Snapchat
+does not expose an archive status, so GoodAds archives locally only after all
+remote resources are confirmed paused and records that distinction in the
+durable provider receipt.
