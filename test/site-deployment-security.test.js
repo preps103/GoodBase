@@ -114,6 +114,10 @@ test("deployment PM2 control is restricted to the root-owned helper", () => {
   assert.match(deploymentSource, /\["-n", PM2_CONTROL_COMMAND, "restart", processName\]/);
   assert.match(helper, /case "\$\{candidate\}"/);
   assert.match(helper, /goodbase-api\|goodbase-api-ha\|goodbase-worker/);
+  assert.match(helper, /const safeRows = rows\.map/);
+  assert.match(helper, /process\.stdout\.write\(`\$\{JSON\.stringify\(safeRows\)\}\\n`\)/);
+  assert.doesNotMatch(helper, /exec env PM2_HOME="\$\{PM2_RUNTIME\}" "\$\{PM2_BIN\}" jlist/);
+  assert.doesNotMatch(helper, /pm2_env:\s*environment[,}]/);
   assert.doesNotMatch(helper, /eval|sh -c/);
   assert.match(sudoers, /^goodapp ALL=\(root\) NOPASSWD: /);
   assert.doesNotMatch(sudoers, /\/bin\/sh|\/bin\/bash/);

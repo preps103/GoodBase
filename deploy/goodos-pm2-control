@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 readonly PM2_BIN="/usr/bin/pm2"
+readonly NODE_BIN="/usr/bin/node"
 readonly PM2_RUNTIME="/root/.pm2"
 readonly GOODBASE_REPOSITORY="/var/www/GoodBase"
 readonly action="${1:-}"
@@ -23,7 +24,43 @@ allowed_process() {
 case "${action}" in
   discover)
     [[ "$#" -eq 1 ]]
-    exec env PM2_HOME="${PM2_RUNTIME}" "${PM2_BIN}" jlist
+    env PM2_HOME="${PM2_RUNTIME}" "${PM2_BIN}" jlist |
+      "${NODE_BIN}" -e '
+        "use strict";
+
+        let input = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          const rows = JSON.parse(input || "[]");
+          if (!Array.isArray(rows)) throw new Error("PM2 discovery did not return an array.");
+
+          const safeRows = rows.map((row) => {
+            const environment = row && row.pm2_env && typeof row.pm2_env === "object"
+              ? row.pm2_env
+              : {};
+            const port = environment.env && typeof environment.env === "object"
+              ? environment.env.PORT
+              : undefined;
+
+            return {
+              name: String(row && row.name || "").slice(0, 160),
+              pid: Number.isSafeInteger(row && row.pid) ? row.pid : null,
+              pm2_env: {
+                status: String(environment.status || "unknown").slice(0, 40),
+                pm_cwd: String(environment.pm_cwd || "").slice(0, 1000),
+                pm_uptime: Number(environment.pm_uptime) || null,
+                restart_time: Number(environment.restart_time) || 0,
+                env: {
+                  PORT: /^\d{1,5}$/.test(String(port || "")) ? String(port) : null,
+                },
+              },
+            };
+          });
+
+          process.stdout.write(`${JSON.stringify(safeRows)}\n`);
+        });
+      '
     ;;
   restart)
     [[ "$#" -eq 2 ]]
