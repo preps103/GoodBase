@@ -33,6 +33,23 @@ test("GoodAds paid providers fail closed until server credentials are complete",
   }
 });
 
+test("all major paid platforms are explicit and unfinished adapters cannot fall through", () => {
+  assert.deepEqual(
+    ads.publicProviders().map((provider) => provider.id),
+    ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]
+  );
+  for (const provider of ["youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]) {
+    const availability = ads._test.providerAvailability(provider);
+    assert.equal(availability.available, false);
+    assert.equal(availability.adapterConfigured, false);
+    assert.equal(availability.adapterType, "not_installed");
+    assert.throws(
+      () => ads._test.nativeAdapter(provider),
+      (error) => error.code === "GOODADS_ADAPTER_NOT_INSTALLED"
+    );
+  }
+});
+
 test("Meta account discovery exposes only provider-owned public account metadata", () => {
   assert.deepEqual(
     ads._test.normalizeMetaAccount({
@@ -50,6 +67,30 @@ test("Meta account discovery exposes only provider-owned public account metadata
       eligible: true,
       status: "active",
     }
+  );
+});
+
+test("Google account discovery preserves locale and excludes manager accounts", () => {
+  assert.deepEqual(
+    ads._test.normalizeGoogleCustomer("1234567890", {
+      descriptiveName: "GoodOS Search",
+      currencyCode: "usd",
+      timeZone: "America/Los_Angeles",
+      status: "ENABLED",
+      manager: false,
+    }),
+    {
+      providerAccountId: "1234567890",
+      name: "GoodOS Search",
+      currency: "USD",
+      timezone: "America/Los_Angeles",
+      eligible: true,
+      status: "enabled",
+    }
+  );
+  assert.equal(
+    ads._test.normalizeGoogleCustomer("0987654321", { status: "ENABLED", manager: true }).eligible,
+    false
   );
 });
 
@@ -75,6 +116,10 @@ test("paid campaign migration installs verified accounts, durable operations, an
   const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
   const jobs = fs.readFileSync(path.join(__dirname, "../src/services/job.service.js"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../package.json"), "utf8"));
+  const majorPlatformsMigration = fs.readFileSync(
+    path.join(__dirname, "../migrations/20260930_goodads_major_ad_platforms.sql"),
+    "utf8"
+  );
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_ad_accounts/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_provider_campaigns/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_ad_operations/);
@@ -85,6 +130,10 @@ test("paid campaign migration installs verified accounts, durable operations, an
   assert.match(routes, /ads\.queueLifecycleOperation/);
   assert.match(routes, /ads\.retryOperation/);
   assert.match(packageJson.scripts.build, /apply-goodads-paid-campaigns-migration/);
+  assert.match(packageJson.scripts.build, /apply-goodads-major-ad-platforms-migration/);
+  for (const provider of ["youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]) {
+    assert.match(majorPlatformsMigration, new RegExp(`'${provider}'`));
+  }
 });
 
 test("provider deliveries are created paused and activation is approval-gated", () => {
@@ -98,4 +147,6 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /GOODADS_AD_CAMPAIGN_VERSION_CHANGED/);
   assert.match(source, /FOR UPDATE SKIP LOCKED/);
   assert.match(source, /dead_letter/);
+  assert.match(source, /GOODADS_ADAPTER_NOT_INSTALLED/);
+  assert.doesNotMatch(source, /row\.provider === "meta"[\s\S]{0,120}: createGoogleDelivery/);
 });

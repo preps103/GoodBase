@@ -62,6 +62,7 @@ const PROVIDERS = {
     tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken",
     userUrl: "https://api.linkedin.com/v2/userinfo",
     scopes: ["openid", "profile", "email", "w_member_social"],
+    advertisingScopes: ["r_ads", "r_ads_reporting", "rw_ads"],
   },
   x: {
     label: "X",
@@ -85,6 +86,14 @@ const PROVIDERS = {
     tokenUrl: "https://api.pinterest.com/v5/oauth/token",
     userUrl: "https://api.pinterest.com/v5/user_account",
     scopes: ["user_accounts:read", "pins:read", "pins:write", "boards:read"],
+    advertisingScopes: ["ads:read", "ads:write"],
+  },
+  snapchat: {
+    label: "Snapchat",
+    authUrl: "https://accounts.snapchat.com/login/oauth2/authorize",
+    tokenUrl: "https://accounts.snapchat.com/login/oauth2/access_token",
+    userUrl: "https://adsapi.snapchat.com/v1/me",
+    scopes: ["snapchat-marketing-api"],
   },
   reddit: {
     label: "Reddit",
@@ -112,6 +121,7 @@ const PROVIDER_PUBLISH_CAPABILITIES = Object.freeze({
   x: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
   tiktok: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   pinterest: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
+  snapchat: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   reddit: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
 });
 
@@ -130,7 +140,19 @@ function providerConfig(provider) {
   const prefix = `GOODADS_${id.toUpperCase()}_`;
   const clientId = process.env[`${prefix}CLIENT_ID`] || process.env[`${prefix}CLIENT_KEY`] || "";
   const clientSecret = process.env[`${prefix}CLIENT_SECRET`] || "";
-  return { id, ...definition, clientId, clientSecret, configured: Boolean(clientId && clientSecret) };
+  const advertisingEnabled = String(process.env[`GOODADS_${id.toUpperCase()}_ADS_OAUTH_ENABLED`] || "").toLowerCase() === "true";
+  const scopes = [
+    ...definition.scopes,
+    ...(advertisingEnabled ? definition.advertisingScopes || [] : []),
+  ];
+  return {
+    id,
+    ...definition,
+    scopes: [...new Set(scopes)],
+    clientId,
+    clientSecret,
+    configured: Boolean(clientId && clientSecret),
+  };
 }
 
 function encryptionKey() {
@@ -235,7 +257,7 @@ async function fetchIdentity(config, accessToken) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw socialError(`${config.label} account identity could not be loaded.`, 502, "GOODADS_IDENTITY_FAILED");
-  const value = payload.data?.user || payload.data || payload;
+  const value = payload.data?.user || payload.data || payload.me || payload;
   return {
     id: String(value.id || value.sub || value.open_id || value.openId || value.name || ""),
     name: String(value.name || value.display_name || value.localizedFirstName || value.username || value.login || "Connected account"),

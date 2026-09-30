@@ -12,15 +12,73 @@ const PROVIDERS = Object.freeze({
     name: "Google Ads",
     connectionProviders: ["google"],
     requiredEnvironment: ["GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN"],
+    platforms: ["google"],
     safePausedCreation: true,
     deliveryAdapter: "search",
+    adapterType: "native",
   },
   meta: {
     name: "Meta Ads",
     connectionProviders: ["facebook", "instagram"],
     requiredEnvironment: [],
+    platforms: ["facebook", "instagram", "meta"],
     safePausedCreation: true,
     deliveryAdapter: "link_ad",
+    adapterType: "native",
+  },
+  youtube: {
+    name: "YouTube Ads",
+    connectionProviders: ["google"],
+    requiredEnvironment: [],
+    platforms: ["youtube"],
+    safePausedCreation: true,
+    deliveryAdapter: "video",
+    adapterType: "not_installed",
+  },
+  tiktok: {
+    name: "TikTok Ads",
+    connectionProviders: ["tiktok"],
+    requiredEnvironment: [],
+    platforms: ["tiktok"],
+    safePausedCreation: true,
+    deliveryAdapter: "video",
+    adapterType: "not_installed",
+  },
+  linkedin: {
+    name: "LinkedIn Ads",
+    connectionProviders: ["linkedin"],
+    requiredEnvironment: [],
+    platforms: ["linkedin"],
+    safePausedCreation: true,
+    deliveryAdapter: "sponsored_content",
+    adapterType: "not_installed",
+  },
+  x: {
+    name: "X Ads",
+    connectionProviders: ["x"],
+    requiredEnvironment: [],
+    platforms: ["x", "twitter"],
+    safePausedCreation: true,
+    deliveryAdapter: "promoted_post",
+    adapterType: "not_installed",
+  },
+  pinterest: {
+    name: "Pinterest Ads",
+    connectionProviders: ["pinterest"],
+    requiredEnvironment: [],
+    platforms: ["pinterest"],
+    safePausedCreation: true,
+    deliveryAdapter: "promoted_pin",
+    adapterType: "not_installed",
+  },
+  snapchat: {
+    name: "Snapchat Ads",
+    connectionProviders: ["snapchat"],
+    requiredEnvironment: [],
+    platforms: ["snapchat"],
+    safePausedCreation: true,
+    deliveryAdapter: "snap_ad",
+    adapterType: "not_installed",
   },
 });
 
@@ -79,13 +137,22 @@ function providerAvailability(provider) {
     }
   });
   const missingEnvironment = definition.requiredEnvironment.filter((name) => !boundedText(process.env[name], 10000));
+  const adapterConfigured = definition.adapterType === "native";
+  const configurationErrors = adapterConfigured
+    ? []
+    : ["A native production delivery adapter is not installed for this provider."];
   return {
     id,
     name: definition.name,
-    available: oauthConfigured && missingEnvironment.length === 0,
+    available: oauthConfigured && missingEnvironment.length === 0 && adapterConfigured,
     oauthConfigured,
+    adapterConfigured,
+    adapterType: definition.adapterType,
     missingEnvironment,
-    safePausedCreation: definition.safePausedCreation,
+    configurationErrors,
+    connectionProviders: [...definition.connectionProviders],
+    platforms: [...definition.platforms],
+    safePausedCreation: definition.safePausedCreation && adapterConfigured,
     deliveryAdapter: definition.deliveryAdapter,
   };
 }
@@ -206,25 +273,60 @@ function googleHeaders(accessToken) {
   return headers;
 }
 
+function normalizeGoogleCustomer(providerAccountId, customer = {}) {
+  const status = boundedText(customer.status || "UNKNOWN", 40).toUpperCase();
+  const manager = customer.manager === true;
+  return {
+    providerAccountId,
+    name: boundedText(customer.descriptiveName || `Google Ads ${providerAccountId}`, 240),
+    currency: boundedText(customer.currencyCode, 12).toUpperCase(),
+    timezone: boundedText(customer.timeZone, 120),
+    eligible: status === "ENABLED" && !manager,
+    status: manager ? "manager_account" : status.toLowerCase(),
+  };
+}
+
 async function discoverGoogleAccounts(accessToken) {
   const { payload } = await requestJson(
     "https://googleads.googleapis.com/v24/customers:listAccessibleCustomers",
     { headers: googleHeaders(accessToken) },
     "Google Ads account discovery"
   );
-  const accounts = (Array.isArray(payload.resourceNames) ? payload.resourceNames : [])
-    .slice(0, 100)
-    .map((resourceName) => {
+  const resourceNames = (Array.isArray(payload.resourceNames) ? payload.resourceNames : []).slice(0, 100);
+  const accounts = [];
+  for (let index = 0; index < resourceNames.length; index += 10) {
+    const batch = resourceNames.slice(index, index + 10);
+    const details = await Promise.all(batch.map(async (resourceName) => {
       const providerAccountId = boundedText(resourceName, 160).replace(/^customers\//, "");
-      return {
-        providerAccountId,
-        name: `Google Ads ${providerAccountId}`,
-        currency: "",
-        timezone: "",
-        eligible: true,
-        status: "accessible",
-      };
-    });
+      try {
+        const { payload: detailPayload } = await requestJson(
+          `https://googleads.googleapis.com/v24/customers/${providerAccountId}/googleAds:searchStream`,
+          {
+            method: "POST",
+            headers: googleHeaders(accessToken),
+            body: JSON.stringify({
+              query: "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.status, customer.manager, customer.test_account FROM customer LIMIT 1",
+            }),
+          },
+          "Google Ads account details"
+        );
+        const record = Array.isArray(detailPayload)
+          ? detailPayload.flatMap((item) => item.results || [])[0]
+          : detailPayload.results?.[0];
+        return normalizeGoogleCustomer(providerAccountId, record?.customer);
+      } catch {
+        return {
+          providerAccountId,
+          name: `Google Ads ${providerAccountId}`,
+          currency: "",
+          timezone: "",
+          eligible: false,
+          status: "details_unavailable",
+        };
+      }
+    }));
+    accounts.push(...details);
+  }
   return { accounts, pages: [] };
 }
 
@@ -248,7 +350,15 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
   const accessToken = await social.accessTokenForConnection(connection);
   const discovered = id === "meta"
     ? await discoverMetaAccounts(accessToken)
-    : await discoverGoogleAccounts(accessToken);
+    : id === "google"
+      ? await discoverGoogleAccounts(accessToken)
+      : (() => {
+          throw adsError(
+            `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
+            503,
+            "GOODADS_ADAPTER_NOT_INSTALLED"
+          );
+        })();
   return {
     provider: id,
     connectionId: connection.id,
@@ -383,6 +493,15 @@ function snapshotHash(snapshot) {
   return crypto.createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }
 
+function isPublicHttpsUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" && Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 function validateCampaignForAccount(campaign, account) {
   const data = campaign.data || {};
   if (campaign.status !== "ready") {
@@ -394,11 +513,10 @@ function validateCampaignForAccount(campaign, account) {
     throw adsError(`Daily budget must be between 1 and ${maximum}.`, 409, "GOODADS_CAMPAIGN_BUDGET_INVALID");
   }
   const platforms = Array.isArray(data.platforms) ? data.platforms.map((item) => String(item).toLowerCase()) : [];
-  const matchesProvider = account.provider === "google"
-    ? platforms.includes("google")
-    : platforms.some((provider) => provider === "facebook" || provider === "instagram" || provider === "meta");
+  const definition = PROVIDERS[account.provider];
+  const matchesProvider = definition.platforms.some((provider) => platforms.includes(provider));
   if (!matchesProvider) {
-    throw adsError(`${PROVIDERS[account.provider].name} is not selected on this campaign.`, 409, "GOODADS_AD_ACCOUNT_NOT_SELECTED");
+    throw adsError(`${definition.name} is not selected on this campaign.`, 409, "GOODADS_AD_ACCOUNT_NOT_SELECTED");
   }
   if (!data.startDate || !data.endDate || data.endDate < data.startDate) {
     throw adsError("Campaign dates are invalid.", 409, "GOODADS_CAMPAIGN_DATES_INVALID");
@@ -414,6 +532,17 @@ function validateCampaignForAccount(campaign, account) {
       "GOODADS_CAMPAIGN_COUNTRIES_REQUIRED"
     );
   }
+  if (!account.currency || !account.timezone) {
+    throw adsError(
+      `Refresh ${definition.name} account verification to load its currency and time zone before setup.`,
+      409,
+      "GOODADS_AD_ACCOUNT_LOCALE_REQUIRED"
+    );
+  }
+  const creative = data.creative || {};
+  if (!isPublicHttpsUrl(creative.destinationUrl)) {
+    throw adsError("Campaign delivery requires a public HTTPS destination URL.", 409, "GOODADS_DESTINATION_URL_REQUIRED");
+  }
   if (account.provider === "meta") {
     if (!account.metadata?.pageId) {
       throw adsError(
@@ -422,7 +551,7 @@ function validateCampaignForAccount(campaign, account) {
         "GOODADS_META_PAGE_REQUIRED"
       );
     }
-    if (!data.creative?.imageUrl) {
+    if (!isPublicHttpsUrl(creative.imageUrl)) {
       throw adsError("Meta delivery requires a public HTTPS creative image.", 409, "GOODADS_META_IMAGE_REQUIRED");
     }
   }
@@ -436,6 +565,29 @@ function validateCampaignForAccount(campaign, account) {
     if (!Array.isArray(data.searchDescriptions) || data.searchDescriptions.filter(Boolean).length < 2) {
       throw adsError("Google Search delivery requires at least two descriptions.", 409, "GOODADS_GOOGLE_DESCRIPTIONS_REQUIRED");
     }
+  }
+  if (["youtube", "tiktok"].includes(account.provider) && !isPublicHttpsUrl(creative.videoUrl)) {
+    throw adsError(
+      `${definition.name} delivery requires a public HTTPS creative video.`,
+      409,
+      "GOODADS_VIDEO_REQUIRED"
+    );
+  }
+  if (["linkedin", "pinterest"].includes(account.provider) && !isPublicHttpsUrl(creative.imageUrl)) {
+    throw adsError(
+      `${definition.name} delivery requires a public HTTPS creative image.`,
+      409,
+      "GOODADS_IMAGE_REQUIRED"
+    );
+  }
+  if (["x", "snapchat"].includes(account.provider)
+    && !isPublicHttpsUrl(creative.imageUrl)
+    && !isPublicHttpsUrl(creative.videoUrl)) {
+    throw adsError(
+      `${definition.name} delivery requires a public HTTPS image or video.`,
+      409,
+      "GOODADS_MEDIA_REQUIRED"
+    );
   }
 }
 
@@ -536,6 +688,16 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   );
   if (accountResult.rows.length !== accountIds.length) {
     throw adsError("Every selected ad account must be verified.", 409, "GOODADS_AD_ACCOUNT_NOT_VERIFIED");
+  }
+  const accountLocales = new Set(accountResult.rows.map((account) => (
+    `${boundedText(account.currency, 12).toUpperCase()}|${boundedText(account.timezone, 120)}`
+  )));
+  if (accountLocales.size !== 1 || [...accountLocales][0].startsWith("|")) {
+    throw adsError(
+      "One-click setup requires every selected ad account to use the same currency and time zone.",
+      409,
+      "GOODADS_AD_ACCOUNT_LOCALE_MISMATCH"
+    );
   }
   const snapshot = campaignSnapshot(campaign);
   const hash = snapshotHash(snapshot);
@@ -1099,35 +1261,53 @@ async function syncGoogleStatus(row, accessToken) {
   return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
 }
 
+function nativeAdapter(provider) {
+  const adapters = {
+    meta: {
+      create: createMetaDelivery,
+      updateStatus: updateMetaStatus,
+      sync: syncMetaStatus,
+      statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
+    },
+    google: {
+      create: createGoogleDelivery,
+      updateStatus: updateGoogleStatus,
+      sync: syncGoogleStatus,
+      statuses: { pause: "PAUSED", activate: "ENABLED", archive: "REMOVED" },
+    },
+  };
+  const adapter = adapters[provider];
+  if (!adapter) {
+    const name = PROVIDERS[provider]?.name || "This provider";
+    throw adsError(
+      `${name} native delivery adapter is not installed.`,
+      503,
+      "GOODADS_ADAPTER_NOT_INSTALLED"
+    );
+  }
+  return adapter;
+}
+
 async function executeOperation(row) {
+  const adapter = nativeAdapter(row.provider);
   const accessToken = await social.accessTokenForConnection(row);
   if (row.operation_type === "create") {
-    return row.provider === "meta"
-      ? createMetaDelivery(row, accessToken)
-      : createGoogleDelivery(row, accessToken);
+    return adapter.create(row, accessToken);
   }
   if (!row.provider_campaign_id) throw adsError("The provider campaign has not been created.");
   if (row.operation_type === "pause") {
-    const receipt = row.provider === "meta"
-      ? await updateMetaStatus(row, accessToken, "PAUSED")
-      : await updateGoogleStatus(row, accessToken, "PAUSED");
+    const receipt = await adapter.updateStatus(row, accessToken, adapter.statuses.pause);
     return { receipt, status: "paused" };
   }
   if (row.operation_type === "activate") {
-    const receipt = row.provider === "meta"
-      ? await updateMetaStatus(row, accessToken, "ACTIVE")
-      : await updateGoogleStatus(row, accessToken, "ENABLED");
+    const receipt = await adapter.updateStatus(row, accessToken, adapter.statuses.activate);
     return { receipt, status: "active" };
   }
   if (row.operation_type === "archive") {
-    const receipt = row.provider === "meta"
-      ? await updateMetaStatus(row, accessToken, "ARCHIVED")
-      : await updateGoogleStatus(row, accessToken, "REMOVED");
+    const receipt = await adapter.updateStatus(row, accessToken, adapter.statuses.archive);
     return { receipt, status: "archived" };
   }
-  return row.provider === "meta"
-    ? syncMetaStatus(row, accessToken)
-    : syncGoogleStatus(row, accessToken);
+  return adapter.sync(row, accessToken);
 }
 
 async function processOperation(row) {
@@ -1303,7 +1483,9 @@ module.exports = {
   _test: {
     providerAvailability,
     normalizeMetaAccount,
+    normalizeGoogleCustomer,
     metaObjective,
+    nativeAdapter,
     snapshotHash,
     validateCampaignForAccount,
   },

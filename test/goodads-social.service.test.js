@@ -7,7 +7,7 @@ const path = require("node:path");
 const social = require("../src/services/goodads-social.service");
 
 test("GoodAds social registry includes major publishing networks", () => {
-  for (const provider of ["google", "facebook", "instagram", "threads", "linkedin", "x", "tiktok", "pinterest", "reddit"]) {
+  for (const provider of ["google", "facebook", "instagram", "threads", "linkedin", "x", "tiktok", "pinterest", "snapchat", "reddit"]) {
     assert.ok(social.PROVIDERS[provider]);
     assert.ok(social.PROVIDERS[provider].authUrl.startsWith("https://"));
     assert.ok(social.PROVIDERS[provider].tokenUrl.startsWith("https://"));
