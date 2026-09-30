@@ -1684,6 +1684,170 @@ async function getCampaignState({ campaignId, context }) {
   };
 }
 
+function campaignPreflightReport({
+  campaign,
+  requestedAccountIds,
+  accounts,
+  providerCampaigns = [],
+  availabilityByProvider = {},
+  generatedAt = new Date().toISOString(),
+}) {
+  const accountById = new Map((accounts || []).map((account) => [String(account.id), account]));
+  const selectedAccounts = requestedAccountIds.map((id) => accountById.get(String(id))).filter(Boolean);
+  const missingAccountIds = requestedAccountIds.filter((id) => !accountById.has(String(id)));
+  const blockers = [];
+  if (campaign.status !== "ready") {
+    blockers.push({
+      code: "GOODADS_CAMPAIGN_NOT_READY",
+      detail: "Save this exact campaign version as ready before provider creation.",
+    });
+  }
+  if (missingAccountIds.length) {
+    blockers.push({
+      code: "GOODADS_AD_ACCOUNT_NOT_FOUND",
+      detail: `${missingAccountIds.length} selected ad account${missingAccountIds.length === 1 ? " is" : "s are"} unavailable to this organization.`,
+    });
+  }
+  const accountLocales = new Set(selectedAccounts.map((account) => (
+    `${boundedText(account.currency, 12).toUpperCase()}|${boundedText(account.timezone, 120)}`
+  )));
+  const accountLocaleIncomplete = selectedAccounts.some((account) => (
+    !boundedText(account.currency, 12) || !boundedText(account.timezone, 120)
+  ));
+  const accountLocaleVerified = selectedAccounts.length === requestedAccountIds.length
+    && !accountLocaleIncomplete
+    && accountLocales.size === 1;
+  if (!accountLocaleVerified) {
+    blockers.push({
+      code: "GOODADS_AD_ACCOUNT_LOCALE_MISMATCH",
+      detail: "Every selected ad account must use the same verified currency and time zone.",
+    });
+  }
+  const activeDeliveryByAccount = new Map((providerCampaigns || [])
+    .filter((delivery) => delivery.status !== "archived")
+    .map((delivery) => [String(delivery.ad_account_id || delivery.adAccountId), delivery]));
+  const accountChecks = selectedAccounts.map((account) => {
+    const issues = [];
+    if (account.status !== "verified") {
+      issues.push({
+        code: "GOODADS_AD_ACCOUNT_NOT_VERIFIED",
+        detail: "Refresh this ad account before provider creation.",
+      });
+    }
+    const availability = availabilityByProvider[account.provider] || providerAvailability(account.provider);
+    if (!availability.available) {
+      issues.push({
+        code: "GOODADS_AD_PROVIDER_NOT_CONFIGURED",
+        detail: `${availability.name} is not fully configured in GoodBase.`,
+      });
+    }
+    try {
+      validateCampaignForAccount(campaign, account);
+    } catch (error) {
+      issues.push({
+        code: boundedText(error.code, 100) || "GOODADS_CAMPAIGN_PREFLIGHT_FAILED",
+        detail: boundedText(error.message, 1000) || "Campaign validation failed.",
+      });
+    }
+    const uniqueIssues = [...new Map(issues.map((issue) => [`${issue.code}:${issue.detail}`, issue])).values()];
+    const existingDelivery = activeDeliveryByAccount.get(String(account.id));
+    return {
+      accountId: account.id,
+      provider: account.provider,
+      providerName: availability.name,
+      accountName: account.name,
+      currency: boundedText(account.currency, 12).toUpperCase(),
+      timezone: boundedText(account.timezone, 120),
+      status: uniqueIssues.length ? "block" : "pass",
+      issues: uniqueIssues,
+      existingDelivery: existingDelivery ? {
+        id: existingDelivery.id,
+        status: existingDelivery.status,
+        providerCampaignId: existingDelivery.provider_campaign_id || existingDelivery.providerCampaignId || null,
+      } : null,
+      willCreatePausedDelivery: !existingDelivery && uniqueIssues.length === 0,
+    };
+  });
+  for (const check of accountChecks) blockers.push(...check.issues.map((issue) => ({ ...issue, accountId: check.accountId })));
+  const start = Date.parse(`${campaign.data?.startDate || ""}T00:00:00.000Z`);
+  const end = Date.parse(`${campaign.data?.endDate || ""}T00:00:00.000Z`);
+  const deliveryDays = Number.isFinite(start) && Number.isFinite(end) && end >= start
+    ? Math.floor((end - start) / 86400000) + 1
+    : 0;
+  const dailyBudgetPerAccount = Math.max(Number(campaign.data?.dailyBudget) || 0, 0);
+  const combinedDailyBudget = dailyBudgetPerAccount * selectedAccounts.length;
+  const planningMaximum = combinedDailyBudget * deliveryDays;
+  return {
+    campaignId: campaign.id,
+    campaignVersion: Number(campaign.version || 1),
+    generatedAt,
+    ready: blockers.length === 0,
+    readOnly: true,
+    providerNetworkCalls: 0,
+    providerWrites: 0,
+    activatesAdvertising: false,
+    startsSpend: false,
+    deliveryMode: "paused_only",
+    blockers,
+    accountChecks,
+    exposure: {
+      accountCount: selectedAccounts.length,
+      deliveryDays,
+      dailyBudgetPerAccount,
+      combinedDailyBudget,
+      planningMaximum,
+      currency: accountLocaleVerified
+        ? boundedText(selectedAccounts[0]?.currency, 12).toUpperCase()
+        : null,
+      timezone: accountLocaleVerified
+        ? boundedText(selectedAccounts[0]?.timezone, 120)
+        : null,
+    },
+    existingDeliveries: accountChecks.filter((check) => check.existingDelivery).length,
+    missingPausedDeliveries: accountChecks.filter((check) => check.willCreatePausedDelivery).length,
+  };
+}
+
+async function preflightCampaign({ campaignId, adAccountIds, context }) {
+  const safeCampaignId = requireUuid(campaignId, "campaign ID");
+  const accountIds = [...new Set(Array.isArray(adAccountIds) ? adAccountIds.map((id) => requireUuid(id, "ad account ID")) : [])];
+  if (!accountIds.length || accountIds.length > 10) {
+    throw adsError("Select between one and ten ad accounts for preflight.");
+  }
+  const [campaignResult, accountResult, deliveryResult] = await Promise.all([
+    query(
+      `SELECT * FROM goodads_resources
+       WHERE id = $1::uuid AND organization_id = $2
+         AND resource_type = 'campaigns' AND archived_at IS NULL`,
+      [safeCampaignId, context.organizationId]
+    ),
+    query(
+      `SELECT * FROM goodads_ad_accounts
+       WHERE organization_id = $1 AND id = ANY($2::uuid[])`,
+      [context.organizationId, accountIds]
+    ),
+    query(
+      `SELECT * FROM goodads_provider_campaigns
+       WHERE organization_id = $1 AND campaign_id = $2::uuid
+         AND ad_account_id = ANY($3::uuid[])`,
+      [context.organizationId, safeCampaignId, accountIds]
+    ),
+  ]);
+  const campaign = campaignResult.rows[0];
+  if (!campaign) throw adsError("Campaign was not found.", 404, "GOODADS_CAMPAIGN_NOT_FOUND");
+  const availabilityByProvider = Object.fromEntries(
+    [...new Set(accountResult.rows.map((account) => account.provider))]
+      .map((provider) => [provider, providerAvailability(provider)])
+  );
+  return campaignPreflightReport({
+    campaign,
+    requestedAccountIds: accountIds,
+    accounts: accountResult.rows,
+    providerCampaigns: deliveryResult.rows,
+    availabilityByProvider,
+  });
+}
+
 async function launchCampaign({ campaignId, adAccountIds, context, userId, idempotencyKey }) {
   requireManagement(context);
   const requestKey = requireIdempotencyKey(idempotencyKey);
@@ -1711,7 +1875,10 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   const accountLocales = new Set(accountResult.rows.map((account) => (
     `${boundedText(account.currency, 12).toUpperCase()}|${boundedText(account.timezone, 120)}`
   )));
-  if (accountLocales.size !== 1 || [...accountLocales][0].startsWith("|")) {
+  const accountLocaleIncomplete = accountResult.rows.some((account) => (
+    !boundedText(account.currency, 12) || !boundedText(account.timezone, 120)
+  ));
+  if (accountLocaleIncomplete || accountLocales.size !== 1) {
     throw adsError(
       "One-click setup requires every selected ad account to use the same currency and time zone.",
       409,
@@ -4830,6 +4997,7 @@ module.exports = {
   saveAdAccount,
   disableAdAccount,
   getCampaignState,
+  preflightCampaign,
   launchCampaign,
   queueLifecycleOperation,
   requestActivationApproval,
@@ -4880,5 +5048,6 @@ module.exports = {
     bindCreateOperationSnapshot,
     snapshotHash,
     validateCampaignForAccount,
+    campaignPreflightReport,
   },
 };

@@ -277,6 +277,131 @@ test("Meta delivery enforces exact Facebook and Instagram placement intent", () 
   }, account));
 });
 
+test("campaign preflight proves read-only paused exposure for the exact saved version", () => {
+  const campaign = {
+    id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    version: 7,
+    status: "ready",
+    data: {
+      platforms: ["facebook"],
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      creative: {
+        destinationUrl: "https://goodos.app/",
+        imageUrl: "https://cdn.goodos.app/goodads/meta.png",
+      },
+    },
+  };
+  const accounts = [
+    {
+      id: "a73b7d9f-292f-48b1-9557-3c02b185683c",
+      provider: "meta",
+      name: "GoodOS Main",
+      status: "verified",
+      currency: "USD",
+      timezone: "America/Los_Angeles",
+      metadata: { pageId: "12345" },
+    },
+    {
+      id: "9660d441-897d-4464-b960-c92ded8a4f12",
+      provider: "meta",
+      name: "GoodOS West",
+      status: "verified",
+      currency: "USD",
+      timezone: "America/Los_Angeles",
+      metadata: { pageId: "67890" },
+    },
+  ];
+  const report = ads._test.campaignPreflightReport({
+    campaign,
+    requestedAccountIds: accounts.map((account) => account.id),
+    accounts,
+    providerCampaigns: [{
+      id: "d5802d7f-0562-485c-b8f6-2bf662850e08",
+      ad_account_id: accounts[0].id,
+      status: "paused",
+      provider_campaign_id: "provider-123",
+    }],
+    availabilityByProvider: { meta: { available: true, name: "Meta Ads" } },
+    generatedAt: "2026-09-30T12:00:00.000Z",
+  });
+
+  assert.equal(report.ready, true);
+  assert.equal(report.campaignVersion, 7);
+  assert.equal(report.readOnly, true);
+  assert.equal(report.providerNetworkCalls, 0);
+  assert.equal(report.providerWrites, 0);
+  assert.equal(report.activatesAdvertising, false);
+  assert.equal(report.startsSpend, false);
+  assert.equal(report.deliveryMode, "paused_only");
+  assert.deepEqual(report.exposure, {
+    accountCount: 2,
+    deliveryDays: 8,
+    dailyBudgetPerAccount: 25,
+    combinedDailyBudget: 50,
+    planningMaximum: 400,
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+  });
+  assert.equal(report.existingDeliveries, 1);
+  assert.equal(report.missingPausedDeliveries, 1);
+  assert.equal(report.accountChecks[0].willCreatePausedDelivery, false);
+  assert.equal(report.accountChecks[1].willCreatePausedDelivery, true);
+});
+
+test("campaign preflight and launch fail closed when account locale is incomplete", () => {
+  const accountId = "a73b7d9f-292f-48b1-9557-3c02b185683c";
+  const report = ads._test.campaignPreflightReport({
+    campaign: {
+      id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+      version: 2,
+      status: "ready",
+      data: {
+        platforms: ["facebook"],
+        objective: "traffic",
+        dailyBudget: 25,
+        startDate: "2026-10-05",
+        endDate: "2026-10-12",
+        targetCountries: ["US"],
+        creative: {
+          destinationUrl: "https://goodos.app/",
+          imageUrl: "https://cdn.goodos.app/goodads/meta.png",
+        },
+      },
+    },
+    requestedAccountIds: [accountId],
+    accounts: [{
+      id: accountId,
+      provider: "meta",
+      name: "Incomplete account",
+      status: "verified",
+      currency: "USD",
+      timezone: "",
+      metadata: { pageId: "12345" },
+    }],
+    availabilityByProvider: { meta: { available: false, name: "Meta Ads" } },
+    generatedAt: "2026-09-30T12:00:00.000Z",
+  });
+
+  assert.equal(report.ready, false);
+  assert.equal(report.exposure.currency, null);
+  assert.equal(report.exposure.timezone, null);
+  assert.equal(report.missingPausedDeliveries, 0);
+  assert.equal(report.blockers.some((blocker) => blocker.code === "GOODADS_AD_ACCOUNT_LOCALE_MISMATCH"), true);
+  assert.equal(report.blockers.some((blocker) => blocker.code === "GOODADS_AD_ACCOUNT_LOCALE_REQUIRED"), true);
+  assert.equal(report.blockers.some((blocker) => blocker.code === "GOODADS_AD_PROVIDER_NOT_CONFIGURED"), true);
+
+  const source = fs.readFileSync(
+    path.join(__dirname, "../src/services/goodads-ads.service.js"),
+    "utf8"
+  );
+  assert.match(source, /const accountLocaleIncomplete = accountResult\.rows\.some/);
+  assert.match(source, /if \(accountLocaleIncomplete \|\| accountLocales\.size !== 1\)/);
+});
+
 test("Google account discovery preserves locale and excludes manager accounts", () => {
   assert.deepEqual(
     ads._test.normalizeGoogleCustomer("1234567890", {
@@ -1140,6 +1265,7 @@ test("paid campaign migration installs verified accounts, durable operations, an
   assert.match(migration, /activation_approval_id/);
   assert.match(migration, /'goodads\.ads\.dispatch'/);
   assert.match(jobs, /case "goodads\.ads\.dispatch"/);
+  assert.match(routes, /ads\.preflightCampaign/);
   assert.match(routes, /ads\.requestActivationApproval/);
   assert.match(routes, /ads\.queueLifecycleOperation/);
   assert.match(routes, /ads\.retryOperation/);
