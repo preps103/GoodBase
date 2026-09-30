@@ -1255,6 +1255,13 @@ function youtubeVideoId(value) {
   }
 }
 
+function providerCreativeVideoUrl(data = {}, provider) {
+  const creative = data.creative || {};
+  if (provider === "youtube") return boundedText(creative.youtubeVideoUrl ?? creative.videoUrl, 4000);
+  if (provider === "tiktok") return boundedText(creative.tiktokVideoUrl ?? creative.videoUrl, 4000);
+  return boundedText(creative.videoUrl, 4000);
+}
+
 function googlePoliticalAdvertisingStatus(value) {
   if (value === true) return "CONTAINS_EU_POLITICAL_ADVERTISING";
   if (value === false) return "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
@@ -1314,6 +1321,7 @@ function validateCampaignForAccount(campaign, account) {
     );
   }
   const creative = data.creative || {};
+  const providerVideoUrl = providerCreativeVideoUrl(data, account.provider);
   if (!isPublicHttpsUrl(creative.destinationUrl)) {
     throw adsError("Campaign delivery requires a public HTTPS destination URL.", 409, "GOODADS_DESTINATION_URL_REQUIRED");
   }
@@ -1348,7 +1356,7 @@ function validateCampaignForAccount(campaign, account) {
       throw adsError("Google Search delivery requires at least two descriptions.", 409, "GOODADS_GOOGLE_DESCRIPTIONS_REQUIRED");
     }
   }
-  if (["youtube", "tiktok"].includes(account.provider) && !isPublicHttpsUrl(creative.videoUrl)) {
+  if (["youtube", "tiktok"].includes(account.provider) && !isPublicHttpsUrl(providerVideoUrl)) {
     throw adsError(
       `${definition.name} delivery requires a public HTTPS creative video.`,
       409,
@@ -1384,7 +1392,7 @@ function validateCampaignForAccount(campaign, account) {
         "GOODADS_TIKTOK_EVENT_SOURCE_REQUIRED"
       );
     }
-    if (!isManagedGoodOsHttpsUrl(creative.videoUrl)) {
+    if (!isManagedGoodOsHttpsUrl(providerVideoUrl)) {
       throw adsError(
         "TikTok creative video must be stored on a managed GoodOS HTTPS address.",
         409,
@@ -1409,7 +1417,7 @@ function validateCampaignForAccount(campaign, account) {
         "GOODADS_YOUTUBE_CONVERSION_ACTION_REQUIRED"
       );
     }
-    if (!youtubeVideoId(creative.videoUrl)) {
+    if (!youtubeVideoId(providerVideoUrl)) {
       throw adsError(
         "YouTube delivery requires a valid YouTube watch, Shorts, live, embed, or youtu.be video URL.",
         409,
@@ -2486,7 +2494,7 @@ function googleDemandGenOperations(row, { logoBase64, geoTargetResources }) {
         create: {
           resourceName: resourceNames.videoAsset,
           name: names.videoAsset,
-          youtubeVideoAsset: { youtubeVideoId: youtubeVideoId(creative.videoUrl) },
+          youtubeVideoAsset: { youtubeVideoId: youtubeVideoId(providerCreativeVideoUrl(data, "youtube")) },
         },
       },
     },
@@ -2548,7 +2556,7 @@ async function findExistingYouTubeDelivery(row, accessToken) {
       adGroupResource: existing.adGroup?.resourceName || null,
       adResource: existing.adGroupAd.resourceName,
       customerId: String(row.provider_account_id).replace(/\D/g, ""),
-      youtubeVideoId: youtubeVideoId(row.campaign_data?.creative?.videoUrl),
+      youtubeVideoId: youtubeVideoId(providerCreativeVideoUrl(row.campaign_data, "youtube")),
       deliveryAdapter: "demand_gen_video",
       youtubeOnly: true,
       recovered: true,
@@ -2617,7 +2625,7 @@ async function createYouTubeDelivery(row, accessToken) {
       adGroupResource,
       adResource,
       customerId,
-      youtubeVideoId: youtubeVideoId(row.campaign_data?.creative?.videoUrl),
+      youtubeVideoId: youtubeVideoId(providerCreativeVideoUrl(row.campaign_data, "youtube")),
       geoTargetResources,
       deliveryAdapter: "demand_gen_video",
       youtubeOnly: true,
@@ -2791,7 +2799,7 @@ function tiktokEntityId(payload, key) {
 }
 
 async function uploadTikTokVideo(row, accessToken) {
-  const videoUrl = boundedText(row.campaign_data?.creative?.videoUrl, 4000);
+  const videoUrl = providerCreativeVideoUrl(row.campaign_data, "tiktok");
   const form = new FormData();
   form.append("advertiser_id", boundedText(row.provider_account_id, 120));
   form.append("upload_type", "UPLOAD_BY_URL");
@@ -4821,6 +4829,7 @@ module.exports = {
     metaPublisherPlatforms,
     normalizeGoogleCustomer,
     youtubeVideoId,
+    providerCreativeVideoUrl,
     googlePoliticalAdvertisingStatus,
     googleDemandGenNames,
     googleDemandGenOperations,

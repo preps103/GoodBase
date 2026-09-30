@@ -301,7 +301,8 @@ test("YouTube adapter builds one atomic paused Demand Gen stack with YouTube-onl
         headline: "Run your business in one place",
         primaryText: "Plan, approve, publish, and measure every campaign from one governed workspace.",
         destinationUrl: "https://goodos.app/",
-        videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        videoUrl: "https://cdn.goodos.app/goodads/tiktok-launch.mp4",
+        youtubeVideoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         logoUrl: "https://cdn.goodos.app/goodads/logo.png",
       },
     },
@@ -394,6 +395,55 @@ test("YouTube setup fails closed on compliance, objective, asset, and copy gaps"
       data: { ...campaign.data, creative: { ...campaign.data.creative, businessName: "x".repeat(26) } },
     }, account),
     (error) => error.code === "GOODADS_YOUTUBE_COPY_TOO_LONG"
+  );
+});
+
+test("one campaign resolves independent YouTube and TikTok video assets", () => {
+  const campaign = {
+    status: "ready",
+    data: {
+      platforms: ["youtube", "tiktok"],
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      containsEuPoliticalAdvertising: false,
+      creative: {
+        businessName: "GoodOS",
+        headline: "Meet GoodOS",
+        primaryText: "Run your business from one governed workspace.",
+        destinationUrl: "https://goodos.app/",
+        youtubeVideoUrl: "https://youtu.be/dQw4w9WgXcQ",
+        tiktokVideoUrl: "https://cdn.goodos.app/goodads/launch.mp4",
+        logoUrl: "https://cdn.goodos.app/goodads/logo.png",
+      },
+    },
+  };
+  const youtubeAccount = {
+    provider: "youtube",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: { deliveryReady: true },
+  };
+  const tiktokAccount = {
+    provider: "tiktok",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: {
+      deliveryReady: true,
+      identityId: "7422222222222222222",
+      identityType: "TT_USER",
+    },
+  };
+
+  assert.equal(ads._test.providerCreativeVideoUrl(campaign.data, "youtube"), campaign.data.creative.youtubeVideoUrl);
+  assert.equal(ads._test.providerCreativeVideoUrl(campaign.data, "tiktok"), campaign.data.creative.tiktokVideoUrl);
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, youtubeAccount));
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, tiktokAccount));
+  assert.equal(
+    ads._test.providerCreativeVideoUrl({ creative: { videoUrl: "https://cdn.goodos.app/legacy.mp4" } }, "tiktok"),
+    "https://cdn.goodos.app/legacy.mp4"
   );
 });
 
