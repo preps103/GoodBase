@@ -207,6 +207,7 @@ router.get("/console-v2.js", (req, res) => {
 });
 
 router.get("/goodbase-console-login.js", (req, res) => {
+  res.set("Cache-Control", "no-store");
   res.type("application/javascript");
   res.sendFile(path.join(__dirname, "../public/goodbase-console-login.js"));
 });
@@ -381,6 +382,18 @@ router.get("/packages/goodos-topbar-widget-4.9.0.tgz", (req, res) => {
     path.resolve(
       __dirname,
       "../public/packages/goodos-topbar-widget-4.9.0.tgz",
+    ),
+  );
+});
+
+router.get("/packages/goodos-topbar-widget-4.10.0.tgz", (req, res) => {
+  res.set("Cross-Origin-Resource-Policy", "cross-origin");
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res.type("application/gzip");
+  res.sendFile(
+    path.resolve(
+      __dirname,
+      "../public/packages/goodos-topbar-widget-4.10.0.tgz",
     ),
   );
 });

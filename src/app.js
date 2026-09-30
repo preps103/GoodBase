@@ -373,6 +373,7 @@ app.get("/console-v2.js", (req, res) => {
 });
 
 app.get("/goodbase-console-login.js", (req, res) => {
+  res.set("Cache-Control", "no-store");
   res.type("application/javascript");
   res.sendFile(require("path").join(__dirname, "public/goodbase-console-login.js"));
 });

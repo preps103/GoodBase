@@ -37,7 +37,7 @@ test("the registry discovers active products without a fixed application count",
 test("every active product declares the canonical login integration and theme tokens", () => {
   assert.equal(manifest.canonicalLogin.owner, "goodbase");
   assert.equal(manifest.canonicalLogin.package, "@goodos/topbar-widget");
-  assert.equal(manifest.canonicalLogin.version, "4.9.0");
+  assert.equal(manifest.canonicalLogin.version, "4.10.0");
   assert.deepEqual(
     manifest.canonicalLogin.requiredComponents,
     ["GoodOSLoginShell", "GoodOSLoginWidget"]
@@ -52,16 +52,18 @@ test("every active product declares the canonical login integration and theme to
   }
 });
 
-test("every product frontend declares its canonical managed publishing target", () => {
+test("every product frontend uses its declared externally managed publishing target", () => {
   const projectIds = [];
   const sitesApplications = manifest.applications.filter((application) => application.deploymentType === "sites");
-  for (const application of sitesApplications) {
-    assert.equal(application.deploymentType, "sites");
+  for (const application of manifest.applications) {
+    assert.ok(["sites", "worker"].includes(application.deploymentType));
     assert.equal(application.deploymentManaged, false);
     assert.equal(Object.hasOwn(application, "productionPath"), false);
     assert.equal(Object.hasOwn(application, "service"), false);
-    assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
-    projectIds.push(application.hostingProjectId);
+    if (application.deploymentType === "sites") {
+      assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
+      projectIds.push(application.hostingProjectId);
+    }
   }
   assert.equal(new Set(projectIds).size, sitesApplications.length);
 

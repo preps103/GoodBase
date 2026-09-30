@@ -4,12 +4,13 @@ import {
   createElement,
   isValidElement,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
 
 export const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
-export const GOODOS_LOGIN_WIDGET_VERSION = "1.8.0";
+export const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
@@ -55,6 +56,98 @@ export function goodOSPasskeysSupported() {
     typeof window.PublicKeyCredential !== "undefined" &&
     typeof navigator !== "undefined" &&
     typeof navigator.credentials?.get === "function";
+}
+
+function decodeBase64Url(value) {
+  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "===".slice((normalized.length + 3) % 4);
+  const decoded = atob(padded);
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+
+function encodeBase64Url(value) {
+  const bytes = new Uint8Array(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function authenticationOptionsJSON(options) {
+  return {
+    ...options,
+    challenge: decodeBase64Url(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map((credential) => ({
+      ...credential,
+      id: decodeBase64Url(credential.id),
+    })),
+  };
+}
+
+function authenticationCredentialJSON(credential) {
+  return {
+    id: credential.id,
+    rawId: encodeBase64Url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment || undefined,
+    clientExtensionResults: credential.getClientExtensionResults(),
+    response: {
+      authenticatorData: encodeBase64Url(credential.response.authenticatorData),
+      clientDataJSON: encodeBase64Url(credential.response.clientDataJSON),
+      signature: encodeBase64Url(credential.response.signature),
+      userHandle: credential.response.userHandle
+        ? encodeBase64Url(credential.response.userHandle)
+        : undefined,
+    },
+  };
+}
+
+async function goodOSPasskeyRequest(path, options = {}) {
+  const response = await fetch(`${GOODOS_AUTH_ORIGIN}${path}`, {
+    ...options,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.success === false) {
+    throw new Error(payload.message || payload.error || "GoodBase passkey sign-in failed.");
+  }
+  return payload.data || payload;
+}
+
+export async function authenticateWithGoodOSPasskey({ conditional = false, signal } = {}) {
+  if (!goodOSPasskeysSupported()) {
+    throw new Error("This browser cannot use a fingerprint or passkey.");
+  }
+  const ceremony = await goodOSPasskeyRequest(
+    "/api/auth/passkeys/authentication/options",
+    { method: "POST", body: "{}", signal },
+  );
+  const request = {
+    publicKey: authenticationOptionsJSON(ceremony.options),
+    signal,
+  };
+  if (conditional) request.mediation = "conditional";
+  const credential = await navigator.credentials.get(request);
+  if (!credential) throw new Error("No passkey was selected.");
+  const verified = await goodOSPasskeyRequest(
+    "/api/auth/passkeys/authentication/verify",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        challengeId: ceremony.challengeId,
+        response: authenticationCredentialJSON(credential),
+      }),
+      signal,
+    },
+  );
+  if (verified.token) {
+    try { localStorage.setItem("goodos_token", verified.token); } catch {}
+  }
+  return verified;
 }
 
 function classes(...values) {
@@ -599,6 +692,10 @@ export function GoodOSLoginWidget({
   const [mode, setMode] = useState(initialMode);
   const [showPassword, setShowPassword] = useState(false);
   const [nativePasskeyAvailable, setNativePasskeyAvailable] = useState(false);
+  const [nativePasskeyLoading, setNativePasskeyLoading] = useState(false);
+  const [nativePasskeyError, setNativePasskeyError] = useState("");
+  const conditionalPasskeyStarted = useRef(false);
+  const conditionalPasskeyController = useRef(null);
   const loginId = `${String(appName).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-goodos-login`;
   const emailId = `${loginId}-username`;
   const passwordId = `${loginId}-password`;
@@ -619,13 +716,48 @@ export function GoodOSLoginWidget({
     setNativePasskeyAvailable(goodOSPasskeysSupported());
   }, []);
 
-  const beginPasskeySignIn = () => {
+  useEffect(() => {
+    if (
+      !showPasskey ||
+      conditionalPasskeyStarted.current ||
+      typeof PublicKeyCredential === "undefined" ||
+      typeof PublicKeyCredential.isConditionalMediationAvailable !== "function"
+    ) return undefined;
+    conditionalPasskeyStarted.current = true;
+    const controller = new AbortController();
+    conditionalPasskeyController.current = controller;
+    void PublicKeyCredential.isConditionalMediationAvailable()
+      .then((available) => available
+        ? authenticateWithGoodOSPasskey({ conditional: true, signal: controller.signal })
+        : null)
+      .then((authenticated) => {
+        if (authenticated) window.location.reload();
+      })
+      .catch((reason) => {
+        if (reason?.name !== "AbortError" && reason?.name !== "NotAllowedError") {
+          console.warn("Conditional GoodOS passkey sign-in could not start.", reason);
+        }
+      });
+    return () => controller.abort();
+  }, [showPasskey]);
+
+  const beginPasskeySignIn = async () => {
+    conditionalPasskeyController.current?.abort();
     if (onPasskeySignIn) {
       onPasskeySignIn();
       return;
     }
-    if (typeof window !== "undefined") {
-      window.location.assign(goodOSPasskeyHandoffUrl(window.location.href));
+    setNativePasskeyLoading(true);
+    setNativePasskeyError("");
+    try {
+      await authenticateWithGoodOSPasskey();
+      window.location.reload();
+    } catch (reason) {
+      if (reason?.name !== "AbortError" && reason?.name !== "NotAllowedError") {
+        setNativePasskeyError(reason instanceof Error ? reason.message : "Fingerprint sign-in failed.");
+      }
+    } finally {
+      setNativePasskeyLoading(false);
     }
   };
 
@@ -732,7 +864,7 @@ export function GoodOSLoginWidget({
                   className: "goodos-login-widget__input",
                   type: "email",
                   inputMode: "email",
-                  autoComplete: "username",
+                  autoComplete: showPasskey ? "username webauthn" : "username",
                   autoCapitalize: "none",
                   spellCheck: false,
                   enterKeyHint: "next",
@@ -762,7 +894,7 @@ export function GoodOSLoginWidget({
                   name: "password",
                   className: "goodos-login-widget__input",
                   type: showPassword ? "text" : "password",
-                  autoComplete: "current-password",
+                  autoComplete: showPasskey ? "current-password webauthn" : "current-password",
                   enterKeyHint: "go",
                   value: password,
                   onChange: (event) => onPasswordChange?.(event.target.value, event),
@@ -775,12 +907,12 @@ export function GoodOSLoginWidget({
                   {
                     className: "goodos-login-widget__passkey-trigger",
                     type: "button",
-                    disabled: loading || passkeyLoading,
-                    onClick: beginPasskeySignIn,
-                    "aria-label": passkeyLoading
+                    disabled: loading || passkeyLoading || nativePasskeyLoading,
+                    onClick: () => void beginPasskeySignIn(),
+                    "aria-label": passkeyLoading || nativePasskeyLoading
                       ? "Waiting for your device passkey"
                       : "Sign in with a passkey",
-                    title: passkeyLoading
+                    title: passkeyLoading || nativePasskeyLoading
                       ? "Waiting for your device passkey"
                       : "Sign in with a passkey",
                   },
@@ -822,7 +954,7 @@ export function GoodOSLoginWidget({
               createElement(FingerprintMark, { size: 20 }),
               passkeyEnrollmentLoading ? "Creating passkey…" : passkeyEnrollmentLabel,
             ),
-            error && createElement("div", { className: "goodos-login-widget__error", role: "alert" }, error),
+            (error || nativePasskeyError) && createElement("div", { className: "goodos-login-widget__error", role: "alert" }, error || nativePasskeyError),
             createElement(
               "button",
               { className: "goodos-login-widget__submit", type: "submit", disabled: loading, "data-goodbase-login-submit": "" },

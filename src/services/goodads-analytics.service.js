@@ -193,10 +193,16 @@ async function syncRows(rows, period) {
   const results = [];
   for (const row of rows) {
     try {
+      const adapter = { meta: metaMetrics, google: googleMetrics }[row.provider];
+      if (!adapter) {
+        throw analyticsError(
+          `Analytics adapter is not installed for ${boundedText(row.provider, 40)}.`,
+          503,
+          "GOODADS_ANALYTICS_ADAPTER_NOT_INSTALLED"
+        );
+      }
       const accessToken = await social.accessTokenForConnection(row);
-      const metrics = row.provider === "meta"
-        ? await metaMetrics(row, accessToken, period)
-        : await googleMetrics(row, accessToken, period);
+      const metrics = await adapter(row, accessToken, period);
       await query(
         `INSERT INTO goodads_analytics_snapshots (
            organization_id, provider_campaign_id, provider, provider_account_id,

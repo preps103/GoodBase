@@ -40,6 +40,7 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
     "data-goodbase-login-fields",
     "data-goodbase-login-field",
     "data-goodbase-login-password",
+    "data-goodbase-login-passkey",
     "data-goodbase-login-password-toggle",
     "data-goodbase-login-recovery",
     "data-goodbase-login-submit",
@@ -50,6 +51,8 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
     "/api/auth/register",
     "/api/auth/password-reset/request",
     "/api/auth/password-reset/complete",
+    "/api/auth/passkeys/authentication/options",
+    "/api/auth/passkeys/authentication/verify",
     "/api/goodbase/v1/growth/auth/providers",
     "/api/oidc/start/"
   ]) assert.match(authClient, new RegExp(endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -57,6 +60,11 @@ test("GoodBase auth UI implements the complete shared product panel", () => {
   assert.match(routes, /router\.get\("\/register"/);
   assert.match(authClient, /setPasswordVisibility/);
   assert.match(authClient, /aria-pressed/);
+  assert.match(authUi, /autocomplete="username webauthn"/);
+  assert.match(authUi, /autocomplete="current-password webauthn"/);
+  assert.match(authClient, /PublicKeyCredential\.isConditionalMediationAvailable/);
+  assert.match(authClient, /navigator\.credentials\.get/);
+  assert.match(authClient, /mediation = "conditional"/);
   assert.doesNotMatch(authUi, /Use Touch ID or passkey/);
   assert.doesNotMatch(authClient, /url\.searchParams\.set\("passkey", "1"\)/);
   assert.doesNotMatch(authUi, /Authentication and account security are managed through GoodBase/);
@@ -74,7 +82,7 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.9\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.10\.0"/);
   assert.match(sharedWidget, /goodOSPasskeyHandoffUrl/);
   assert.doesNotMatch(sharedWidget, /Use Touch ID or passkey/);
   assert.match(sharedWidget, /Sign in with a passkey/);
@@ -82,6 +90,12 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
   assert.match(sharedWidget, /Face ID, Touch ID, Windows Hello, a fingerprint, or your device PIN/);
   assert.doesNotMatch(sharedWidget, /Set up Touch ID on this Mac/);
   assert.match(sharedWidget, /goodos-login-widget__passkey-trigger/);
+  assert.match(sharedWidget, /username webauthn/);
+  assert.match(sharedWidget, /current-password webauthn/);
+  assert.match(sharedWidget, /isConditionalMediationAvailable/);
+  assert.match(sharedWidget, /authenticateWithGoodOSPasskey/);
+  assert.match(sharedWidget, /navigator\.credentials\.get/);
+  assert.match(sharedWidget, /api\/auth\/passkeys\/authentication\/verify/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
   assert.match(sharedWidgetSync, /package-lock\.json/);
