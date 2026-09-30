@@ -1295,6 +1295,90 @@ function metaPublisherPlatforms(data = {}) {
   return platforms;
 }
 
+function campaignCalendarDate(value, label) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw adsError(`${label} must use YYYY-MM-DD.`, 409, "GOODADS_CAMPAIGN_DATES_INVALID");
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (
+    date.getUTCFullYear() !== Number(match[1])
+    || date.getUTCMonth() !== Number(match[2]) - 1
+    || date.getUTCDate() !== Number(match[3])
+  ) {
+    throw adsError(`${label} is not a valid calendar date.`, 409, "GOODADS_CAMPAIGN_DATES_INVALID");
+  }
+  return date;
+}
+
+function zonedMidnightInstant(value, timezone, exclusiveEnd = false) {
+  const calendarDate = campaignCalendarDate(value, exclusiveEnd ? "Campaign end date" : "Campaign start date");
+  if (exclusiveEnd) calendarDate.setUTCDate(calendarDate.getUTCDate() + 1);
+  let formatter;
+  try {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: boundedText(timezone, 120),
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+  } catch {
+    throw adsError(
+      "Refresh the ad account to load a valid IANA time zone before provider creation.",
+      409,
+      "GOODADS_AD_ACCOUNT_TIMEZONE_INVALID"
+    );
+  }
+  const target = {
+    year: calendarDate.getUTCFullYear(),
+    month: calendarDate.getUTCMonth() + 1,
+    day: calendarDate.getUTCDate(),
+    hour: 0,
+    minute: 0,
+    second: 0,
+  };
+  const targetAsUtc = Date.UTC(target.year, target.month - 1, target.day);
+  let instant = targetAsUtc;
+  const partsAt = (time) => Object.fromEntries(
+    formatter.formatToParts(new Date(time))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)])
+  );
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = partsAt(instant);
+    const observedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    const adjustment = targetAsUtc - observedAsUtc;
+    if (adjustment === 0) break;
+    instant += adjustment;
+  }
+  const resolved = partsAt(instant);
+  if (Object.entries(target).some(([key, expected]) => resolved[key] !== expected)) {
+    throw adsError(
+      "The ad-account time zone cannot represent this campaign boundary safely.",
+      409,
+      "GOODADS_CAMPAIGN_TIMEZONE_BOUNDARY_INVALID"
+    );
+  }
+  return new Date(instant).toISOString();
+}
+
+function campaignScheduleBounds(data = {}, timezone) {
+  const start = campaignCalendarDate(data.startDate, "Campaign start date");
+  const end = campaignCalendarDate(data.endDate, "Campaign end date");
+  if (end < start) throw adsError("Campaign dates are invalid.", 409, "GOODADS_CAMPAIGN_DATES_INVALID");
+  return {
+    timezone: boundedText(timezone, 120),
+    startDate: data.startDate,
+    endDate: data.endDate,
+    startAt: zonedMidnightInstant(data.startDate, timezone),
+    endAt: zonedMidnightInstant(data.endDate, timezone, true),
+    endExclusive: true,
+    deliveryDays: Math.floor((end.getTime() - start.getTime()) / 86400000) + 1,
+  };
+}
+
 function validateCampaignForAccount(campaign, account) {
   const data = campaign.data || {};
   if (campaign.status !== "ready") {
@@ -1332,6 +1416,7 @@ function validateCampaignForAccount(campaign, account) {
       "GOODADS_AD_ACCOUNT_LOCALE_REQUIRED"
     );
   }
+  campaignScheduleBounds(data, account.timezone);
   const creative = data.creative || {};
   const providerVideoUrl = providerCreativeVideoUrl(data, account.provider);
   if (!isPublicHttpsUrl(creative.destinationUrl)) {
@@ -1769,11 +1854,13 @@ function campaignPreflightReport({
     };
   });
   for (const check of accountChecks) blockers.push(...check.issues.map((issue) => ({ ...issue, accountId: check.accountId })));
-  const start = Date.parse(`${campaign.data?.startDate || ""}T00:00:00.000Z`);
-  const end = Date.parse(`${campaign.data?.endDate || ""}T00:00:00.000Z`);
-  const deliveryDays = Number.isFinite(start) && Number.isFinite(end) && end >= start
-    ? Math.floor((end - start) / 86400000) + 1
-    : 0;
+  let schedule = null;
+  if (accountLocaleVerified) {
+    try {
+      schedule = campaignScheduleBounds(campaign.data, selectedAccounts[0].timezone);
+    } catch {}
+  }
+  const deliveryDays = schedule?.deliveryDays || 0;
   const dailyBudgetPerAccount = Math.max(Number(campaign.data?.dailyBudget) || 0, 0);
   const combinedDailyBudget = dailyBudgetPerAccount * selectedAccounts.length;
   const planningMaximum = combinedDailyBudget * deliveryDays;
@@ -1796,6 +1883,7 @@ function campaignPreflightReport({
       dailyBudgetPerAccount,
       combinedDailyBudget,
       planningMaximum,
+      schedule,
       currency: accountLocaleVerified
         ? boundedText(selectedAccounts[0]?.currency, 12).toUpperCase()
         : null,
@@ -2189,12 +2277,6 @@ function metaObjective(value) {
   }[String(value || "").toLowerCase()] || "OUTCOME_TRAFFIC";
 }
 
-function dateAtNoonUtc(value) {
-  const date = new Date(`${value}T12:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) throw adsError("Campaign schedule is invalid.");
-  return date.toISOString();
-}
-
 async function metaPost(path, accessToken, fields) {
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(fields)) {
@@ -2220,6 +2302,7 @@ async function metaPost(path, accessToken, fields) {
 async function createMetaDelivery(row, accessToken) {
   const data = row.campaign_data || {};
   const creative = data.creative || {};
+  const schedule = campaignScheduleBounds(data, row.account_timezone);
   const accountId = String(row.provider_account_id).replace(/^act_/, "");
   let providerCampaignId = row.provider_campaign_id;
   if (!providerCampaignId) {
@@ -2254,8 +2337,8 @@ async function createMetaDelivery(row, accessToken) {
         geo_locations: { countries },
         publisher_platforms: metaPublisherPlatforms(data),
       },
-      start_time: dateAtNoonUtc(data.startDate),
-      end_time: dateAtNoonUtc(data.endDate),
+      start_time: schedule.startAt,
+      end_time: schedule.endAt,
       status: "PAUSED",
     });
     if (!adSet.id) throw adsError("Meta did not return an ad-set ID.", 502, "GOODADS_META_ADSET_CREATE_FAILED");
@@ -3083,11 +3166,8 @@ function xAdsStableName(row, resource, maximum = 255) {
   return boundedText(`[GoodAds ${record} ${resource}] ${row.campaign_name}`, maximum);
 }
 
-function xAdsSchedule(value, exclusiveEnd = false) {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) throw adsError("X Ads campaign schedule is invalid.");
-  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
-  return date.toISOString();
+function xAdsSchedule(value, timezone, exclusiveEnd = false) {
+  return zonedMidnightInstant(value, timezone, exclusiveEnd);
 }
 
 function xAdsBudget(row) {
@@ -3130,8 +3210,8 @@ function xLineItemParameters(row, campaignId) {
     standard_delivery: true,
     daily_budget_amount_local_micro: daily,
     total_budget_amount_local_micro: total,
-    start_time: xAdsSchedule(row.campaign_data?.startDate),
-    end_time: xAdsSchedule(row.campaign_data?.endDate, true),
+    start_time: xAdsSchedule(row.campaign_data?.startDate, row.account_timezone),
+    end_time: xAdsSchedule(row.campaign_data?.endDate, row.account_timezone, true),
   };
 }
 
@@ -3341,11 +3421,8 @@ function pinterestObjective(value) {
     : { objectiveType: "CONSIDERATION", billableEvent: "CLICKTHROUGH" };
 }
 
-function pinterestScheduleDate(value, exclusiveEnd = false) {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) throw adsError("Pinterest campaign schedule is invalid.");
-  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
-  return Math.floor(date.getTime() / 1000);
+function pinterestScheduleDate(value, timezone, exclusiveEnd = false) {
+  return Math.floor(Date.parse(zonedMidnightInstant(value, timezone, exclusiveEnd)) / 1000);
 }
 
 function pinterestCampaignPayload(row) {
@@ -3362,8 +3439,8 @@ function pinterestCampaignPayload(row) {
     is_automated_campaign: false,
     is_performance_plus: false,
     is_top_of_search: false,
-    start_time: pinterestScheduleDate(data.startDate),
-    end_time: pinterestScheduleDate(data.endDate, true),
+    start_time: pinterestScheduleDate(data.startDate, row.account_timezone),
+    end_time: pinterestScheduleDate(data.endDate, row.account_timezone, true),
   };
 }
 
@@ -3568,11 +3645,8 @@ async function linkedInRequest(path, accessToken, options = {}, fallback = "Link
   );
 }
 
-function linkedInScheduleDate(value, exclusiveEnd = false) {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) throw adsError("LinkedIn campaign schedule is invalid.");
-  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
-  return date.getTime();
+function linkedInScheduleDate(value, timezone, exclusiveEnd = false) {
+  return Date.parse(zonedMidnightInstant(value, timezone, exclusiveEnd));
 }
 
 async function linkedInLocations(row, accessToken) {
@@ -3641,8 +3715,8 @@ function linkedInCampaignPayload(row, { campaignGroupUrn, locationUrns }) {
     offsiteDeliveryEnabled: false,
     politicalIntent: "NOT_DECLARED",
     runSchedule: {
-      start: linkedInScheduleDate(data.startDate),
-      end: linkedInScheduleDate(data.endDate, true),
+      start: linkedInScheduleDate(data.startDate, row.account_timezone),
+      end: linkedInScheduleDate(data.endDate, row.account_timezone, true),
     },
     targetingCriteria: {
       include: {
@@ -3868,8 +3942,8 @@ async function createLinkedInDelivery(row, accessToken) {
           account: accountUrn,
           name: boundedText(`${row.campaign_name} group`, 200),
           runSchedule: {
-            start: linkedInScheduleDate(data.startDate),
-            end: linkedInScheduleDate(data.endDate, true),
+            start: linkedInScheduleDate(data.startDate, row.account_timezone),
+            end: linkedInScheduleDate(data.endDate, row.account_timezone, true),
           },
           status: "ACTIVE",
         }),
@@ -4000,11 +4074,8 @@ function snapchatObjective(value) {
   return { objectiveV2Type: "TRAFFIC", optimizationGoal: "SWIPES" };
 }
 
-function snapchatScheduleDate(value, exclusiveEnd = false) {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(date.getTime())) throw adsError("Snapchat campaign schedule is invalid.");
-  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
-  return date.toISOString();
+function snapchatScheduleDate(value, timezone, exclusiveEnd = false) {
+  return zonedMidnightInstant(value, timezone, exclusiveEnd);
 }
 
 function snapchatCampaignPayload(row) {
@@ -4015,8 +4086,8 @@ function snapchatCampaignPayload(row) {
     name: boundedText(row.campaign_name, 375),
     status: "PAUSED",
     buy_model: "AUCTION",
-    start_time: snapchatScheduleDate(data.startDate),
-    end_time: snapchatScheduleDate(data.endDate, true),
+    start_time: snapchatScheduleDate(data.startDate, row.account_timezone),
+    end_time: snapchatScheduleDate(data.endDate, row.account_timezone, true),
     objective_v2_properties: { objective_v2_type: objectiveV2Type },
   };
 }
@@ -4036,8 +4107,8 @@ function snapchatAdSquadPayload(row, campaignId) {
     billing_event: "IMPRESSION",
     bid_strategy: "AUTO_BID",
     daily_budget_micro: Math.round(Number(data.dailyBudget) * 1000000),
-    start_time: snapchatScheduleDate(data.startDate),
-    end_time: snapchatScheduleDate(data.endDate, true),
+    start_time: snapchatScheduleDate(data.startDate, row.account_timezone),
+    end_time: snapchatScheduleDate(data.endDate, row.account_timezone, true),
     optimization_goal: optimizationGoal,
     conversion_window: "SWIPE_28DAY_VIEW_1DAY",
     delivery_constraint: "DAILY_BUDGET",
@@ -5049,5 +5120,6 @@ module.exports = {
     snapshotHash,
     validateCampaignForAccount,
     campaignPreflightReport,
+    campaignScheduleBounds,
   },
 };

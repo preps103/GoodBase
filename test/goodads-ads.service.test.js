@@ -343,6 +343,15 @@ test("campaign preflight proves read-only paused exposure for the exact saved ve
     dailyBudgetPerAccount: 25,
     combinedDailyBudget: 50,
     planningMaximum: 400,
+    schedule: {
+      timezone: "America/Los_Angeles",
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      startAt: "2026-10-05T07:00:00.000Z",
+      endAt: "2026-10-13T07:00:00.000Z",
+      endExclusive: true,
+      deliveryDays: 8,
+    },
     currency: "USD",
     timezone: "America/Los_Angeles",
   });
@@ -400,6 +409,39 @@ test("campaign preflight and launch fail closed when account locale is incomplet
   );
   assert.match(source, /const accountLocaleIncomplete = accountResult\.rows\.some/);
   assert.match(source, /if \(accountLocaleIncomplete \|\| accountLocales\.size !== 1\)/);
+});
+
+test("campaign schedule boundaries preserve account-local dates across daylight saving time", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "../src/services/goodads-ads.service.js"),
+    "utf8"
+  );
+  assert.match(source, /const schedule = campaignScheduleBounds\(data, row\.account_timezone\)/);
+  assert.doesNotMatch(source, /new Date\(`\$\{value\}T00:00:00\.000Z`\)/);
+
+  const pacific = ads._test.campaignScheduleBounds({
+    startDate: "2026-10-31",
+    endDate: "2026-11-02",
+  }, "America/Los_Angeles");
+  assert.equal(pacific.startAt, "2026-10-31T07:00:00.000Z");
+  assert.equal(pacific.endAt, "2026-11-03T08:00:00.000Z");
+  assert.equal(pacific.deliveryDays, 3);
+  assert.equal((Date.parse(pacific.endAt) - Date.parse(pacific.startAt)) / 3600000, 73);
+
+  const kathmandu = ads._test.campaignScheduleBounds({
+    startDate: "2026-10-05",
+    endDate: "2026-10-05",
+  }, "Asia/Kathmandu");
+  assert.equal(kathmandu.startAt, "2026-10-04T18:15:00.000Z");
+  assert.equal(kathmandu.endAt, "2026-10-05T18:15:00.000Z");
+  assert.throws(
+    () => ads._test.campaignScheduleBounds({ startDate: "2026-02-30", endDate: "2026-03-01" }, "UTC"),
+    (error) => error.code === "GOODADS_CAMPAIGN_DATES_INVALID"
+  );
+  assert.throws(
+    () => ads._test.campaignScheduleBounds({ startDate: "2026-10-05", endDate: "2026-10-12" }, "Not/A_Timezone"),
+    (error) => error.code === "GOODADS_AD_ACCOUNT_TIMEZONE_INVALID"
+  );
 });
 
 test("Google account discovery preserves locale and excludes manager accounts", () => {
@@ -739,6 +781,7 @@ test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creat
   const row = {
     provider_account_id: "518121035",
     account_currency: "USD",
+    account_timezone: "UTC",
     account_metadata: { organizationUrn: "urn:li:organization:5803528" },
     campaign_name: "GoodOS Launch",
     campaign_data: {
@@ -767,6 +810,10 @@ test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creat
   assert.equal(campaign.associatedEntity, "urn:li:organization:5803528");
   assert.equal(campaign.objectiveType, "WEBSITE_VISITS");
   assert.equal(campaign.politicalIntent, "NOT_DECLARED");
+  assert.deepEqual(campaign.runSchedule, {
+    start: Date.parse("2026-10-05T00:00:00.000Z"),
+    end: Date.parse("2026-10-13T00:00:00.000Z"),
+  });
   assert.deepEqual(
     campaign.targetingCriteria.include.and[0].or["urn:li:adTargetingFacet:locations"],
     ["urn:li:geo:103644278"]
@@ -789,6 +836,7 @@ test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creat
 test("Snapchat adapter builds a fully paused campaign stack with a shared Public Profile", () => {
   const row = {
     provider_account_id: "8b8e40af-fc64-455d-925b-ca80f7af6914",
+    account_timezone: "America/Los_Angeles",
     account_metadata: {
       profileId: "c0ea278b-0449-4369-88d6-636e5d925f70",
       profileName: "GoodOS",
@@ -811,6 +859,8 @@ test("Snapchat adapter builds a fully paused campaign stack with a shared Public
   assert.equal(campaign.status, "PAUSED");
   assert.equal(campaign.buy_model, "AUCTION");
   assert.equal(campaign.objective_v2_properties.objective_v2_type, "TRAFFIC");
+  assert.equal(campaign.start_time, "2026-10-05T07:00:00.000Z");
+  assert.equal(campaign.end_time, "2026-10-13T07:00:00.000Z");
 
   const adSquad = ads._test.snapchatAdSquadPayload(row, "4813d068-370b-45f6-a8d6-e01de878f1b5");
   assert.equal(adSquad.status, "PAUSED");
@@ -894,6 +944,7 @@ test("X Ads adapter builds a paused website-click stack and promoted-only post",
   const row = {
     provider_campaign_record_id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
     provider_account_id: "18ce54d4x5t",
+    account_timezone: "America/Los_Angeles",
     account_metadata: {
       deliveryReady: true,
       fundingInstrumentId: "lygyi",
@@ -925,7 +976,8 @@ test("X Ads adapter builds a paused website-click stack and promoted-only post",
   assert.equal(lineItem.placements, "ALL_ON_TWITTER");
   assert.equal(lineItem.bid_strategy, "AUTO");
   assert.equal(lineItem.goal, "LINK_CLICKS");
-  assert.equal(lineItem.end_time, "2026-10-13T00:00:00.000Z");
+  assert.equal(lineItem.start_time, "2026-10-05T07:00:00.000Z");
+  assert.equal(lineItem.end_time, "2026-10-13T07:00:00.000Z");
   const post = ads._test.xTweetParameters(row);
   assert.equal(post.as_user_id, "756201191646691328");
   assert.equal(post.nullcast, true);
@@ -952,6 +1004,7 @@ test("X Ads accounts fail closed without approval, funding, or a full promotable
 test("Pinterest adapter builds a paused CBO campaign, targeted ad group, ad-only Pin, and ad", () => {
   const row = {
     provider_account_id: "549755885175",
+    account_timezone: "America/Los_Angeles",
     campaign_name: "GoodOS Launch",
     campaign_data: {
       objective: "traffic",
@@ -972,6 +1025,8 @@ test("Pinterest adapter builds a paused CBO campaign, targeted ad group, ad-only
   };
   const campaign = ads._test.pinterestCampaignPayload(row);
   assert.equal(campaign.status, "PAUSED");
+  assert.equal(campaign.start_time, Date.parse("2026-10-05T07:00:00.000Z") / 1000);
+  assert.equal(campaign.end_time, Date.parse("2026-10-13T07:00:00.000Z") / 1000);
   assert.equal(campaign.objective_type, "CONSIDERATION");
   assert.equal(campaign.daily_spend_cap, 25000000);
   assert.equal(campaign.is_campaign_budget_optimization, true);
