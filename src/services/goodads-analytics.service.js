@@ -236,6 +236,52 @@ function splitPeriod(period, maximumDays) {
   return chunks;
 }
 
+function decimalToMicros(value) {
+  const normalized = String(value ?? "").trim();
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(normalized);
+  if (!match) return 0;
+  const whole = BigInt(match[1]);
+  const fraction = `${match[2] || ""}000000`.slice(0, 6);
+  const micros = whole * 1000000n + BigInt(fraction || "0");
+  return micros > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(micros);
+}
+
+function tiktokMetricsFromPayload(payload, period) {
+  if (Number(payload?.code) !== 0) {
+    throw analyticsError(
+      boundedText(payload?.message || "TikTok rejected the campaign metrics request.", 1000),
+      502,
+      "GOODADS_ANALYTICS_PROVIDER_FAILED"
+    );
+  }
+  const records = Array.isArray(payload?.data?.list) ? payload.data.list : [];
+  const metrics = records.reduce((totals, record) => {
+    const values = record?.metrics && typeof record.metrics === "object" ? record.metrics : {};
+    totals.impressions += metricTotal(values.impressions);
+    totals.clicks += metricTotal(values.clicks);
+    totals.conversions += metricTotal(values.conversion);
+    totals.spendMicros += decimalToMicros(values.spend);
+    return totals;
+  }, {
+    impressions: 0,
+    clicks: 0,
+    conversions: 0,
+    spendMicros: 0,
+    conversionValueMicros: 0,
+  });
+  return {
+    ...metrics,
+    raw: {
+      dateStart: period.start,
+      dateEnd: period.end,
+      entity: "AUCTION_CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: records.length,
+      requestId: boundedText(payload?.request_id, 200) || null,
+    },
+  };
+}
+
 async function metaMetrics(row, accessToken, period) {
   const fields = "impressions,clicks,spend,actions,action_values,date_start,date_stop";
   const timeRange = encodeURIComponent(JSON.stringify({ since: period.start, until: period.end }));
@@ -432,6 +478,39 @@ async function pinterestMetrics(row, accessToken, period) {
   };
 }
 
+async function tiktokMetrics(row, accessToken, period) {
+  const advertiserId = boundedText(row.provider_account_id, 120);
+  const campaignId = boundedText(row.provider_campaign_id, 120);
+  const url = new URL("https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/");
+  url.searchParams.set("advertiser_id", advertiserId);
+  url.searchParams.set("service_type", "AUCTION");
+  url.searchParams.set("report_type", "BASIC");
+  url.searchParams.set("data_level", "AUCTION_CAMPAIGN");
+  url.searchParams.set("dimensions", JSON.stringify(["campaign_id"]));
+  url.searchParams.set("metrics", JSON.stringify(["spend", "impressions", "clicks", "conversion"]));
+  url.searchParams.set("start_date", period.start);
+  url.searchParams.set("end_date", period.end);
+  url.searchParams.set("filtering", JSON.stringify([{
+    field_name: "campaign_ids",
+    filter_type: "IN",
+    filter_value: JSON.stringify([campaignId]),
+  }]));
+  url.searchParams.set("page", "1");
+  url.searchParams.set("page_size", "10");
+  const payload = await requestJson(
+    url,
+    {
+      headers: {
+        "Access-Token": accessToken,
+        Accept: "application/json",
+        "User-Agent": "GoodAds/1.0",
+      },
+    },
+    "TikTok campaign metrics"
+  );
+  return tiktokMetricsFromPayload(payload, period);
+}
+
 async function campaignRows(organizationId = null) {
   const values = [];
   let tenantClause = "";
@@ -466,6 +545,7 @@ async function syncRows(rows, period) {
         meta: metaMetrics,
         google: googleMetrics,
         pinterest: pinterestMetrics,
+        tiktok: tiktokMetrics,
         x: xMetrics,
         snapchat: snapchatMetrics,
       }[row.provider];
@@ -669,7 +749,7 @@ function capabilities() {
   return {
     providerAnalytics: {
       available: true,
-      supportedProviders: ["google", "meta", "pinterest", "snapchat", "x"],
+      supportedProviders: ["google", "meta", "pinterest", "snapchat", "tiktok", "x"],
       verifiedProviderReceipts: true,
       durableSnapshots: true,
       maximumRangeDays: 93,
@@ -693,5 +773,7 @@ module.exports = {
     snapchatMetricsFromPayload,
     pinterestMetricsFromPayload,
     splitPeriod,
+    decimalToMicros,
+    tiktokMetricsFromPayload,
   },
 };

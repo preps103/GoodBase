@@ -71,7 +71,7 @@ test("X Ads analytics sums only verified campaign metrics and keeps money in mic
 test("analytics capabilities include native X Ads reporting", () => {
   assert.deepEqual(
     analytics.capabilities().providerAnalytics.supportedProviders,
-    ["google", "meta", "pinterest", "snapchat", "x"]
+    ["google", "meta", "pinterest", "snapchat", "tiktok", "x"]
   );
 });
 
@@ -156,6 +156,52 @@ test("Pinterest analytics splits the global reporting window at its 90-day bound
       { start: "2026-06-30", end: "2026-09-27" },
       { start: "2026-09-28", end: "2026-09-30" },
     ]
+  );
+});
+
+test("TikTok analytics maps verified auction metrics and converts decimal spend to micros", () => {
+  const metrics = analytics._test.tiktokMetricsFromPayload({
+    code: 0,
+    message: "OK",
+    request_id: "tiktok-report-1",
+    data: {
+      list: [{
+        dimensions: { campaign_id: "tt-campaign" },
+        metrics: {
+          spend: "12.345678",
+          impressions: "9000",
+          clicks: "450",
+          conversion: "18",
+          likes: "999",
+        },
+      }],
+    },
+  }, { start: "2026-09-01", end: "2026-09-30" });
+
+  assert.deepEqual(metrics, {
+    impressions: 9000,
+    clicks: 450,
+    conversions: 18,
+    spendMicros: 12345678,
+    conversionValueMicros: 0,
+    raw: {
+      dateStart: "2026-09-01",
+      dateEnd: "2026-09-30",
+      entity: "AUCTION_CAMPAIGN",
+      granularity: "TOTAL",
+      recordCount: 1,
+      requestId: "tiktok-report-1",
+    },
+  });
+});
+
+test("TikTok analytics rejects provider-level errors instead of storing empty snapshots", () => {
+  assert.throws(
+    () => analytics._test.tiktokMetricsFromPayload({ code: 40002, message: "Invalid advertiser" }, {
+      start: "2026-09-01",
+      end: "2026-09-30",
+    }),
+    /Invalid advertiser/
   );
 });
 
