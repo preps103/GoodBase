@@ -200,14 +200,18 @@ test("PM2 discovery ignores legacy product copies and keeps platform runtime pat
   const childProcess = require("node:child_process");
   const originalSpawn = childProcess.spawn;
 
-  childProcess.spawn = (_command, _args, _options) => {
+  childProcess.spawn = (command, args, _options) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     process.nextTick(() => {
-      child.stdout.emit(
-        "data",
-        JSON.stringify([
+      let output;
+      if (command === "git" && args.includes("get-url")) {
+        output = "https://github.com/preps103/GoodBase.git\n";
+      } else if (command === "git" && args.includes("--show-current")) {
+        output = "main\n";
+      } else {
+        output = JSON.stringify([
           {
             name: "goodbase-api",
             pid: 123,
@@ -226,8 +230,9 @@ test("PM2 discovery ignores legacy product copies and keeps platform runtime pat
               env: {},
             },
           },
-        ])
-      );
+        ]);
+      }
+      child.stdout.emit("data", output);
       child.emit("close", 0, null);
     });
     return child;
