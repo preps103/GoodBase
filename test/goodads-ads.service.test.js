@@ -213,6 +213,47 @@ test("Meta account discovery exposes only provider-owned public account metadata
   );
 });
 
+test("Meta delivery enforces exact Facebook and Instagram placement intent", () => {
+  assert.deepEqual(ads._test.metaPublisherPlatforms({ platforms: ["facebook"] }), ["facebook"]);
+  assert.deepEqual(ads._test.metaPublisherPlatforms({ platforms: ["instagram"] }), ["instagram"]);
+  assert.deepEqual(ads._test.metaPublisherPlatforms({ platforms: ["instagram", "facebook"] }), ["facebook", "instagram"]);
+  assert.deepEqual(ads._test.metaPublisherPlatforms({ platforms: ["meta"] }), ["facebook", "instagram"]);
+
+  const campaign = {
+    status: "ready",
+    data: {
+      platforms: ["instagram"],
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      creative: {
+        destinationUrl: "https://goodos.app/",
+        imageUrl: "https://cdn.goodos.app/goodads/meta.png",
+      },
+    },
+  };
+  const account = {
+    provider: "meta",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: { pageId: "12345" },
+  };
+  assert.throws(
+    () => ads._test.validateCampaignForAccount(campaign, account),
+    (error) => error.code === "GOODADS_META_INSTAGRAM_IDENTITY_REQUIRED"
+  );
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, {
+    ...account,
+    metadata: { ...account.metadata, instagramActorId: "67890" },
+  }));
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount({
+    ...campaign,
+    data: { ...campaign.data, platforms: ["facebook"] },
+  }, account));
+});
+
 test("Google account discovery preserves locale and excludes manager accounts", () => {
   assert.deepEqual(
     ads._test.normalizeGoogleCustomer("1234567890", {

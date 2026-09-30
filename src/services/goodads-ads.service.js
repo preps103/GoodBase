@@ -1265,6 +1265,17 @@ function googlePoliticalAdvertisingStatus(value) {
   );
 }
 
+function metaPublisherPlatforms(data = {}) {
+  const selected = new Set(
+    (Array.isArray(data.platforms) ? data.platforms : [])
+      .map((platform) => boundedText(platform, 40).toLowerCase())
+  );
+  const platforms = [];
+  if (selected.has("facebook") || selected.has("meta")) platforms.push("facebook");
+  if (selected.has("instagram") || selected.has("meta")) platforms.push("instagram");
+  return platforms;
+}
+
 function validateCampaignForAccount(campaign, account) {
   const data = campaign.data || {};
   if (campaign.status !== "ready") {
@@ -1316,6 +1327,13 @@ function validateCampaignForAccount(campaign, account) {
     }
     if (!isPublicHttpsUrl(creative.imageUrl)) {
       throw adsError("Meta delivery requires a public HTTPS creative image.", 409, "GOODADS_META_IMAGE_REQUIRED");
+    }
+    if (metaPublisherPlatforms(data).includes("instagram") && !account.metadata?.instagramActorId) {
+      throw adsError(
+        "Instagram delivery requires a professional Instagram account linked to the selected Facebook Page.",
+        409,
+        "GOODADS_META_INSTAGRAM_IDENTITY_REQUIRED"
+      );
     }
   }
   if (account.provider === "google") {
@@ -2045,7 +2063,10 @@ async function createMetaDelivery(row, accessToken) {
       billing_event: "IMPRESSIONS",
       optimization_goal: "LINK_CLICKS",
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
-      targeting: { geo_locations: { countries } },
+      targeting: {
+        geo_locations: { countries },
+        publisher_platforms: metaPublisherPlatforms(data),
+      },
       start_time: dateAtNoonUtc(data.startDate),
       end_time: dateAtNoonUtc(data.endDate),
       status: "PAUSED",
@@ -4797,6 +4818,7 @@ module.exports = {
   _test: {
     providerAvailability,
     normalizeMetaAccount,
+    metaPublisherPlatforms,
     normalizeGoogleCustomer,
     youtubeVideoId,
     googlePoliticalAdvertisingStatus,
