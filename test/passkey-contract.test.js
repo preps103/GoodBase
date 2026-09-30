@@ -25,6 +25,7 @@ test("GoodBase exposes durable, user-verified passkey ceremonies", () => {
   assert.match(service, /requireUserVerification:\s*true/);
   assert.match(service, /consumed_at = NOW\(\)/);
   assert.match(service, /authMethod:\s*"passkey"/);
+  assert.match(service, /Passkey on this device/);
   assert.match(service, /WHERE id::text = \$1::text/);
   assert.match(migration, /credential_id TEXT NOT NULL UNIQUE/);
   assert.match(migration, /public_key BYTEA NOT NULL/);

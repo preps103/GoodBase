@@ -74,10 +74,13 @@ test("GoodBase owns one versioned product widget and audits vendored snapshots",
     "data-goodbase-login-field",
     "data-goodbase-login-providers",
   ]) assert.match(sharedWidget, new RegExp(hook));
-  assert.match(sharedWidgetPackage, /"version": "4\.8\.0"/);
+  assert.match(sharedWidgetPackage, /"version": "4\.9\.0"/);
   assert.match(sharedWidget, /goodOSPasskeyHandoffUrl/);
   assert.doesNotMatch(sharedWidget, /Use Touch ID or passkey/);
-  assert.match(sharedWidget, /Sign in with Touch ID or passkey/);
+  assert.match(sharedWidget, /Sign in with a passkey/);
+  assert.match(sharedWidget, /data-goodos-passkey-icon/);
+  assert.match(sharedWidget, /Face ID, Touch ID, Windows Hello, a fingerprint, or your device PIN/);
+  assert.doesNotMatch(sharedWidget, /Set up Touch ID on this Mac/);
   assert.match(sharedWidget, /goodos-login-widget__passkey-trigger/);
   assert.match(sharedWidgetSync, /GOODOS_REPOSITORIES_ROOT/);
   assert.match(sharedWidgetSync, /vendor\/goodos-topbar-widget/);
