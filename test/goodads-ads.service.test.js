@@ -6,20 +6,38 @@ const fs = require("node:fs");
 const path = require("node:path");
 const ads = require("../src/services/goodads-ads.service");
 
+const TEST_OAUTH_ENCRYPTION_KEY = "test-goodads-oauth-encryption-key-32-bytes";
+const ORIGINAL_OAUTH_ENCRYPTION_KEY = process.env.GOODADS_OAUTH_ENCRYPTION_KEY;
+
+test.before(() => {
+  process.env.GOODADS_OAUTH_ENCRYPTION_KEY = TEST_OAUTH_ENCRYPTION_KEY;
+});
+
+test.after(() => {
+  if (ORIGINAL_OAUTH_ENCRYPTION_KEY === undefined) delete process.env.GOODADS_OAUTH_ENCRYPTION_KEY;
+  else process.env.GOODADS_OAUTH_ENCRYPTION_KEY = ORIGINAL_OAUTH_ENCRYPTION_KEY;
+});
+
 test("GoodAds paid providers fail closed until server credentials are complete", () => {
   const saved = {
     googleId: process.env.GOODADS_GOOGLE_CLIENT_ID,
     googleSecret: process.env.GOODADS_GOOGLE_CLIENT_SECRET,
     developerToken: process.env.GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN,
+    encryptionKey: process.env.GOODADS_OAUTH_ENCRYPTION_KEY,
   };
   delete process.env.GOODADS_GOOGLE_CLIENT_ID;
   delete process.env.GOODADS_GOOGLE_CLIENT_SECRET;
   delete process.env.GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN;
-  assert.equal(ads._test.providerAvailability("google").available, false);
+  delete process.env.GOODADS_OAUTH_ENCRYPTION_KEY;
+  const unavailable = ads._test.providerAvailability("google");
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.missingEnvironment.includes("GOODADS_OAUTH_ENCRYPTION_KEY"), true);
+  assert.equal(unavailable.configurationErrors.includes("Secure OAuth token storage is not configured."), true);
   Object.assign(process.env, {
     GOODADS_GOOGLE_CLIENT_ID: "test-client",
     GOODADS_GOOGLE_CLIENT_SECRET: "test-secret",
     GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN: "test-developer-token",
+    GOODADS_OAUTH_ENCRYPTION_KEY: TEST_OAUTH_ENCRYPTION_KEY,
   });
   assert.equal(ads._test.providerAvailability("google").available, true);
   assert.equal(ads._test.providerAvailability("youtube").available, true);
@@ -30,6 +48,7 @@ test("GoodAds paid providers fail closed until server credentials are complete",
       googleId: "GOODADS_GOOGLE_CLIENT_ID",
       googleSecret: "GOODADS_GOOGLE_CLIENT_SECRET",
       developerToken: "GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN",
+      encryptionKey: "GOODADS_OAUTH_ENCRYPTION_KEY",
     }[key];
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;

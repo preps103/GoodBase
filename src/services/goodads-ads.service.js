@@ -16,6 +16,7 @@ const LINKEDIN_IMAGE_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png
 const MAX_LINKEDIN_IMAGE_BYTES = 10 * 1024 * 1024;
 const GOOGLE_LOGO_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const MAX_GOOGLE_LOGO_BYTES = 5 * 1024 * 1024;
+const OAUTH_ENCRYPTION_ENVIRONMENT = "GOODADS_OAUTH_ENCRYPTION_KEY";
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -156,7 +157,11 @@ function providerAvailability(provider) {
       return false;
     }
   });
-  const missingEnvironment = definition.requiredEnvironment.filter((name) => !boundedText(process.env[name], 10000));
+  const requiredEnvironment = [...new Set([
+    ...definition.requiredEnvironment,
+    OAUTH_ENCRYPTION_ENVIRONMENT,
+  ])];
+  const missingEnvironment = requiredEnvironment.filter((name) => !boundedText(process.env[name], 10000));
   let configuredOAuthScopes = [];
   for (const connectionProvider of definition.connectionProviders) {
     try {
@@ -169,6 +174,9 @@ function providerAvailability(provider) {
   const adapterConfigured = definition.adapterType === "native";
   const configurationErrors = [];
   if (!adapterConfigured) configurationErrors.push("A native production delivery adapter is not installed for this provider.");
+  if (missingEnvironment.includes(OAUTH_ENCRYPTION_ENVIRONMENT)) {
+    configurationErrors.push("Secure OAuth token storage is not configured.");
+  }
   if (missingOAuthScopes.length) configurationErrors.push("Advertising OAuth scopes are not enabled for this provider.");
   return {
     id,
