@@ -211,6 +211,55 @@ function callbackUrl(provider) {
   return `${baseUrl()}/api/apps/goodads/v1/oauth/${encodeURIComponent(provider)}/callback`;
 }
 
+function connectionHealth(connection, now = Date.now()) {
+  const status = String(connection.status || "").toLowerCase();
+  const refreshable = connection.refreshable === true || Boolean(connection.refresh_token_ciphertext);
+  const expiresAt = connection.tokenExpiresAt || connection.token_expires_at || null;
+  if (status !== "connected") {
+    return { status: "action_required", refreshable, expiresAt, expiresInSeconds: null };
+  }
+  if (!expiresAt) {
+    return { status: "non_expiring", refreshable, expiresAt: null, expiresInSeconds: null };
+  }
+  const expiryTime = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiryTime)) {
+    return { status: "unknown", refreshable, expiresAt: null, expiresInSeconds: null };
+  }
+  const expiresInSeconds = Math.floor((expiryTime - now) / 1000);
+  if (expiresInSeconds <= 0) {
+    return { status: refreshable ? "refresh_due" : "expired", refreshable, expiresAt, expiresInSeconds };
+  }
+  if (expiresInSeconds <= 24 * 60 * 60) {
+    return { status: "expiring_soon", refreshable, expiresAt, expiresInSeconds };
+  }
+  return { status: "healthy", refreshable, expiresAt, expiresInSeconds };
+}
+
+function publicConnection(connection) {
+  const platformId = String(connection.platformId || connection.provider || "");
+  const scopes = Array.isArray(connection.scopes) ? connection.scopes : [];
+  let requiredScopes = [];
+  try {
+    requiredScopes = providerConfig(platformId).scopes;
+  } catch {}
+  return {
+    id: connection.id,
+    platformId,
+    providerAccountId: connection.providerAccountId || connection.provider_account_id || null,
+    username: connection.username || connection.account_name || "Connected account",
+    avatarUrl: connection.avatarUrl || connection.avatar_url || null,
+    scopes,
+    requiredScopes,
+    missingScopes: requiredScopes.filter((scope) => !scopes.includes(scope)),
+    tokenExpiresAt: connection.tokenExpiresAt || connection.token_expires_at || null,
+    tokenHealth: connectionHealth(connection),
+    status: connection.status,
+    connectedAt: connection.connectedAt || connection.connected_at,
+    lastSyncAt: connection.lastSyncAt || connection.last_verified_at || null,
+    updatedAt: connection.updatedAt || connection.updated_at,
+  };
+}
+
 function stateHash(state) {
   return crypto.createHash("sha256").update(state).digest("hex");
 }
@@ -537,13 +586,51 @@ async function listConnections({ context, userId }) {
     `SELECT id, provider AS "platformId", provider_account_id AS "providerAccountId",
        account_name AS username, avatar_url AS "avatarUrl", scopes,
        token_expires_at AS "tokenExpiresAt", status,
+       refresh_token_ciphertext IS NOT NULL AS refreshable,
        connected_at AS "connectedAt", last_verified_at AS "lastSyncAt", updated_at AS "updatedAt"
      FROM goodads_social_connections
      WHERE organization_id = $1 AND user_id = $2::uuid AND status <> 'disconnected'
      ORDER BY connected_at DESC`,
     [context.organizationId, userId]
   );
-  return result.rows;
+  return result.rows.map(publicConnection);
+}
+
+async function verifyConnection({ context, userId, id }) {
+  const [safeId] = normalizeConnectionIds([id]);
+  const selected = await query(
+    `SELECT * FROM goodads_social_connections
+     WHERE id = $1::uuid AND organization_id = $2 AND user_id = $3::uuid
+       AND status <> 'disconnected'`,
+    [safeId, context.organizationId, userId]
+  );
+  const connection = selected.rows[0];
+  if (!connection) throw socialError("Connected account not found.", 404, "GOODADS_CONNECTION_NOT_FOUND");
+  const config = providerConfig(connection.provider);
+  let identity;
+  if (config.oauthStyle === "oauth1") {
+    const credentials = await oauth1CredentialsForConnection(connection);
+    identity = await fetchIdentity(config, credentials.accessToken, {
+      refresh_token: credentials.tokenSecret,
+    });
+  } else {
+    const accessToken = await accessTokenForConnection(connection);
+    identity = await fetchIdentity(config, accessToken);
+  }
+  const updated = await query(
+    `UPDATE goodads_social_connections SET
+       provider_account_id = $2, account_name = $3, avatar_url = $4,
+       status = 'connected', metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb,
+       last_verified_at = NOW(), updated_at = NOW()
+     WHERE id = $1::uuid
+     RETURNING id, provider AS "platformId", provider_account_id AS "providerAccountId",
+       account_name AS username, avatar_url AS "avatarUrl", scopes,
+       token_expires_at AS "tokenExpiresAt", status,
+       refresh_token_ciphertext IS NOT NULL AS refreshable,
+       connected_at AS "connectedAt", last_verified_at AS "lastSyncAt", updated_at AS "updatedAt"`,
+    [safeId, identity.id, identity.name, identity.avatarUrl, JSON.stringify({ identity: identity.raw })]
+  );
+  return publicConnection(updated.rows[0]);
 }
 
 async function disconnect({ context, userId, provider }) {
@@ -651,6 +738,7 @@ function publicProviders() {
       name: config.label,
       configured: config.configured,
       scopes: config.scopes,
+      callbackUrl: callbackUrl(id),
       capabilities: PROVIDER_PUBLISH_CAPABILITIES[id],
     };
   });
@@ -1524,10 +1612,12 @@ module.exports = {
   encrypt,
   decrypt,
   publicProviders,
+  callbackUrl,
   capabilities,
   beginAuthorization,
   completeAuthorization,
   listConnections,
+  verifyConnection,
   disconnect,
   disconnectConnection,
   listPublishJobs,
@@ -1542,6 +1632,10 @@ module.exports = {
   normalizePublishContent,
   normalizeSchedule,
   normalizeConnectionIds,
+  _test: {
+    connectionHealth,
+    publicConnection,
+  },
   validatePublishingApproval,
   rejectPaidCampaignLaunch,
   publish,

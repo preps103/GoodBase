@@ -42,6 +42,10 @@ test("GoodAds paid providers fail closed until server credentials are complete",
   assert.equal(ads._test.providerAvailability("google").available, true);
   assert.equal(ads._test.providerAvailability("youtube").available, true);
   assert.equal(ads._test.providerAvailability("youtube").deliveryAdapter, "demand_gen_video");
+  assert.equal(
+    ads._test.providerAvailability("youtube").callbackUrls[0].url,
+    "https://base.goodos.app/api/apps/goodads/v1/oauth/google/callback"
+  );
   assert.equal(typeof ads._test.nativeAdapter("youtube").create, "function");
   for (const [key, value] of Object.entries(saved)) {
     const name = {

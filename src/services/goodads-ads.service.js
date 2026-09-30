@@ -192,6 +192,10 @@ function providerAvailability(provider) {
     missingOAuthScopes,
     configurationErrors,
     connectionProviders: [...definition.connectionProviders],
+    callbackUrls: definition.connectionProviders.map((connectionProvider) => ({
+      provider: connectionProvider,
+      url: social.callbackUrl(connectionProvider),
+    })),
     platforms: [...definition.platforms],
     safePausedCreation: definition.safePausedCreation && adapterConfigured,
     activationSupported: definition.activationSupported !== false && adapterConfigured,

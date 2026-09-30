@@ -47,6 +47,12 @@ const publishingLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const connectionVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 const bulkPublishingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
@@ -341,6 +347,11 @@ router.get("/connections/providers", (_req, res) => success(res, { data: social.
 router.get("/connections", (req, res) => handle(res, "connections.list", social.listConnections({
   context: req.tenantContext,
   userId: req.user.id,
+})));
+router.post("/connections/account/:id/verify", connectionVerifyLimiter, (req, res) => handle(res, "connections.account.verify", social.verifyConnection({
+  context: req.tenantContext,
+  userId: req.user.id,
+  id: req.params.id,
 })));
 router.get("/connections/:platform/authorize", (req, res) => social.beginAuthorization({
   provider: req.params.platform,

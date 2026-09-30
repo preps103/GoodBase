@@ -44,6 +44,37 @@ test("provider capability registry reports only installed publishing adapters", 
   }
 });
 
+test("connection diagnostics expose safe callback, scope, and token-health metadata", () => {
+  const originalPublicBaseUrl = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = "https://base.goodos.app/";
+  try {
+    const google = social.publicProviders().find((provider) => provider.id === "google");
+    assert.equal(google.callbackUrl, "https://base.goodos.app/api/apps/goodads/v1/oauth/google/callback");
+    const healthy = social._test.publicConnection({
+      id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+      provider: "google",
+      provider_account_id: "provider-1",
+      account_name: "GoodOS",
+      scopes: social.providerConfig("google").scopes,
+      token_expires_at: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+      refresh_token_ciphertext: "encrypted",
+      status: "connected",
+    });
+    assert.equal(healthy.tokenHealth.status, "healthy");
+    assert.equal(healthy.tokenHealth.refreshable, true);
+    assert.deepEqual(healthy.missingScopes, []);
+    const expired = social._test.connectionHealth({
+      status: "connected",
+      token_expires_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    assert.equal(expired.status, "expired");
+    assert.equal(expired.refreshable, false);
+  } finally {
+    if (originalPublicBaseUrl === undefined) delete process.env.PUBLIC_BASE_URL;
+    else process.env.PUBLIC_BASE_URL = originalPublicBaseUrl;
+  }
+});
+
 test("X Ads uses a separate OAuth 1.0a business authorization", () => {
   const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
@@ -82,6 +113,7 @@ test("GoodAds routes expose capability truth and durable publishing history", ()
   assert.match(routes, /router\.post\("\/publishing\/jobs\/:id\/cancel"/);
   assert.match(routes, /router\.post\("\/publishing\/jobs\/:id\/retry"/);
   assert.match(routes, /router\.delete\("\/connections\/account\/:id"/);
+  assert.match(routes, /router\.post\("\/connections\/account\/:id\/verify"/);
   assert.match(routes, /ads\.launchCampaign\(/);
   assert.match(routes, /\/ads\/accounts\/discover/);
   assert.match(routes, /\/activation-approval/);
