@@ -87,6 +87,80 @@ test("GoodAds bounds engagement, approval, and automation inputs", () => {
     }),
     /manual and scheduled/
   );
+
+  const spendGuard = workflows._test.normalizeAutomationPayload({
+    name: "Protect launch budget",
+    triggerType: "schedule",
+    actionType: "enforce_spend_guard",
+    campaignId: "11111111-1111-4111-8111-111111111111",
+    currency: "usd",
+    maximumTrackedSpend: 500,
+    maximumCostPerConversion: 75,
+    minimumTrackedSpend: 100,
+    minimumConversions: 3,
+    staleAfterMinutes: 30,
+  });
+  assert.equal(spendGuard.currency, "USD");
+  assert.equal(spendGuard.maximumTrackedSpend, 500);
+  assert.equal(spendGuard.pauseOnStaleMetrics, true);
+  assert.throws(
+    () => workflows._test.normalizeAutomationPayload({
+      name: "Unbounded spend guard",
+      triggerType: "schedule",
+      actionType: "enforce_spend_guard",
+      campaignId: "11111111-1111-4111-8111-111111111111",
+      currency: "USD",
+    }),
+    /maximum tracked spend or maximum cost per conversion/
+  );
+});
+
+test("GoodAds spend guards pause on verified thresholds and stale telemetry", () => {
+  const now = new Date("2026-09-30T22:00:00.000Z");
+  const guard = {
+    currency: "USD",
+    maximumTrackedSpend: 100,
+    maximumCostPerConversion: 40,
+    minimumTrackedSpend: 25,
+    minimumConversions: 2,
+    staleAfterMinutes: 45,
+    pauseOnStaleMetrics: true,
+  };
+  const rows = [
+    {
+      currency: "USD",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      spend_micros: 60000000,
+      conversions: 1,
+      captured_at: "2026-09-30T21:45:00.000Z",
+    },
+    {
+      currency: "USD",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      spend_micros: 50000000,
+      conversions: 1,
+      captured_at: "2026-09-30T21:50:00.000Z",
+    },
+  ];
+  const threshold = workflows._test.spendGuardDecision(rows, guard, now);
+  assert.equal(threshold.triggered, true);
+  assert.equal(threshold.spendMicros, 110000000);
+  assert.equal(threshold.costPerConversionMicros, 55000000);
+  assert.equal(threshold.reasons.includes("maximum_spend_reached"), true);
+  assert.equal(threshold.reasons.includes("maximum_cost_per_conversion_reached"), true);
+
+  const healthy = workflows._test.spendGuardDecision([
+    { ...rows[0], spend_micros: 20000000, conversions: 2 },
+  ], guard, now);
+  assert.equal(healthy.triggered, false);
+
+  const stale = workflows._test.spendGuardDecision([
+    { ...rows[0], captured_at: "2026-09-30T20:00:00.000Z" },
+  ], guard, now);
+  assert.equal(stale.triggered, true);
+  assert.equal(stale.reasons.includes("stale_metrics"), true);
 });
 
 test("GoodAds workflow migration installs durable governed operations", () => {
@@ -103,6 +177,11 @@ test("GoodAds workflow migration installs durable governed operations", () => {
   assert.match(runner, /20260729_goodads_governed_workflows\.sql/);
   assert.match(packageJson.scripts.build, /apply-goodads-governed-workflows-migration/);
   assert.match(jobs, /goodads\.automations\.dispatch/);
+  const workflows = read("src/services/goodads-workflows.service.js");
+  assert.match(workflows, /INSERT INTO goodads_ad_operations/);
+  assert.match(workflows, /operation_type, idempotency_key, payload/);
+  assert.match(workflows, /providerPauseDelivery: true/);
+  assert.match(workflows, /failClosedOnStaleMetrics: true/);
 });
 
 test("GoodAds routes separate public signed ingestion from protected workflow operations", () => {

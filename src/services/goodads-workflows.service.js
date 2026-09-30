@@ -24,7 +24,10 @@ const AUTOMATION_ACTIONS = new Set([
   "notify_team",
   "create_task",
   "pause_campaign",
+  "enforce_spend_guard",
 ]);
+const PAID_CAMPAIGN_AUTOMATION_ACTIONS = new Set(["pause_campaign", "enforce_spend_guard"]);
+const MAX_AUTOMATION_MONEY = 100000000;
 
 function workflowError(message, statusCode = 400, code = "GOODADS_WORKFLOW_INVALID") {
   const error = new Error(message);
@@ -35,6 +38,20 @@ function workflowError(message, statusCode = 400, code = "GOODADS_WORKFLOW_INVAL
 
 function boundedText(value, maximum) {
   return String(value || "").trim().slice(0, maximum);
+}
+
+function optionalMoney(value, label, { allowZero = false } = {}) {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const amount = Number(value);
+  const minimum = allowZero ? 0 : Number.EPSILON;
+  if (!Number.isFinite(amount) || amount < minimum || amount > MAX_AUTOMATION_MONEY) {
+    throw workflowError(`${label} must be between ${allowZero ? 0 : "more than 0"} and ${MAX_AUTOMATION_MONEY}.`);
+  }
+  return Math.round(amount * 1000000) / 1000000;
+}
+
+function moneyMicros(value) {
+  return Math.round((Number(value) || 0) * 1000000);
 }
 
 function requireUuid(value, label = "ID") {
@@ -535,27 +552,53 @@ function normalizeAutomationPayload(payload) {
       return date.toISOString();
     })()
     : null;
+  const campaignId = PAID_CAMPAIGN_AUTOMATION_ACTIONS.has(actionType)
+    ? requireUuid(data.campaignId, "campaign ID")
+    : boundedText(data.campaignId, 80) || null;
+  let spendGuard = {};
+  if (actionType === "enforce_spend_guard") {
+    const currency = boundedText(data.currency, 3).toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) throw workflowError("Spend guard currency must be a three-letter code.");
+    const maximumTrackedSpend = optionalMoney(data.maximumTrackedSpend, "Maximum tracked spend");
+    const maximumCostPerConversion = optionalMoney(data.maximumCostPerConversion, "Maximum cost per conversion");
+    if (maximumTrackedSpend === null && maximumCostPerConversion === null) {
+      throw workflowError("Set a maximum tracked spend or maximum cost per conversion.");
+    }
+    spendGuard = {
+      currency,
+      maximumTrackedSpend,
+      maximumCostPerConversion,
+      minimumTrackedSpend: optionalMoney(data.minimumTrackedSpend, "Minimum tracked spend", { allowZero: true }) ?? 25,
+      minimumConversions: Math.min(Math.max(Math.trunc(Number(data.minimumConversions) || 1), 1), 1000000),
+      staleAfterMinutes: Math.min(Math.max(Math.trunc(Number(data.staleAfterMinutes) || 45), 15), 1440),
+      pauseOnStaleMetrics: data.pauseOnStaleMetrics !== false,
+    };
+  }
   return {
     ...data,
     name,
     status: data.status === "active" ? "active" : data.status === "paused" ? "paused" : "draft",
     triggerType,
     actionType,
+    campaignId,
     intervalMinutes,
     scheduledAt,
     description: boundedText(data.description, 4000),
     conditions: boundedText(data.conditions, 4000),
     guardrails: boundedText(data.guardrails, 4000),
     owner: boundedText(data.owner, 320).toLowerCase(),
+    ...spendGuard,
   };
 }
 
 async function saveAutomation({ id = null, payload, context, userId }) {
   requireWrite(context);
+  const normalized = normalizeAutomationPayload(payload);
+  if (PAID_CAMPAIGN_AUTOMATION_ACTIONS.has(normalized.actionType)) requireManagement(context);
   return resources.upsertResource({
     type: "automations",
     id,
-    payload: normalizeAutomationPayload(payload),
+    payload: normalized,
     context,
     userId,
   });
@@ -573,6 +616,176 @@ function rowToRun(row) {
     errorMessage: row.error_message,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+  };
+}
+
+function spendGuardDecision(rows, guard, now = new Date()) {
+  const deliveries = Array.isArray(rows) ? rows : [];
+  if (!deliveries.length) {
+    return {
+      triggered: false,
+      reasons: ["no_active_deliveries"],
+      spendMicros: 0,
+      conversions: 0,
+      costPerConversionMicros: null,
+      periodStart: null,
+      periodEnd: null,
+      oldestCapturedAt: null,
+    };
+  }
+
+  const reasons = [];
+  const expectedCurrency = boundedText(guard.currency, 3).toUpperCase();
+  const snapshotRows = deliveries.filter((row) => row.captured_at);
+  const missingMetrics = snapshotRows.length !== deliveries.length;
+  const currencies = new Set(deliveries.map((row) => boundedText(row.currency, 12).toUpperCase()));
+  const periods = new Set(snapshotRows.map((row) => `${row.period_start}:${row.period_end}`));
+  const capturedTimes = snapshotRows.map((row) => new Date(row.captured_at).getTime());
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const oldestCapturedMs = capturedTimes.length ? Math.min(...capturedTimes) : null;
+  const staleAfterMs = Math.min(Math.max(Number(guard.staleAfterMinutes) || 45, 15), 1440) * 60000;
+  const staleMetrics = oldestCapturedMs === null
+    || !Number.isFinite(oldestCapturedMs)
+    || !Number.isFinite(nowMs)
+    || oldestCapturedMs > nowMs + 300000
+    || nowMs - oldestCapturedMs > staleAfterMs;
+
+  if (guard.pauseOnStaleMetrics !== false) {
+    if (missingMetrics) reasons.push("missing_metrics");
+    if (staleMetrics) reasons.push("stale_metrics");
+    if (periods.size > 1) reasons.push("inconsistent_reporting_periods");
+    if (currencies.size !== 1 || !currencies.has(expectedCurrency)) reasons.push("currency_mismatch");
+  }
+
+  const spendMicros = snapshotRows.reduce((total, row) => total + Math.max(0, Number(row.spend_micros) || 0), 0);
+  const conversions = snapshotRows.reduce((total, row) => total + Math.max(0, Number(row.conversions) || 0), 0);
+  const costPerConversionMicros = conversions > 0 ? Math.round(spendMicros / conversions) : null;
+  const maximumSpendMicros = moneyMicros(guard.maximumTrackedSpend);
+  const maximumCostPerConversionMicros = moneyMicros(guard.maximumCostPerConversion);
+  const minimumTrackedSpendMicros = moneyMicros(guard.minimumTrackedSpend);
+  const minimumConversions = Math.min(Math.max(Math.trunc(Number(guard.minimumConversions) || 1), 1), 1000000);
+
+  if (maximumSpendMicros > 0 && spendMicros >= maximumSpendMicros) reasons.push("maximum_spend_reached");
+  if (maximumCostPerConversionMicros > 0 && spendMicros >= minimumTrackedSpendMicros) {
+    if (conversions < minimumConversions) reasons.push("conversion_floor_not_met");
+    else if (costPerConversionMicros >= maximumCostPerConversionMicros) reasons.push("maximum_cost_per_conversion_reached");
+  }
+
+  const firstSnapshot = snapshotRows[0] || {};
+  return {
+    triggered: reasons.length > 0,
+    reasons: [...new Set(reasons)],
+    spendMicros: Math.round(spendMicros),
+    conversions,
+    costPerConversionMicros,
+    periodStart: firstSnapshot.period_start || null,
+    periodEnd: firstSnapshot.period_end || null,
+    oldestCapturedAt: oldestCapturedMs === null || !Number.isFinite(oldestCapturedMs)
+      ? null
+      : new Date(oldestCapturedMs).toISOString(),
+  };
+}
+
+async function campaignDeliveryMetrics(client, automation, campaignId) {
+  const result = await client.query(
+    `SELECT provider_campaign.id, provider_campaign.provider, provider_campaign.status,
+       account.currency, snapshot.period_start, snapshot.period_end,
+       snapshot.spend_micros, snapshot.conversions, snapshot.captured_at
+     FROM goodads_provider_campaigns provider_campaign
+     JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
+     LEFT JOIN LATERAL (
+       SELECT period_start, period_end, spend_micros, conversions, captured_at
+       FROM goodads_analytics_snapshots
+       WHERE provider_campaign_id = provider_campaign.id
+       ORDER BY captured_at DESC
+       LIMIT 1
+     ) snapshot ON TRUE
+     WHERE provider_campaign.organization_id = $1
+       AND provider_campaign.campaign_id = $2::uuid
+       AND provider_campaign.status IN ('active','activating','pausing')
+     ORDER BY provider_campaign.id`,
+    [automation.organization_id, campaignId]
+  );
+  return result.rows;
+}
+
+async function queueCampaignPause(client, automation, campaignId, triggeredByUserId, evidence) {
+  const selected = await client.query(
+    `SELECT id FROM goodads_resources
+     WHERE id = $1::uuid AND organization_id = $2
+       AND resource_type = 'campaigns' AND archived_at IS NULL
+     FOR UPDATE`,
+    [campaignId, automation.organization_id]
+  );
+  if (!selected.rows[0]) throw workflowError("The campaign selected by this automation is unavailable.");
+
+  const evidenceJson = JSON.stringify(evidence && typeof evidence === "object" ? evidence : {});
+  const fingerprint = crypto.createHash("sha256").update(evidenceJson).digest("hex").slice(0, 20);
+  const inserted = await client.query(
+    `INSERT INTO goodads_ad_operations (
+       organization_id, provider_campaign_id, requested_by_user_id,
+       operation_type, idempotency_key, payload
+     )
+     SELECT provider_campaign.organization_id, provider_campaign.id, $3::uuid,
+       'pause', 'automation:' || $4::text || ':' || provider_campaign.id::text || ':pause:' || $5,
+       $6::jsonb
+     FROM goodads_provider_campaigns provider_campaign
+     WHERE provider_campaign.organization_id = $1
+       AND provider_campaign.campaign_id = $2::uuid
+       AND provider_campaign.status = 'active'
+     ON CONFLICT DO NOTHING
+     RETURNING provider_campaign_id`,
+    [
+      automation.organization_id,
+      campaignId,
+      triggeredByUserId,
+      automation.id,
+      fingerprint,
+      evidenceJson,
+    ]
+  );
+
+  await client.query(
+    `UPDATE goodads_provider_campaigns provider_campaign
+     SET status = 'pausing', updated_at = NOW()
+     WHERE provider_campaign.organization_id = $1
+       AND provider_campaign.campaign_id = $2::uuid
+       AND provider_campaign.status = 'active'
+       AND EXISTS (
+         SELECT 1 FROM goodads_ad_operations operation
+         WHERE operation.provider_campaign_id = provider_campaign.id
+           AND operation.operation_type = 'pause'
+           AND operation.status IN ('queued','processing','retrying')
+       )`,
+    [automation.organization_id, campaignId]
+  );
+
+  await client.query(
+    `UPDATE goodads_resources
+     SET status = 'paused',
+         data = data || jsonb_build_object(
+           'status', 'paused',
+           'pausedByAutomationId', $3::text,
+           'pauseEvidence', $4::jsonb,
+           'updatedAt', NOW()::text
+         ),
+         version = version + 1,
+         updated_at = NOW()
+     WHERE id = $1::uuid AND organization_id = $2
+       AND resource_type = 'campaigns' AND archived_at IS NULL`,
+    [campaignId, automation.organization_id, automation.id, evidenceJson]
+  );
+
+  const deliveryState = await client.query(
+    `SELECT status, COUNT(*)::integer AS count
+     FROM goodads_provider_campaigns
+     WHERE organization_id = $1 AND campaign_id = $2::uuid
+     GROUP BY status ORDER BY status`,
+    [automation.organization_id, campaignId]
+  );
+  return {
+    queuedProviderPauses: inserted.rows.length,
+    deliveryState: Object.fromEntries(deliveryState.rows.map((row) => [row.status, Number(row.count)])),
   };
 }
 
@@ -675,23 +888,51 @@ async function executeAutomationAction(client, automation, triggeredByUserId) {
     }
     case "pause_campaign": {
       const campaignId = requireUuid(data.campaignId, "campaign ID");
-      const paused = await client.query(
-        `UPDATE goodads_resources
-         SET status = 'paused',
-             data = data || jsonb_build_object(
-               'status', 'paused',
-               'pausedByAutomationId', $3::text,
-               'updatedAt', NOW()::text
-             ),
-             version = version + 1,
-             updated_at = NOW()
-         WHERE id = $1::uuid AND organization_id = $2
-           AND resource_type = 'campaigns' AND archived_at IS NULL
-         RETURNING id`,
-        [campaignId, automation.organization_id, automation.id]
-      );
-      if (!paused.rows[0]) throw workflowError("The campaign selected by this automation is unavailable.");
-      return { action: data.actionType, resourceType: "campaigns", resourceId: paused.rows[0].id };
+      const evidence = {
+        reason: "automation_pause_rule",
+        automationId: automation.id,
+        evaluatedAt: new Date().toISOString(),
+      };
+      const pause = await queueCampaignPause(client, automation, campaignId, triggeredByUserId, evidence);
+      return { action: data.actionType, resourceType: "campaigns", resourceId: campaignId, ...pause, evidence };
+    }
+    case "enforce_spend_guard": {
+      const campaignId = requireUuid(data.campaignId, "campaign ID");
+      const deliveries = await campaignDeliveryMetrics(client, automation, campaignId);
+      const decision = spendGuardDecision(deliveries, data);
+      if (!decision.triggered) {
+        return {
+          action: data.actionType,
+          resourceType: "campaigns",
+          resourceId: campaignId,
+          guardTriggered: false,
+          decision,
+        };
+      }
+      const evidence = {
+        reason: "spend_guard",
+        automationId: automation.id,
+        evaluatedAt: new Date().toISOString(),
+        currency: data.currency,
+        thresholds: {
+          maximumTrackedSpend: data.maximumTrackedSpend,
+          maximumCostPerConversion: data.maximumCostPerConversion,
+          minimumTrackedSpend: data.minimumTrackedSpend,
+          minimumConversions: data.minimumConversions,
+          staleAfterMinutes: data.staleAfterMinutes,
+          pauseOnStaleMetrics: data.pauseOnStaleMetrics,
+        },
+        decision,
+      };
+      const pause = await queueCampaignPause(client, automation, campaignId, triggeredByUserId, evidence);
+      return {
+        action: data.actionType,
+        resourceType: "campaigns",
+        resourceId: campaignId,
+        guardTriggered: true,
+        decision,
+        ...pause,
+      };
     }
     default:
       throw workflowError("This automation action is not installed.");
@@ -816,6 +1057,7 @@ async function runAutomation({ id, input, context, userId, idempotencyKey }) {
   );
   const automation = selected.rows[0];
   if (!automation) throw workflowError("Automation was not found.", 404, "GOODADS_AUTOMATION_NOT_FOUND");
+  if (PAID_CAMPAIGN_AUTOMATION_ACTIONS.has(automation.data?.actionType)) requireManagement(context);
   if (!["active", "ready"].includes(automation.status)) {
     throw workflowError("Activate this automation before running it.", 409, "GOODADS_AUTOMATION_NOT_ACTIVE");
   }
@@ -905,6 +1147,12 @@ function workflowCapabilities() {
       actions: [...AUTOMATION_ACTIONS],
       durableRuns: true,
       minimumScheduleMinutes: 5,
+      providerPauseDelivery: true,
+      spendGuard: {
+        available: true,
+        verifiedProviderMetrics: true,
+        failClosedOnStaleMetrics: true,
+      },
     },
   };
 }
@@ -926,5 +1174,6 @@ module.exports = {
     normalizeEngagementEvent,
     normalizeApprovalPayload,
     normalizeAutomationPayload,
+    spendGuardDecision,
   },
 };
