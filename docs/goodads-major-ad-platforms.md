@@ -27,19 +27,33 @@ native GoodBase adapter are all installed.
 | Meta (Facebook and Instagram) | Meta | Native | Native | Native |
 | YouTube | Google | Registered | Not installed | Not installed |
 | TikTok | TikTok | Registered | Not installed | Not installed |
-| LinkedIn | LinkedIn | Registered | Not installed | Not installed |
+| LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
 | X | X | Registered | Not installed | Not installed |
 | Pinterest | Pinterest | Registered | Not installed | Not installed |
 | Snapchat | Snapchat Marketing API | Registered | Not installed | Not installed |
 
-The six unfinished providers remain visible in the readiness contract so the
+The five unfinished providers remain visible in the readiness contract so the
 GoodAds interface can show the exact setup gap. They are deliberately excluded
 from `supportedProviders` until an in-process adapter passes the paused-create,
 lifecycle, analytics, retry, and approval-gate tests.
 
-LinkedIn and Pinterest advertising scopes can be enabled for approved OAuth
-applications with `GOODADS_LINKEDIN_ADS_OAUTH_ENABLED=true` and
-`GOODADS_PINTEREST_ADS_OAUTH_ENABLED=true`. Snapchat uses
+LinkedIn's native adapter discovers organization-backed ad accounts, resolves
+current Bing geo targets, uploads managed GoodOS images, and creates a paused
+Sponsored Content campaign with a draft direct-sponsored creative. Enable its
+approved advertising scopes with `GOODADS_LINKEDIN_ADS_OAUTH_ENABLED=true`;
+existing connections must reconnect to grant `r_ads` and `rw_ads`. The adapter
+uses LinkedIn Marketing API version `202608` by default, overridable with
+`GOODADS_LINKEDIN_API_VERSION=YYYYMM`.
+
+LinkedIn activation remains deliberately disabled. GoodAds does not yet
+present LinkedIn's required political-advertising and targeting-discrimination
+confirmations, so the adapter can set up and archive campaigns but cannot
+request an activation review or activate one. This preserves the no-spend
+contract while making the campaign fully reviewable in LinkedIn Campaign
+Manager.
+
+Pinterest advertising scopes can be enabled for an approved OAuth application
+with `GOODADS_PINTEREST_ADS_OAUTH_ENABLED=true`. Snapchat uses
 `GOODADS_SNAPCHAT_CLIENT_ID` and `GOODADS_SNAPCHAT_CLIENT_SECRET` with the
 `snapchat-marketing-api` scope. These settings prepare account authorization;
 they do not claim that delivery is installed.

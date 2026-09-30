@@ -38,7 +38,7 @@ test("all major paid platforms are explicit and unfinished adapters cannot fall 
     ads.publicProviders().map((provider) => provider.id),
     ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]
   );
-  for (const provider of ["youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]) {
+  for (const provider of ["youtube", "tiktok", "x", "pinterest", "snapchat"]) {
     const availability = ads._test.providerAvailability(provider);
     assert.equal(availability.available, false);
     assert.equal(availability.adapterConfigured, false);
@@ -47,6 +47,39 @@ test("all major paid platforms are explicit and unfinished adapters cannot fall 
       () => ads._test.nativeAdapter(provider),
       (error) => error.code === "GOODADS_ADAPTER_NOT_INSTALLED"
     );
+  }
+});
+
+test("LinkedIn delivery requires an approved OAuth app with advertising scopes", () => {
+  const names = [
+    "GOODADS_LINKEDIN_CLIENT_ID",
+    "GOODADS_LINKEDIN_CLIENT_SECRET",
+    "GOODADS_LINKEDIN_ADS_OAUTH_ENABLED",
+  ];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      GOODADS_LINKEDIN_CLIENT_ID: "test-client",
+      GOODADS_LINKEDIN_CLIENT_SECRET: "test-secret",
+      GOODADS_LINKEDIN_ADS_OAUTH_ENABLED: "false",
+    });
+    const withoutScopes = ads._test.providerAvailability("linkedin");
+    assert.equal(withoutScopes.available, false);
+    assert.deepEqual(withoutScopes.missingOAuthScopes, ["r_ads", "rw_ads"]);
+
+    process.env.GOODADS_LINKEDIN_ADS_OAUTH_ENABLED = "true";
+    const withScopes = ads._test.providerAvailability("linkedin");
+    assert.equal(withScopes.available, true);
+    assert.equal(withScopes.adapterConfigured, true);
+    assert.equal(withScopes.adapterType, "native");
+    assert.equal(withScopes.safePausedCreation, true);
+    assert.equal(withScopes.activationSupported, false);
+    assert.equal(typeof ads._test.nativeAdapter("linkedin").create, "function");
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
   }
 });
 
@@ -91,6 +124,100 @@ test("Google account discovery preserves locale and excludes manager accounts", 
   assert.equal(
     ads._test.normalizeGoogleCustomer("0987654321", { status: "ENABLED", manager: true }).eligible,
     false
+  );
+});
+
+test("LinkedIn account discovery requires campaign access and an organization owner", () => {
+  const eligible = ads._test.normalizeLinkedInAccount(
+    {
+      id: 518121035,
+      name: "GoodOS LinkedIn",
+      status: "ACTIVE",
+      currency: "usd",
+      reference: "urn:li:organization:5803528",
+      test: false,
+    },
+    { account: "urn:li:sponsoredAccount:518121035", role: "CAMPAIGN_MANAGER" }
+  );
+  assert.deepEqual(eligible, {
+    providerAccountId: "518121035",
+    name: "GoodOS LinkedIn",
+    currency: "USD",
+    timezone: "UTC",
+    eligible: true,
+    status: "active",
+    metadata: {
+      organizationUrn: "urn:li:organization:5803528",
+      role: "CAMPAIGN_MANAGER",
+      test: false,
+      deliveryReady: true,
+      channelType: "SPONSORED_UPDATES",
+    },
+  });
+  assert.equal(
+    ads._test.normalizeLinkedInAccount(
+      { id: 1, status: "ACTIVE", reference: "urn:li:organization:2" },
+      { role: "VIEWER" }
+    ).status,
+    "insufficient_campaign_role"
+  );
+  assert.equal(
+    ads._test.normalizeLinkedInAccount(
+      { id: 1, status: "ACTIVE", reference: "urn:li:person:abc" },
+      { role: "CAMPAIGN_MANAGER" }
+    ).status,
+    "organization_required"
+  );
+});
+
+test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creative", () => {
+  const row = {
+    provider_account_id: "518121035",
+    account_currency: "USD",
+    account_metadata: { organizationUrn: "urn:li:organization:5803528" },
+    campaign_name: "GoodOS Launch",
+    campaign_data: {
+      objective: "traffic",
+      dailyBudget: 25,
+      maxCpc: 3.5,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      language: "en",
+      creative: {
+        primaryText: "Run every part of your business from one place.",
+        headline: "Meet GoodOS",
+        description: "One operating system for growing businesses.",
+        callToAction: "Learn More",
+        destinationUrl: "https://goodos.app/",
+      },
+    },
+  };
+  const campaign = ads._test.linkedInCampaignPayload(row, {
+    campaignGroupUrn: "urn:li:sponsoredCampaignGroup:635137195",
+    locationUrns: ["urn:li:geo:103644278"],
+  });
+  assert.equal(campaign.status, "PAUSED");
+  assert.equal(campaign.account, "urn:li:sponsoredAccount:518121035");
+  assert.equal(campaign.associatedEntity, "urn:li:organization:5803528");
+  assert.equal(campaign.objectiveType, "WEBSITE_VISITS");
+  assert.equal(campaign.politicalIntent, "NOT_DECLARED");
+  assert.deepEqual(
+    campaign.targetingCriteria.include.and[0].or["urn:li:adTargetingFacet:locations"],
+    ["urn:li:geo:103644278"]
+  );
+
+  const creative = ads._test.linkedInCreativePayload(row, {
+    campaignUrn: "urn:li:sponsoredCampaign:360035215",
+    imageUrn: "urn:li:image:C4E22AQF_example",
+    organizationUrn: "urn:li:organization:5803528",
+  });
+  assert.equal(creative.creative.intendedStatus, "DRAFT");
+  assert.equal(creative.creative.inlineContent.post.distribution.feedDistribution, "NONE");
+  assert.equal(creative.creative.inlineContent.post.author, "urn:li:organization:5803528");
+  assert.equal(
+    creative.creative.inlineContent.post.content.article.thumbnail,
+    "urn:li:image:C4E22AQF_example"
   );
 });
 
@@ -148,5 +275,8 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /FOR UPDATE SKIP LOCKED/);
   assert.match(source, /dead_letter/);
   assert.match(source, /GOODADS_ADAPTER_NOT_INSTALLED/);
+  assert.match(source, /GOODADS_AD_ACTIVATION_NOT_SUPPORTED/);
+  assert.match(source, /intendedStatus: "DRAFT"/);
+  assert.match(source, /activationSupported: false/);
   assert.doesNotMatch(source, /row\.provider === "meta"[\s\S]{0,120}: createGoogleDelivery/);
 });

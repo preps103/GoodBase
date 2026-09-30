@@ -7,6 +7,13 @@ const social = require("./goodads-social.service");
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9._:-]{2,120}$/;
 const MANAGEMENT_ROLES = new Set(["owner", "admin", "manager"]);
+const LINKEDIN_CAMPAIGN_ROLES = new Set([
+  "ACCOUNT_BILLING_ADMIN",
+  "ACCOUNT_MANAGER",
+  "CAMPAIGN_MANAGER",
+]);
+const LINKEDIN_IMAGE_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png"]);
+const MAX_LINKEDIN_IMAGE_BYTES = 10 * 1024 * 1024;
 const PROVIDERS = Object.freeze({
   google: {
     name: "Google Ads",
@@ -48,10 +55,12 @@ const PROVIDERS = Object.freeze({
     name: "LinkedIn Ads",
     connectionProviders: ["linkedin"],
     requiredEnvironment: [],
+    requiredOAuthScopes: ["r_ads", "rw_ads"],
     platforms: ["linkedin"],
     safePausedCreation: true,
     deliveryAdapter: "sponsored_content",
-    adapterType: "not_installed",
+    adapterType: "native",
+    activationSupported: false,
   },
   x: {
     name: "X Ads",
@@ -137,22 +146,36 @@ function providerAvailability(provider) {
     }
   });
   const missingEnvironment = definition.requiredEnvironment.filter((name) => !boundedText(process.env[name], 10000));
+  let configuredOAuthScopes = [];
+  for (const connectionProvider of definition.connectionProviders) {
+    try {
+      configuredOAuthScopes.push(...social.providerConfig(connectionProvider).scopes);
+    } catch {}
+  }
+  configuredOAuthScopes = [...new Set(configuredOAuthScopes)];
+  const missingOAuthScopes = (definition.requiredOAuthScopes || [])
+    .filter((scope) => !configuredOAuthScopes.includes(scope));
   const adapterConfigured = definition.adapterType === "native";
-  const configurationErrors = adapterConfigured
-    ? []
-    : ["A native production delivery adapter is not installed for this provider."];
+  const configurationErrors = [];
+  if (!adapterConfigured) configurationErrors.push("A native production delivery adapter is not installed for this provider.");
+  if (missingOAuthScopes.length) configurationErrors.push("Advertising OAuth scopes are not enabled for this provider.");
   return {
     id,
     name: definition.name,
-    available: oauthConfigured && missingEnvironment.length === 0 && adapterConfigured,
+    available: oauthConfigured
+      && missingEnvironment.length === 0
+      && missingOAuthScopes.length === 0
+      && adapterConfigured,
     oauthConfigured,
     adapterConfigured,
     adapterType: definition.adapterType,
     missingEnvironment,
+    missingOAuthScopes,
     configurationErrors,
     connectionProviders: [...definition.connectionProviders],
     platforms: [...definition.platforms],
     safePausedCreation: definition.safePausedCreation && adapterConfigured,
+    activationSupported: definition.activationSupported !== false && adapterConfigured,
     deliveryAdapter: definition.deliveryAdapter,
   };
 }
@@ -330,6 +353,110 @@ async function discoverGoogleAccounts(accessToken) {
   return { accounts, pages: [] };
 }
 
+function linkedInVersion() {
+  const value = boundedText(process.env.GOODADS_LINKEDIN_API_VERSION || "202608", 6);
+  if (!/^20\d{4}$/.test(value)) {
+    throw adsError(
+      "LinkedIn Marketing API version must use YYYYMM format.",
+      503,
+      "GOODADS_LINKEDIN_VERSION_INVALID"
+    );
+  }
+  return value;
+}
+
+function linkedInHeaders(accessToken, extra = {}) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    "Linkedin-Version": linkedInVersion(),
+    "X-Restli-Protocol-Version": "2.0.0",
+    Accept: "application/json",
+    "User-Agent": "GoodAds/1.0",
+    ...extra,
+  };
+}
+
+function linkedInAccountId(value) {
+  return boundedText(value, 200).replace(/^urn:li:sponsoredAccount:/, "");
+}
+
+function linkedInNumericId(value) {
+  return boundedText(value, 300).match(/(\d+)$/)?.[1] || "";
+}
+
+function normalizeLinkedInAccount(account = {}, membership = {}) {
+  const providerAccountId = linkedInAccountId(account.id || membership.account);
+  const providerStatus = boundedText(account.status || "UNKNOWN", 40).toUpperCase();
+  const role = boundedText(membership.role, 80).toUpperCase();
+  const organizationUrn = /^urn:li:organization:\d+$/.test(String(account.reference || ""))
+    ? String(account.reference)
+    : null;
+  const roleEligible = LINKEDIN_CAMPAIGN_ROLES.has(role);
+  const eligible = providerStatus === "ACTIVE" && roleEligible && Boolean(organizationUrn);
+  let status = providerStatus.toLowerCase();
+  if (providerStatus === "ACTIVE" && !roleEligible) status = "insufficient_campaign_role";
+  if (providerStatus === "ACTIVE" && roleEligible && !organizationUrn) status = "organization_required";
+  return {
+    providerAccountId,
+    name: boundedText(account.name || `LinkedIn Ads ${providerAccountId}`, 240),
+    currency: boundedText(account.currency, 12).toUpperCase(),
+    timezone: "UTC",
+    eligible,
+    status,
+    metadata: {
+      organizationUrn,
+      role,
+      test: account.test === true,
+      deliveryReady: eligible,
+      channelType: "SPONSORED_UPDATES",
+    },
+  };
+}
+
+async function discoverLinkedInAccounts(accessToken) {
+  const headers = linkedInHeaders(accessToken);
+  const { payload: membershipPayload } = await requestJson(
+    "https://api.linkedin.com/rest/adAccountUsers?q=authenticatedUser",
+    { headers },
+    "LinkedIn Ads account discovery"
+  );
+  const memberships = (Array.isArray(membershipPayload.elements) ? membershipPayload.elements : [])
+    .slice(0, 100);
+  const accounts = await Promise.all(memberships.map(async (membership) => {
+    const providerAccountId = linkedInAccountId(membership.account);
+    if (!ACCOUNT_ID_PATTERN.test(providerAccountId)) {
+      return normalizeLinkedInAccount({}, membership);
+    }
+    try {
+      const { payload } = await requestJson(
+        `https://api.linkedin.com/rest/adAccounts/${encodeURIComponent(providerAccountId)}`,
+        { headers },
+        "LinkedIn Ads account details"
+      );
+      return normalizeLinkedInAccount({ ...payload, id: payload.id || providerAccountId }, membership);
+    } catch {
+      return {
+        ...normalizeLinkedInAccount({ id: providerAccountId }, membership),
+        eligible: false,
+        status: "details_unavailable",
+      };
+    }
+  }));
+  return { accounts, pages: [] };
+}
+
+function requireConnectionScopes(connection, requiredScopes = []) {
+  const granted = new Set(Array.isArray(connection.scopes) ? connection.scopes : []);
+  const missing = requiredScopes.filter((scope) => !granted.has(scope));
+  if (missing.length) {
+    throw adsError(
+      `Reconnect this account and grant the required advertising permissions: ${missing.join(", ")}.`,
+      409,
+      "GOODADS_AD_CONNECTION_SCOPES_MISSING"
+    );
+  }
+}
+
 async function discoverAccounts({ provider, connectionId, context, userId }) {
   requireManagement(context);
   const id = canonicalProvider(provider);
@@ -347,11 +474,14 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
     connectionId,
     allowedProviders: PROVIDERS[id].connectionProviders,
   });
+  requireConnectionScopes(connection, PROVIDERS[id].requiredOAuthScopes || []);
   const accessToken = await social.accessTokenForConnection(connection);
   const discovered = id === "meta"
     ? await discoverMetaAccounts(accessToken)
     : id === "google"
       ? await discoverGoogleAccounts(accessToken)
+      : id === "linkedin"
+        ? await discoverLinkedInAccounts(accessToken)
       : (() => {
           throw adsError(
             `${PROVIDERS[id].name} account discovery is unavailable until its native adapter is installed.`,
@@ -435,7 +565,9 @@ async function saveAdAccount({ payload, context, userId }) {
         instagramUsername: selectedPage?.instagramUsername || null,
         deliveryReady: Boolean(selectedPage?.id),
       }
-    : { deliveryReady: true, channelType: "SEARCH" };
+    : provider === "linkedin"
+      ? { ...(account.metadata || {}), deliveryReady: account.metadata?.deliveryReady === true }
+      : { deliveryReady: true, channelType: "SEARCH" };
   const result = await query(
     `INSERT INTO goodads_ad_accounts (
        organization_id, connection_id, provider, provider_account_id, name,
@@ -579,6 +711,29 @@ function validateCampaignForAccount(campaign, account) {
       409,
       "GOODADS_IMAGE_REQUIRED"
     );
+  }
+  if (account.provider === "linkedin") {
+    if (!account.metadata?.deliveryReady || !/^urn:li:organization:\d+$/.test(account.metadata?.organizationUrn || "")) {
+      throw adsError(
+        "LinkedIn delivery requires an active organization-backed ad account and campaign-manager access.",
+        409,
+        "GOODADS_LINKEDIN_ORGANIZATION_REQUIRED"
+      );
+    }
+    if (String(data.objective || "traffic").toLowerCase() === "leads") {
+      throw adsError(
+        "LinkedIn lead-generation campaigns require a verified LinkedIn lead form before setup.",
+        409,
+        "GOODADS_LINKEDIN_LEAD_FORM_REQUIRED"
+      );
+    }
+    if (!boundedText(creative.primaryText, 600) || !boundedText(creative.headline, 200)) {
+      throw adsError(
+        "LinkedIn delivery requires primary text and a headline.",
+        409,
+        "GOODADS_LINKEDIN_COPY_REQUIRED"
+      );
+    }
   }
   if (["x", "snapchat"].includes(account.provider)
     && !isPublicHttpsUrl(creative.imageUrl)
@@ -794,6 +949,13 @@ async function queueLifecycleOperation({
   const campaign = selected.rows[0];
   if (!campaign) throw adsError("Provider campaign was not found.", 404, "GOODADS_PROVIDER_CAMPAIGN_NOT_FOUND");
   if (operationType === "activate") {
+    if (PROVIDERS[campaign.provider]?.activationSupported === false) {
+      throw adsError(
+        `${PROVIDERS[campaign.provider].name} activation remains disabled until its provider-specific policy confirmation is installed.`,
+        409,
+        "GOODADS_AD_ACTIVATION_NOT_SUPPORTED"
+      );
+    }
     const currentSnapshot = {
       id: campaign.campaign_id,
       version: Number(campaign.current_version),
@@ -880,6 +1042,13 @@ async function requestActivationApproval({
   );
   const campaign = selected.rows[0];
   if (!campaign) throw adsError("Provider campaign was not found.", 404, "GOODADS_PROVIDER_CAMPAIGN_NOT_FOUND");
+  if (PROVIDERS[campaign.provider]?.activationSupported === false) {
+    throw adsError(
+      `${PROVIDERS[campaign.provider].name} activation review is unavailable until its provider-specific policy confirmation is installed.`,
+      409,
+      "GOODADS_AD_ACTIVATION_NOT_SUPPORTED"
+    );
+  }
   if (campaign.status !== "paused") {
     throw adsError("The provider campaign must be created and paused before activation review.", 409, "GOODADS_AD_CAMPAIGN_NOT_PAUSED");
   }
@@ -1183,6 +1352,460 @@ async function createGoogleDelivery(row, accessToken) {
   };
 }
 
+function linkedInObjective(value) {
+  return {
+    awareness: "BRAND_AWARENESS",
+    engagement: "ENGAGEMENT",
+    conversions: "WEBSITE_CONVERSIONS",
+    sales: "WEBSITE_CONVERSIONS",
+    traffic: "WEBSITE_VISITS",
+  }[String(value || "").toLowerCase()] || "WEBSITE_VISITS";
+}
+
+function linkedInUrn(value, kind) {
+  const decoded = decodeURIComponent(boundedText(value, 300));
+  const match = decoded.match(new RegExp(`(?:urn:li:${kind}:)?(\\d+)$`));
+  return match ? `urn:li:${kind}:${match[1]}` : "";
+}
+
+function linkedInResponseUrn(response, payload, kind) {
+  return linkedInUrn(
+    response.headers.get("x-restli-id")
+      || payload?.id
+      || payload?.value?.id
+      || payload?.value
+      || "",
+    kind
+  );
+}
+
+async function linkedInRequest(path, accessToken, options = {}, fallback = "LinkedIn Ads operation") {
+  return requestJson(
+    `https://api.linkedin.com${path}`,
+    {
+      ...options,
+      headers: linkedInHeaders(accessToken, options.headers || {}),
+    },
+    fallback
+  );
+}
+
+function linkedInScheduleDate(value, exclusiveEnd = false) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) throw adsError("LinkedIn campaign schedule is invalid.");
+  if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
+  return date.getTime();
+}
+
+async function linkedInLocations(row, accessToken) {
+  const countries = [...new Set((row.campaign_data?.targetCountries || [])
+    .map((value) => boundedText(value, 2).toUpperCase())
+    .filter((value) => /^[A-Z]{2}$/.test(value)))];
+  const names = new Intl.DisplayNames(["en"], { type: "region" });
+  const accountUrn = `urn:li:sponsoredAccount:${linkedInAccountId(row.provider_account_id)}`;
+  const resolved = [];
+  for (const country of countries) {
+    const countryName = names.of(country);
+    if (!countryName || countryName === country) {
+      throw adsError(`LinkedIn targeting does not recognize country ${country}.`, 409, "GOODADS_LINKEDIN_COUNTRY_INVALID");
+    }
+    const parameters = new URLSearchParams({
+      q: "TYPEAHEAD",
+      queryVersion: "QUERY_USES_URNS",
+      facet: "urn:li:adTargetingFacet:locations",
+      query: countryName,
+      "locale.language": "en",
+      "locale.country": "US",
+      lixEntity: accountUrn,
+    });
+    const { payload } = await linkedInRequest(
+      `/rest/adTargetingEntities?${parameters}`,
+      accessToken,
+      {},
+      "LinkedIn location targeting"
+    );
+    const choices = Array.isArray(payload.elements) ? payload.elements : [];
+    const exact = choices.find((item) => (
+      /^urn:li:geo:\d+$/.test(String(item.urn || ""))
+      && boundedText(item.name, 200).toLocaleLowerCase("en") === countryName.toLocaleLowerCase("en")
+    ));
+    if (!exact) {
+      throw adsError(
+        `LinkedIn did not return an exact country target for ${countryName}.`,
+        409,
+        "GOODADS_LINKEDIN_COUNTRY_UNRESOLVED"
+      );
+    }
+    resolved.push(exact.urn);
+  }
+  return resolved;
+}
+
+function linkedInCampaignPayload(row, { campaignGroupUrn, locationUrns }) {
+  const data = row.campaign_data || {};
+  const currency = boundedText(row.account_currency, 12).toUpperCase();
+  const country = boundedText(data.targetCountries?.[0] || "US", 2).toUpperCase();
+  const language = /^[a-z]{2}$/.test(String(data.language || "").toLowerCase())
+    ? String(data.language).toLowerCase()
+    : "en";
+  return {
+    account: `urn:li:sponsoredAccount:${linkedInAccountId(row.provider_account_id)}`,
+    associatedEntity: boundedText(row.account_metadata?.organizationUrn, 200),
+    campaignGroup: campaignGroupUrn,
+    audienceExpansionEnabled: false,
+    connectedTelevisionOnly: false,
+    costType: "CPC",
+    creativeSelection: "OPTIMIZED",
+    dailyBudget: { amount: Number(data.dailyBudget).toFixed(2), currencyCode: currency },
+    locale: { country, language },
+    name: boundedText(row.campaign_name, 200),
+    objectiveType: linkedInObjective(data.objective),
+    offsiteDeliveryEnabled: false,
+    politicalIntent: "NOT_DECLARED",
+    runSchedule: {
+      start: linkedInScheduleDate(data.startDate),
+      end: linkedInScheduleDate(data.endDate, true),
+    },
+    targetingCriteria: {
+      include: {
+        and: [{
+          or: { "urn:li:adTargetingFacet:locations": locationUrns },
+        }],
+      },
+    },
+    type: "SPONSORED_UPDATES",
+    unitCost: {
+      amount: Math.max(Number(data.maxCpc || 1), 0.01).toFixed(2),
+      currencyCode: currency,
+    },
+    status: "PAUSED",
+  };
+}
+
+function linkedInCreativePayload(row, { campaignUrn, imageUrn, organizationUrn }) {
+  const creative = row.campaign_data?.creative || {};
+  const callToAction = {
+    "Sign Up": "SIGN_UP",
+    Download: "DOWNLOAD",
+    "Shop Now": "SHOP_NOW",
+    "Get Offer": "GET_OFFER",
+  }[creative.callToAction] || "LEARN_MORE";
+  return {
+    creative: {
+      inlineContent: {
+        post: {
+          adContext: {
+            dscAdAccount: `urn:li:sponsoredAccount:${linkedInAccountId(row.provider_account_id)}`,
+            dscStatus: "ACTIVE",
+          },
+          author: organizationUrn,
+          commentary: boundedText(creative.primaryText, 600),
+          visibility: "PUBLIC",
+          distribution: {
+            feedDistribution: "NONE",
+            targetEntities: [],
+            thirdPartyDistributionChannels: [],
+          },
+          lifecycleState: "PUBLISHED",
+          isReshareDisabledByAuthor: false,
+          contentCallToActionLabel: callToAction,
+          contentLandingPage: creative.destinationUrl,
+          content: {
+            article: {
+              source: creative.destinationUrl,
+              thumbnail: imageUrn,
+              title: boundedText(creative.headline, 200),
+              description: boundedText(creative.description || creative.primaryText, 300),
+            },
+          },
+        },
+      },
+      campaign: campaignUrn,
+      intendedStatus: "DRAFT",
+      name: boundedText(`${row.campaign_name} creative`, 200),
+    },
+  };
+}
+
+async function readBoundedBody(response, maximumBytes) {
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  if (declaredLength > maximumBytes) throw adsError("LinkedIn creative image exceeds 10 MB.", 413, "GOODADS_LINKEDIN_IMAGE_TOO_LARGE");
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maximumBytes) {
+      await reader.cancel().catch(() => {});
+      throw adsError("LinkedIn creative image exceeds 10 MB.", 413, "GOODADS_LINKEDIN_IMAGE_TOO_LARGE");
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
+async function loadLinkedInCreativeImage(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw adsError("LinkedIn creative image URL is invalid.", 409, "GOODADS_LINKEDIN_IMAGE_INVALID");
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (
+    url.protocol !== "https:"
+    || url.username
+    || url.password
+    || (url.port && url.port !== "443")
+    || (hostname !== "goodos.app" && !hostname.endsWith(".goodos.app"))
+  ) {
+    throw adsError(
+      "LinkedIn creative images must be stored on a managed GoodOS HTTPS address.",
+      409,
+      "GOODADS_LINKEDIN_IMAGE_HOST_INVALID"
+    );
+  }
+  let response;
+  try {
+    response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(20000) });
+  } catch {
+    throw adsError("LinkedIn creative image could not be downloaded.", 502, "GOODADS_LINKEDIN_IMAGE_DOWNLOAD_FAILED", true);
+  }
+  if (!response.ok) {
+    throw adsError("LinkedIn creative image could not be downloaded.", 502, "GOODADS_LINKEDIN_IMAGE_DOWNLOAD_FAILED", response.status >= 500);
+  }
+  const mimeType = boundedText(response.headers.get("content-type"), 100).split(";")[0].toLowerCase();
+  if (!LINKEDIN_IMAGE_MIME_TYPES.has(mimeType)) {
+    throw adsError("LinkedIn creative image must be JPEG, PNG, or GIF.", 409, "GOODADS_LINKEDIN_IMAGE_TYPE_INVALID");
+  }
+  const buffer = await readBoundedBody(response, MAX_LINKEDIN_IMAGE_BYTES);
+  if (!buffer.length) throw adsError("LinkedIn creative image is empty.", 409, "GOODADS_LINKEDIN_IMAGE_EMPTY");
+  return { buffer, mimeType };
+}
+
+async function mergeProviderReceipt(row, patch, fields = {}) {
+  await query(
+    `UPDATE goodads_provider_campaigns
+     SET provider_campaign_id = COALESCE($2, provider_campaign_id),
+         provider_resource_name = COALESCE($3, provider_resource_name),
+         provider_budget_id = COALESCE($4, provider_budget_id),
+         receipt = receipt || $5::jsonb, updated_at = NOW()
+     WHERE id = $1::uuid`,
+    [
+      row.provider_campaign_record_id,
+      fields.providerCampaignId || null,
+      fields.providerResourceName || null,
+      fields.providerBudgetId || null,
+      JSON.stringify(patch),
+    ]
+  );
+  row.receipt = { ...(row.receipt || {}), ...patch };
+  if (fields.providerCampaignId) row.provider_campaign_id = fields.providerCampaignId;
+  if (fields.providerResourceName) row.provider_resource_name = fields.providerResourceName;
+  if (fields.providerBudgetId) row.provider_budget_id = fields.providerBudgetId;
+}
+
+async function ensureLinkedInImage(row, accessToken, organizationUrn) {
+  let imageUrn = row.receipt?.imageUrn;
+  if (!imageUrn) {
+    const accountUrn = `urn:li:sponsoredAccount:${linkedInAccountId(row.provider_account_id)}`;
+    const { buffer, mimeType } = await loadLinkedInCreativeImage(row.campaign_data?.creative?.imageUrl);
+    const { payload } = await linkedInRequest(
+      "/rest/images?action=initializeUpload",
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          initializeUploadRequest: {
+            owner: organizationUrn,
+            mediaLibraryMetadata: {
+              associatedAccount: accountUrn,
+              assetName: boundedText(`${row.campaign_name} creative`, 200),
+            },
+          },
+        }),
+      },
+      "LinkedIn image initialization"
+    );
+    imageUrn = boundedText(payload?.value?.image, 300);
+    const uploadUrl = boundedText(payload?.value?.uploadUrl, 4000);
+    if (!/^urn:li:image:[A-Za-z0-9_-]+$/.test(imageUrn) || !uploadUrl.startsWith("https://")) {
+      throw adsError("LinkedIn did not return a valid image upload target.", 502, "GOODADS_LINKEDIN_IMAGE_INIT_FAILED");
+    }
+    let uploadResponse;
+    try {
+      uploadResponse = await fetch(uploadUrl, {
+        method: "PUT",
+        redirect: "error",
+        headers: { "Content-Type": mimeType, "Content-Length": String(buffer.length) },
+        body: buffer,
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch {
+      throw adsError("LinkedIn image upload could not be completed.", 502, "GOODADS_LINKEDIN_IMAGE_UPLOAD_FAILED", true);
+    }
+    if (!uploadResponse.ok) {
+      throw adsError("LinkedIn rejected the creative image upload.", 502, "GOODADS_LINKEDIN_IMAGE_UPLOAD_FAILED", uploadResponse.status >= 500);
+    }
+    await mergeProviderReceipt(row, { imageUrn });
+  }
+  const { payload: image } = await linkedInRequest(
+    `/rest/images/${encodeURIComponent(imageUrn)}`,
+    accessToken,
+    {},
+    "LinkedIn image status"
+  );
+  if (String(image.status || "").toUpperCase() !== "AVAILABLE") {
+    throw adsError("LinkedIn is still processing the creative image.", 409, "GOODADS_LINKEDIN_IMAGE_PROCESSING", true);
+  }
+  return imageUrn;
+}
+
+async function createLinkedInDelivery(row, accessToken) {
+  const data = row.campaign_data || {};
+  const organizationUrn = boundedText(row.account_metadata?.organizationUrn, 200);
+  if (!/^urn:li:organization:\d+$/.test(organizationUrn)) {
+    throw adsError("LinkedIn organization ownership is missing from this ad account.", 409, "GOODADS_LINKEDIN_ORGANIZATION_REQUIRED");
+  }
+  const accountId = linkedInAccountId(row.provider_account_id);
+  const accountUrn = `urn:li:sponsoredAccount:${accountId}`;
+  let campaignGroupUrn = row.receipt?.campaignGroupUrn || row.provider_budget_id;
+  if (!campaignGroupUrn) {
+    const { response, payload } = await linkedInRequest(
+      `/rest/adAccounts/${encodeURIComponent(accountId)}/adCampaignGroups`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account: accountUrn,
+          name: boundedText(`${row.campaign_name} group`, 200),
+          runSchedule: {
+            start: linkedInScheduleDate(data.startDate),
+            end: linkedInScheduleDate(data.endDate, true),
+          },
+          status: "ACTIVE",
+        }),
+      },
+      "LinkedIn campaign-group creation"
+    );
+    campaignGroupUrn = linkedInResponseUrn(response, payload, "sponsoredCampaignGroup");
+    if (!campaignGroupUrn) throw adsError("LinkedIn did not return a campaign-group ID.", 502, "GOODADS_LINKEDIN_GROUP_CREATE_FAILED");
+    await mergeProviderReceipt(row, { campaignGroupUrn }, { providerBudgetId: campaignGroupUrn });
+  }
+  let campaignUrn = row.receipt?.campaignUrn || row.provider_resource_name;
+  if (!campaignUrn) {
+    const locationUrns = await linkedInLocations(row, accessToken);
+    const campaignBody = linkedInCampaignPayload(row, { campaignGroupUrn, locationUrns });
+    const { response, payload } = await linkedInRequest(
+      `/rest/adAccounts/${encodeURIComponent(accountId)}/adCampaigns`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(campaignBody),
+      },
+      "LinkedIn paused-campaign creation"
+    );
+    campaignUrn = linkedInResponseUrn(response, payload, "sponsoredCampaign");
+    if (!campaignUrn) throw adsError("LinkedIn did not return a campaign ID.", 502, "GOODADS_LINKEDIN_CAMPAIGN_CREATE_FAILED");
+    await mergeProviderReceipt(
+      row,
+      { campaignUrn, locationUrns, politicalIntent: "NOT_DECLARED" },
+      {
+        providerCampaignId: campaignUrn.split(":").pop(),
+        providerResourceName: campaignUrn,
+      }
+    );
+  }
+  const imageUrn = await ensureLinkedInImage(row, accessToken, organizationUrn);
+  let creativeUrn = row.receipt?.creativeUrn;
+  if (!creativeUrn) {
+    const creativeBody = linkedInCreativePayload(row, { campaignUrn, imageUrn, organizationUrn });
+    const { response, payload } = await linkedInRequest(
+      `/rest/adAccounts/${encodeURIComponent(accountId)}/creatives?action=createInline`,
+      accessToken,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(creativeBody),
+      },
+      "LinkedIn draft-creative creation"
+    );
+    creativeUrn = linkedInResponseUrn(response, payload, "sponsoredCreative");
+    if (!creativeUrn) throw adsError("LinkedIn did not return a creative ID.", 502, "GOODADS_LINKEDIN_CREATIVE_CREATE_FAILED");
+    await mergeProviderReceipt(row, { creativeUrn });
+  }
+  return {
+    providerCampaignId: campaignUrn.split(":").pop(),
+    providerResourceName: campaignUrn,
+    providerBudgetId: campaignGroupUrn,
+    receipt: {
+      ...(row.receipt || {}),
+      campaignGroupUrn,
+      campaignUrn,
+      creativeUrn,
+      imageUrn,
+      accountUrn,
+      organizationUrn,
+      state: "PAUSED",
+      activationSupported: false,
+    },
+  };
+}
+
+async function updateLinkedInStatus(row, accessToken, status) {
+  if (status === "ACTIVE") {
+    throw adsError(
+      "LinkedIn activation is disabled until policy confirmation is installed.",
+      409,
+      "GOODADS_AD_ACTIVATION_NOT_SUPPORTED"
+    );
+  }
+  const accountId = linkedInAccountId(row.provider_account_id);
+  const campaignId = linkedInNumericId(row.provider_campaign_id || row.provider_resource_name);
+  if (!campaignId) throw adsError("LinkedIn campaign ID is invalid.", 409, "GOODADS_LINKEDIN_CAMPAIGN_ID_INVALID");
+  await linkedInRequest(
+    `/rest/adAccounts/${encodeURIComponent(accountId)}/adCampaigns/${encodeURIComponent(campaignId)}`,
+    accessToken,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-RestLi-Method": "PARTIAL_UPDATE",
+      },
+      body: JSON.stringify({ patch: { $set: { status } } }),
+    },
+    "LinkedIn campaign status update"
+  );
+  return { ...row.receipt, state: status };
+}
+
+async function syncLinkedInStatus(row, accessToken) {
+  const accountId = linkedInAccountId(row.provider_account_id);
+  const campaignId = linkedInNumericId(row.provider_campaign_id || row.provider_resource_name);
+  if (!campaignId) throw adsError("LinkedIn campaign ID is invalid.", 409, "GOODADS_LINKEDIN_CAMPAIGN_ID_INVALID");
+  const { payload } = await linkedInRequest(
+    `/rest/adAccounts/${encodeURIComponent(accountId)}/adCampaigns/${encodeURIComponent(campaignId)}`,
+    accessToken,
+    {},
+    "LinkedIn campaign status"
+  );
+  const providerStatus = boundedText(payload.status, 40).toUpperCase();
+  const status = providerStatus === "ACTIVE"
+    ? "active"
+    : ["ARCHIVED", "CANCELED", "PENDING_DELETION", "REMOVED"].includes(providerStatus)
+      ? "archived"
+      : ["DRAFT", "PAUSED", "COMPLETED"].includes(providerStatus)
+        ? "paused"
+        : row.status;
+  return { receipt: { ...row.receipt, providerStatus, state: providerStatus }, status };
+}
+
 async function updateMetaStatus(row, accessToken, status) {
   const ids = [row.provider_campaign_id, row.receipt?.adSetId, row.receipt?.adId].filter(Boolean);
   for (const id of ids) await metaPost(id, accessToken, { status });
@@ -1274,6 +1897,12 @@ function nativeAdapter(provider) {
       updateStatus: updateGoogleStatus,
       sync: syncGoogleStatus,
       statuses: { pause: "PAUSED", activate: "ENABLED", archive: "REMOVED" },
+    },
+    linkedin: {
+      create: createLinkedInDelivery,
+      updateStatus: updateLinkedInStatus,
+      sync: syncLinkedInStatus,
+      statuses: { pause: "PAUSED", activate: "ACTIVE", archive: "ARCHIVED" },
     },
   };
   const adapter = adapters[provider];
@@ -1397,7 +2026,8 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
          provider_campaign.provider_campaign_id, provider_campaign.provider_resource_name,
          provider_campaign.provider_budget_id, provider_campaign.status,
          provider_campaign.receipt, provider_campaign.provider,
-         account.provider_account_id, account.metadata AS account_metadata,
+         account.provider_account_id, account.currency AS account_currency,
+         account.timezone AS account_timezone, account.metadata AS account_metadata,
          connection.*,
          campaign.name AS campaign_name, campaign.data AS campaign_data
        FROM goodads_ad_operations operation
@@ -1484,7 +2114,12 @@ module.exports = {
     providerAvailability,
     normalizeMetaAccount,
     normalizeGoogleCustomer,
+    normalizeLinkedInAccount,
     metaObjective,
+    linkedInObjective,
+    linkedInCampaignPayload,
+    linkedInCreativePayload,
+    linkedInVersion,
     nativeAdapter,
     snapshotHash,
     validateCampaignForAccount,
