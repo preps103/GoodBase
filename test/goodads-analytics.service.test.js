@@ -73,6 +73,63 @@ test("analytics capabilities include native X Ads reporting", () => {
     analytics.capabilities().providerAnalytics.supportedProviders,
     ["google", "linkedin", "meta", "pinterest", "snapchat", "tiktok", "x", "youtube"]
   );
+  assert.equal(analytics.capabilities().providerAnalytics.crossChannelBudgetRecommendations, true);
+  assert.equal(analytics.capabilities().providerAnalytics.budgetRecommendationsAdvisoryOnly, true);
+});
+
+test("cross-channel budget recommendations preserve the total and never execute automatically", () => {
+  const now = Date.parse("2026-09-30T23:00:00.000Z");
+  const result = analytics._test.budgetRecommendations([
+    {
+      provider_campaign_record_id: "meta-delivery",
+      campaign_id: "campaign-meta",
+      campaign_name: "Meta prospecting",
+      provider: "meta",
+      currency: "USD",
+      status: "active",
+      daily_budget: "100",
+      spend_micros: 80000000,
+      conversions: 8,
+      conversion_value_micros: 160000000,
+      captured_at: "2026-09-30T22:40:00.000Z",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+    },
+    {
+      provider_campaign_record_id: "google-delivery",
+      campaign_id: "campaign-google",
+      campaign_name: "Google demand",
+      provider: "google",
+      currency: "USD",
+      status: "active",
+      daily_budget: "100",
+      spend_micros: 70000000,
+      conversions: 21,
+      conversion_value_micros: 420000000,
+      captured_at: "2026-09-30T22:45:00.000Z",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+    },
+  ], { now });
+  assert.equal(result.advisoryOnly, true);
+  assert.equal(result.automaticExecution, false);
+  assert.equal(result.recommendations.length, 1);
+  const recommendation = result.recommendations[0];
+  assert.equal(recommendation.source.provider, "meta");
+  assert.equal(recommendation.destination.provider, "google");
+  assert.equal(recommendation.shiftMicros, 20000000);
+  assert.equal(recommendation.totalDailyBudgetBeforeMicros, recommendation.totalDailyBudgetAfterMicros);
+  assert.equal(recommendation.source.recommendedDailyBudgetMicros, 80000000);
+  assert.equal(recommendation.destination.recommendedDailyBudgetMicros, 120000000);
+});
+
+test("budget recommendations exclude stale and cross-currency evidence", () => {
+  const result = analytics._test.budgetRecommendations([
+    { providerCampaignRecordId: "one", provider: "meta", currency: "USD", status: "active", dailyBudget: 50, spendMicros: 10000000, conversions: 5, capturedAt: "2026-09-30T20:00:00.000Z" },
+    { providerCampaignRecordId: "two", provider: "google", currency: "EUR", status: "active", dailyBudget: 50, spendMicros: 10000000, conversions: 10, capturedAt: "2026-09-30T22:50:00.000Z" },
+  ], { now: Date.parse("2026-09-30T23:00:00.000Z") });
+  assert.equal(result.excluded.stale, 1);
+  assert.deepEqual(result.recommendations, []);
 });
 
 test("YouTube campaigns use the verified Google Ads reporting adapter", () => {

@@ -726,9 +726,134 @@ function number(value) {
   return Number(value) || 0;
 }
 
+function budgetRecommendations(rows, options = {}) {
+  const now = Number(options.now) || Date.now();
+  const staleAfterMinutes = Math.min(Math.max(Number(options.staleAfterMinutes) || 45, 15), 1440);
+  const maximumShiftPercent = Math.min(Math.max(Number(options.maximumShiftPercent) || 20, 5), 25);
+  const minimumSpendMicros = Math.max(Number(options.minimumSpendMicros) || 5000000, 1000000);
+  const eligible = [];
+  const excluded = { inactive: 0, stale: 0, insufficientData: 0, invalidBudget: 0 };
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row.status !== "active") {
+      excluded.inactive += 1;
+      continue;
+    }
+    const capturedAt = new Date(row.captured_at || row.capturedAt || 0).getTime();
+    if (!Number.isFinite(capturedAt) || now - capturedAt > staleAfterMinutes * 60000) {
+      excluded.stale += 1;
+      continue;
+    }
+    const spendMicros = number(row.spend_micros ?? row.spendMicros);
+    const conversions = number(row.conversions);
+    const dailyBudget = number(row.daily_budget ?? row.dailyBudget);
+    if (spendMicros < minimumSpendMicros || conversions <= 0) {
+      excluded.insufficientData += 1;
+      continue;
+    }
+    if (!Number.isFinite(dailyBudget) || dailyBudget <= 0) {
+      excluded.invalidBudget += 1;
+      continue;
+    }
+    eligible.push({
+      providerCampaignRecordId: row.provider_campaign_record_id || row.providerCampaignRecordId,
+      campaignId: row.campaign_id || row.campaignId,
+      campaignName: boundedText(row.campaign_name || row.campaignName || "Campaign", 200),
+      provider: boundedText(row.provider, 40),
+      currency: boundedText(row.currency || "", 12).toUpperCase(),
+      dailyBudgetMicros: Math.round(dailyBudget * 1000000),
+      spendMicros,
+      conversions,
+      conversionValueMicros: number(row.conversion_value_micros ?? row.conversionValueMicros),
+      capturedAt: new Date(capturedAt).toISOString(),
+      periodStart: String(row.period_start || row.periodStart || ""),
+      periodEnd: String(row.period_end || row.periodEnd || ""),
+    });
+  }
+  const currencyGroups = new Map();
+  for (const item of eligible) {
+    if (!item.currency || item.currency === "UNSPECIFIED") continue;
+    currencyGroups.set(item.currency, [...(currencyGroups.get(item.currency) || []), item]);
+  }
+  const recommendations = [];
+  for (const [currency, items] of currencyGroups) {
+    if (items.length < 2) continue;
+    const usesConversionValue = items.every((item) => item.conversionValueMicros > 0);
+    const ranked = items.map((item) => ({
+      ...item,
+      efficiency: usesConversionValue
+        ? item.conversionValueMicros / item.spendMicros
+        : item.conversions / item.spendMicros,
+    })).sort((left, right) => right.efficiency - left.efficiency);
+    const destination = ranked[0];
+    const source = ranked[ranked.length - 1];
+    if (!destination.efficiency || source.efficiency > destination.efficiency * 0.8) continue;
+    const shiftMicros = Math.floor(source.dailyBudgetMicros * (maximumShiftPercent / 100));
+    if (shiftMicros < 1000000) continue;
+    const combinedConversions = destination.conversions + source.conversions;
+    const combinedSpendMicros = destination.spendMicros + source.spendMicros;
+    const confidence = combinedConversions >= 20 && combinedSpendMicros >= 100000000
+      ? "high"
+      : combinedConversions >= 5 && combinedSpendMicros >= 25000000
+        ? "medium"
+        : "low";
+    recommendations.push({
+      id: `${currency}:${source.providerCampaignRecordId}:${destination.providerCampaignRecordId}`,
+      currency,
+      confidence,
+      advisoryOnly: true,
+      automaticExecution: false,
+      maximumShiftPercent,
+      shiftMicros,
+      source: {
+        providerCampaignRecordId: source.providerCampaignRecordId,
+        campaignId: source.campaignId,
+        campaignName: source.campaignName,
+        provider: source.provider,
+        currentDailyBudgetMicros: source.dailyBudgetMicros,
+        recommendedDailyBudgetMicros: source.dailyBudgetMicros - shiftMicros,
+        spendMicros: source.spendMicros,
+        conversions: source.conversions,
+        efficiency: source.efficiency,
+      },
+      destination: {
+        providerCampaignRecordId: destination.providerCampaignRecordId,
+        campaignId: destination.campaignId,
+        campaignName: destination.campaignName,
+        provider: destination.provider,
+        currentDailyBudgetMicros: destination.dailyBudgetMicros,
+        recommendedDailyBudgetMicros: destination.dailyBudgetMicros + shiftMicros,
+        spendMicros: destination.spendMicros,
+        conversions: destination.conversions,
+        efficiency: destination.efficiency,
+      },
+      evidence: {
+        metric: usesConversionValue ? "roas" : "conversions_per_spend",
+        combinedSpendMicros,
+        combinedConversions,
+        periodStart: destination.periodStart,
+        periodEnd: destination.periodEnd,
+        capturedAt: [source.capturedAt, destination.capturedAt].sort()[0],
+        staleAfterMinutes,
+      },
+      totalDailyBudgetBeforeMicros: source.dailyBudgetMicros + destination.dailyBudgetMicros,
+      totalDailyBudgetAfterMicros: source.dailyBudgetMicros + destination.dailyBudgetMicros,
+    });
+  }
+  return {
+    advisoryOnly: true,
+    automaticExecution: false,
+    maximumShiftPercent,
+    minimumSpendMicros,
+    staleAfterMinutes,
+    eligibleCampaigns: eligible.length,
+    excluded,
+    recommendations,
+  };
+}
+
 async function overview({ context, from, to }) {
   const period = normalizePeriod(from, to);
-  const [metricsResult, attributionResult, revenueResult, eventResult] = await Promise.all([
+  const [metricsResult, attributionResult, revenueResult, eventResult, recommendationResult] = await Promise.all([
     query(
       `WITH latest AS (
          SELECT DISTINCT ON (snapshot.provider_campaign_id)
@@ -781,6 +906,33 @@ async function overview({ context, from, to }) {
        WHERE organization_id = $1 AND created_at::date BETWEEN $2::date AND $3::date`,
       [context.organizationId, period.start, period.end]
     ),
+    query(
+      `WITH latest AS (
+         SELECT DISTINCT ON (snapshot.provider_campaign_id)
+           snapshot.*
+         FROM goodads_analytics_snapshots snapshot
+         WHERE snapshot.organization_id = $1
+           AND snapshot.period_start = $2::date
+           AND snapshot.period_end = $3::date
+         ORDER BY snapshot.provider_campaign_id, snapshot.captured_at DESC
+       )
+       SELECT provider_campaign.id AS provider_campaign_record_id,
+         provider_campaign.campaign_id, campaign.name AS campaign_name,
+         provider_campaign.provider, provider_campaign.status,
+         latest.currency, latest.spend_micros, latest.conversions,
+         latest.conversion_value_micros, latest.period_start, latest.period_end,
+         latest.captured_at, campaign.data->>'dailyBudget' AS daily_budget
+       FROM latest
+       JOIN goodads_provider_campaigns provider_campaign
+         ON provider_campaign.id = latest.provider_campaign_id
+       JOIN goodads_resources campaign ON campaign.id = provider_campaign.campaign_id
+       WHERE provider_campaign.organization_id = $1
+         AND campaign.organization_id = $1
+         AND campaign.resource_type = 'campaigns'
+         AND campaign.archived_at IS NULL
+       ORDER BY latest.currency, provider_campaign.provider, campaign.name`,
+      [context.organizationId, period.start, period.end]
+    ),
   ]);
 
   const providerMetrics = metricsResult.rows.map((row) => {
@@ -825,6 +977,7 @@ async function overview({ context, from, to }) {
       linkClicks: number(eventResult.rows[0]?.link_clicks),
       capturedLeads: number(eventResult.rows[0]?.captured_events),
     },
+    budgetOptimization: budgetRecommendations(recommendationResult.rows),
     totals: providerMetrics.reduce((total, item) => ({
       campaigns: total.campaigns + item.campaigns,
       impressions: total.impressions + item.impressions,
@@ -845,6 +998,9 @@ function capabilities() {
       automaticSyncMinutes: 15,
       firstPartyAttribution: true,
       revenueSeparatedByCurrency: true,
+      crossChannelBudgetRecommendations: true,
+      budgetRecommendationsAdvisoryOnly: true,
+      maximumRecommendedShiftPercent: 20,
     },
   };
 }
@@ -866,5 +1022,6 @@ module.exports = {
     tiktokMetricsFromPayload,
     linkedInMetricsFromPayload,
     providerMetricsAdapter,
+    budgetRecommendations,
   },
 };
