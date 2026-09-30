@@ -35,6 +35,12 @@ const generationLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const creativeUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 const publishingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 120,
@@ -211,7 +217,7 @@ router.post("/public/payment-webhooks/:provider/:connectionId", paymentWebhookLi
 
 router.use(authRequired, tenantContext, requireGoodAdsAccess);
 
-router.post("/creative-assets", uploadCreativeAsset, (req, res) => handle(
+router.post("/creative-assets", creativeUploadLimiter, uploadCreativeAsset, (req, res) => handle(
   res,
   "creative.asset.upload",
   creative.uploadAsset({

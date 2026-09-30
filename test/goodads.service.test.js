@@ -258,4 +258,5 @@ test("GoodAds exposes authenticated durable creative studio operations", () => {
     assert.match(routes, new RegExp(route.replace(/[/:]/g, "\\$&")));
   }
   assert.ok(routes.indexOf("router.use(authRequired") < routes.indexOf('router.post("/creative-assets"'));
+  assert.match(routes, /router\.post\("\/creative-assets", creativeUploadLimiter, uploadCreativeAsset/);
 });
