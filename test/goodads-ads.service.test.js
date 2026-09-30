@@ -22,6 +22,9 @@ test("GoodAds paid providers fail closed until server credentials are complete",
     GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN: "test-developer-token",
   });
   assert.equal(ads._test.providerAvailability("google").available, true);
+  assert.equal(ads._test.providerAvailability("youtube").available, true);
+  assert.equal(ads._test.providerAvailability("youtube").deliveryAdapter, "demand_gen_video");
+  assert.equal(typeof ads._test.nativeAdapter("youtube").create, "function");
   for (const [key, value] of Object.entries(saved)) {
     const name = {
       googleId: "GOODADS_GOOGLE_CLIENT_ID",
@@ -38,7 +41,7 @@ test("all major paid platforms are explicit and unfinished adapters cannot fall 
     ads.publicProviders().map((provider) => provider.id),
     ["google", "meta", "youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]
   );
-  for (const provider of ["youtube", "tiktok", "x"]) {
+  for (const provider of ["tiktok", "x"]) {
     const availability = ads._test.providerAvailability(provider);
     assert.equal(availability.available, false);
     assert.equal(availability.adapterConfigured, false);
@@ -184,6 +187,125 @@ test("Google account discovery preserves locale and excludes manager accounts", 
   assert.equal(
     ads._test.normalizeGoogleCustomer("0987654321", { status: "ENABLED", manager: true }).eligible,
     false
+  );
+});
+
+test("YouTube adapter builds one atomic paused Demand Gen stack with YouTube-only channels", () => {
+  const pngLogo = Buffer.alloc(24);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(pngLogo);
+  pngLogo.writeUInt32BE(1200, 16);
+  pngLogo.writeUInt32BE(1200, 20);
+  assert.deepEqual(ads._test.googleLogoDimensions(pngLogo, "image/png"), { width: 1200, height: 1200 });
+
+  const row = {
+    provider_campaign_record_id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    provider_account_id: "123-456-7890",
+    campaign_name: "GoodOS Launch",
+    campaign_data: {
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US", "CA"],
+      containsEuPoliticalAdvertising: false,
+      creative: {
+        businessName: "GoodOS",
+        headline: "Run your business in one place",
+        primaryText: "Plan, approve, publish, and measure every campaign from one governed workspace.",
+        destinationUrl: "https://goodos.app/",
+        videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        logoUrl: "https://cdn.goodos.app/goodads/logo.png",
+      },
+    },
+  };
+  const operations = ads._test.googleDemandGenOperations(row, {
+    logoBase64: "aW1hZ2U=",
+    geoTargetResources: ["geoTargetConstants/2840", "geoTargetConstants/2124"],
+  });
+  const created = (key) => operations.find((operation) => operation[key])?.[key]?.create;
+  const campaign = created("campaignOperation");
+  const adGroup = created("adGroupOperation");
+  const assets = operations.filter((operation) => operation.assetOperation).map((operation) => operation.assetOperation.create);
+  const ad = created("adGroupAdOperation");
+
+  assert.equal(campaign.status, "PAUSED");
+  assert.equal(campaign.advertisingChannelType, "DEMAND_GEN");
+  assert.equal(campaign.containsEuPoliticalAdvertising, "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING");
+  assert.equal(campaign.startDateTime, "2026-10-05 00:00:00");
+  assert.equal(campaign.endDateTime, "2026-10-12 23:59:59");
+  assert.deepEqual(adGroup.demandGenAdGroupSettings.channelControls.selectedChannels, {
+    gmail: false,
+    discover: false,
+    display: false,
+    youtubeInFeed: true,
+    youtubeInStream: true,
+    youtubeShorts: true,
+  });
+  assert.equal(operations.filter((operation) => operation.adGroupCriterionOperation).length, 2);
+  assert.equal(assets.find((asset) => asset.youtubeVideoAsset).youtubeVideoAsset.youtubeVideoId, "dQw4w9WgXcQ");
+  assert.equal(assets.find((asset) => asset.imageAsset).imageAsset.data, "aW1hZ2U=");
+  assert.equal(ad.ad.demandGenVideoResponsiveAd.businessName.text, "GoodOS");
+  assert.equal(ad.adGroup, "customers/1234567890/adGroups/-3");
+  assert.equal(ads._test.youtubeVideoId("https://youtu.be/dQw4w9WgXcQ?t=1"), "dQw4w9WgXcQ");
+  assert.equal(ads._test.youtubeVideoId("https://youtube.com/shorts/dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+  assert.equal(ads._test.youtubeVideoId("https://example.com/video.mp4"), "");
+});
+
+test("YouTube setup fails closed on compliance, objective, asset, and copy gaps", () => {
+  const campaign = {
+    status: "ready",
+    data: {
+      platforms: ["youtube"],
+      objective: "traffic",
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      targetCountries: ["US"],
+      containsEuPoliticalAdvertising: false,
+      creative: {
+        businessName: "GoodOS",
+        headline: "Meet GoodOS",
+        primaryText: "Run your business from one governed workspace.",
+        destinationUrl: "https://goodos.app/",
+        videoUrl: "https://youtu.be/dQw4w9WgXcQ",
+        logoUrl: "https://cdn.goodos.app/goodads/logo.png",
+      },
+    },
+  };
+  const account = {
+    provider: "youtube",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    metadata: { deliveryReady: true },
+  };
+  assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, account));
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, containsEuPoliticalAdvertising: null },
+    }, account),
+    (error) => error.code === "GOODADS_GOOGLE_POLITICAL_DECLARATION_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, objective: "conversions" },
+    }, account),
+    (error) => error.code === "GOODADS_YOUTUBE_CONVERSION_ACTION_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, creative: { ...campaign.data.creative, videoUrl: "https://example.com/ad.mp4" } },
+    }, account),
+    (error) => error.code === "GOODADS_YOUTUBE_VIDEO_URL_INVALID"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, creative: { ...campaign.data.creative, businessName: "x".repeat(26) } },
+    }, account),
+    (error) => error.code === "GOODADS_YOUTUBE_COPY_TOO_LONG"
   );
 });
 

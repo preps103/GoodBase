@@ -14,6 +14,8 @@ const LINKEDIN_CAMPAIGN_ROLES = new Set([
 ]);
 const LINKEDIN_IMAGE_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png"]);
 const MAX_LINKEDIN_IMAGE_BYTES = 10 * 1024 * 1024;
+const GOOGLE_LOGO_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
+const MAX_GOOGLE_LOGO_BYTES = 5 * 1024 * 1024;
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -44,11 +46,11 @@ const PROVIDERS = Object.freeze({
   youtube: {
     name: "YouTube Ads",
     connectionProviders: ["google"],
-    requiredEnvironment: [],
+    requiredEnvironment: ["GOODADS_GOOGLE_ADS_DEVELOPER_TOKEN"],
     platforms: ["youtube"],
     safePausedCreation: true,
-    deliveryAdapter: "video",
-    adapterType: "not_installed",
+    deliveryAdapter: "demand_gen_video",
+    adapterType: "native",
   },
   tiktok: {
     name: "TikTok Ads",
@@ -736,7 +738,7 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
   const accessToken = await social.accessTokenForConnection(connection);
   const discovered = id === "meta"
     ? await discoverMetaAccounts(accessToken)
-    : id === "google"
+    : ["google", "youtube"].includes(id)
       ? await discoverGoogleAccounts(accessToken)
       : id === "linkedin"
         ? await discoverLinkedInAccounts(accessToken)
@@ -849,7 +851,10 @@ async function saveAdAccount({ payload, context, userId }) {
               deliveryReady: true,
               channelType: "SNAP_AD",
             }
-          : { deliveryReady: true, channelType: "SEARCH" };
+          : {
+              deliveryReady: true,
+              channelType: provider === "youtube" ? "DEMAND_GEN_YOUTUBE" : "SEARCH",
+            };
   const result = await query(
     `INSERT INTO goodads_ad_accounts (
        organization_id, connection_id, provider, provider_account_id, name,
@@ -930,6 +935,35 @@ function isManagedGoodOsHttpsUrl(value) {
   }
 }
 
+function youtubeVideoId(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    let id = "";
+    if (hostname === "youtu.be") id = url.pathname.split("/").filter(Boolean)[0] || "";
+    if (["youtube.com", "m.youtube.com", "music.youtube.com"].includes(hostname)) {
+      if (url.pathname === "/watch") id = url.searchParams.get("v") || "";
+      else {
+        const [kind, candidate] = url.pathname.split("/").filter(Boolean);
+        if (["shorts", "embed", "live"].includes(kind)) id = candidate || "";
+      }
+    }
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : "";
+  } catch {
+    return "";
+  }
+}
+
+function googlePoliticalAdvertisingStatus(value) {
+  if (value === true) return "CONTAINS_EU_POLITICAL_ADVERTISING";
+  if (value === false) return "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
+  throw adsError(
+    "Declare whether this campaign contains EU political advertising before Google or YouTube setup.",
+    409,
+    "GOODADS_GOOGLE_POLITICAL_DECLARATION_REQUIRED"
+  );
+}
+
 function validateCampaignForAccount(campaign, account) {
   const data = campaign.data || {};
   if (campaign.status !== "ready") {
@@ -984,6 +1018,7 @@ function validateCampaignForAccount(campaign, account) {
     }
   }
   if (account.provider === "google") {
+    googlePoliticalAdvertisingStatus(data.containsEuPoliticalAdvertising);
     if (!Array.isArray(data.searchKeywords) || data.searchKeywords.filter(Boolean).length < 1) {
       throw adsError("Google Search delivery requires at least one keyword.", 409, "GOODADS_GOOGLE_KEYWORDS_REQUIRED");
     }
@@ -1000,6 +1035,47 @@ function validateCampaignForAccount(campaign, account) {
       409,
       "GOODADS_VIDEO_REQUIRED"
     );
+  }
+  if (account.provider === "youtube") {
+    googlePoliticalAdvertisingStatus(data.containsEuPoliticalAdvertising);
+    if (String(data.objective || "traffic").toLowerCase() !== "traffic") {
+      throw adsError(
+        "YouTube one-click setup currently supports website-traffic campaigns. Conversion objectives require a verified Google conversion action.",
+        409,
+        "GOODADS_YOUTUBE_CONVERSION_ACTION_REQUIRED"
+      );
+    }
+    if (!youtubeVideoId(creative.videoUrl)) {
+      throw adsError(
+        "YouTube delivery requires a valid YouTube watch, Shorts, live, embed, or youtu.be video URL.",
+        409,
+        "GOODADS_YOUTUBE_VIDEO_URL_INVALID"
+      );
+    }
+    if (!isManagedGoodOsHttpsUrl(creative.logoUrl)) {
+      throw adsError(
+        "YouTube delivery requires a square logo stored on a managed GoodOS HTTPS address.",
+        409,
+        "GOODADS_YOUTUBE_LOGO_REQUIRED"
+      );
+    }
+    const businessName = String(creative.businessName || "").trim();
+    const headline = String(creative.headline || "").trim();
+    const primaryText = String(creative.primaryText || "").trim();
+    if (!businessName || !headline || !primaryText) {
+      throw adsError(
+        "YouTube delivery requires a business name, headline, and description.",
+        409,
+        "GOODADS_YOUTUBE_COPY_REQUIRED"
+      );
+    }
+    if (businessName.length > 25 || headline.length > 40 || primaryText.length > 90) {
+      throw adsError(
+        "YouTube business names cannot exceed 25 characters, headlines 40, or descriptions 90.",
+        409,
+        "GOODADS_YOUTUBE_COPY_TOO_LONG"
+      );
+    }
   }
   if (["linkedin", "pinterest"].includes(account.provider) && !isPublicHttpsUrl(creative.imageUrl)) {
     throw adsError(
@@ -1621,8 +1697,9 @@ async function createGoogleDelivery(row, accessToken) {
         status: "PAUSED",
         campaignBudget: budgetResource,
         advertisingChannelType: "SEARCH",
-        startDate: String(data.startDate).replaceAll("-", ""),
-        endDate: String(data.endDate).replaceAll("-", ""),
+        startDateTime: `${data.startDate} 00:00:00`,
+        endDateTime: `${data.endDate} 23:59:59`,
+        containsEuPoliticalAdvertising: googlePoliticalAdvertisingStatus(data.containsEuPoliticalAdvertising),
         manualCpc: { enhancedCpcEnabled: false },
         networkSettings: {
           targetGoogleSearch: true,
@@ -1714,6 +1791,364 @@ async function createGoogleDelivery(row, accessToken) {
       adGroupResource,
       adResource,
       customerId,
+      state: "PAUSED",
+    },
+  };
+}
+
+function googleAdsQueryLiteral(value) {
+  return String(value || "").replaceAll("\\", "\\\\").replaceAll("'", "\\'");
+}
+
+async function googleSearch(row, accessToken, gaql, fallback) {
+  const customerId = String(row.provider_account_id).replace(/\D/g, "");
+  const { payload } = await requestJson(
+    `https://googleads.googleapis.com/v24/customers/${customerId}/googleAds:searchStream`,
+    {
+      method: "POST",
+      headers: googleHeaders(accessToken),
+      body: JSON.stringify({ query: gaql }),
+    },
+    fallback
+  );
+  return (Array.isArray(payload) ? payload : [payload]).flatMap((batch) => batch?.results || []);
+}
+
+async function googleCountryTargets(row, accessToken) {
+  const countries = [...new Set((row.campaign_data?.targetCountries || [])
+    .map((country) => boundedText(country, 2).toUpperCase())
+    .filter((country) => /^[A-Z]{2}$/.test(country)))];
+  const quoted = countries.map((country) => `'${country}'`).join(", ");
+  const results = await googleSearch(
+    row,
+    accessToken,
+    `SELECT geo_target_constant.resource_name, geo_target_constant.country_code
+     FROM geo_target_constant
+     WHERE geo_target_constant.country_code IN (${quoted})
+       AND geo_target_constant.target_type = 'Country'
+       AND geo_target_constant.status = 'ENABLED'`,
+    "Google Ads country-target resolution"
+  );
+  const resources = new Map(results.map((result) => [
+    boundedText(result.geoTargetConstant?.countryCode, 2).toUpperCase(),
+    boundedText(result.geoTargetConstant?.resourceName, 200),
+  ]));
+  const missing = countries.filter((country) => !resources.get(country));
+  if (missing.length) {
+    throw adsError(
+      `Google Ads could not resolve country targeting for: ${missing.join(", ")}.`,
+      409,
+      "GOODADS_GOOGLE_COUNTRY_TARGET_INVALID"
+    );
+  }
+  return countries.map((country) => resources.get(country));
+}
+
+function googleDemandGenNames(row) {
+  const suffix = boundedText(row.provider_campaign_record_id, 36).slice(0, 8);
+  const base = boundedText(row.campaign_name, 180);
+  return {
+    campaign: boundedText(`${base} [GoodAds ${suffix}]`, 240),
+    budget: boundedText(`${base} YouTube budget [${suffix}]`, 240),
+    adGroup: boundedText(`${base} YouTube audience [${suffix}]`, 240),
+    ad: boundedText(`${base} YouTube ad [${suffix}]`, 240),
+    videoAsset: boundedText(`${base} YouTube video [${suffix}]`, 240),
+    logoAsset: boundedText(`${base} YouTube logo [${suffix}]`, 240),
+  };
+}
+
+function validGoogleLogoSignature(buffer, mimeType) {
+  if (mimeType === "image/png") return buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a";
+  if (mimeType === "image/jpeg") return buffer.subarray(0, 3).toString("hex") === "ffd8ff";
+  return false;
+}
+
+function googleLogoDimensions(buffer, mimeType) {
+  if (mimeType === "image/png" && buffer.length >= 24) {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+  if (mimeType !== "image/jpeg" || buffer.length < 12) return null;
+  const startOfFrameMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (offset < buffer.length && buffer[offset] === 0xff) offset += 1;
+    const marker = buffer[offset];
+    offset += 1;
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > buffer.length) return null;
+    const length = buffer.readUInt16BE(offset);
+    if (length < 2 || offset + length > buffer.length) return null;
+    if (startOfFrameMarkers.has(marker) && length >= 7) {
+      return { width: buffer.readUInt16BE(offset + 5), height: buffer.readUInt16BE(offset + 3) };
+    }
+    offset += length;
+  }
+  return null;
+}
+
+async function loadGoogleLogoImage(value) {
+  if (!isManagedGoodOsHttpsUrl(value)) {
+    throw adsError(
+      "YouTube logo images must be stored on a managed GoodOS HTTPS address.",
+      409,
+      "GOODADS_YOUTUBE_LOGO_HOST_INVALID"
+    );
+  }
+  let response;
+  try {
+    response = await fetch(value, { redirect: "error", signal: AbortSignal.timeout(20000) });
+  } catch {
+    throw adsError("YouTube logo image could not be downloaded.", 502, "GOODADS_YOUTUBE_LOGO_DOWNLOAD_FAILED", true);
+  }
+  if (!response.ok) {
+    throw adsError(
+      "YouTube logo image could not be downloaded.",
+      502,
+      "GOODADS_YOUTUBE_LOGO_DOWNLOAD_FAILED",
+      response.status >= 500
+    );
+  }
+  const mimeType = boundedText(response.headers.get("content-type"), 100).split(";")[0].toLowerCase();
+  if (!GOOGLE_LOGO_MIME_TYPES.has(mimeType)) {
+    throw adsError("YouTube logo images must be PNG or JPEG.", 409, "GOODADS_YOUTUBE_LOGO_TYPE_INVALID");
+  }
+  const buffer = await readBoundedBody(
+    response,
+    MAX_GOOGLE_LOGO_BYTES,
+    "YouTube logo image exceeds 5 MB.",
+    "GOODADS_YOUTUBE_LOGO_TOO_LARGE"
+  );
+  if (!buffer.length || !validGoogleLogoSignature(buffer, mimeType)) {
+    throw adsError("YouTube logo image is invalid.", 409, "GOODADS_YOUTUBE_LOGO_INVALID");
+  }
+  const dimensions = googleLogoDimensions(buffer, mimeType);
+  if (
+    !dimensions
+    || dimensions.width < 128
+    || dimensions.height < 128
+    || Math.abs(dimensions.width / dimensions.height - 1) > 0.01
+  ) {
+    throw adsError(
+      "YouTube logo image must be square and at least 128 by 128 pixels.",
+      409,
+      "GOODADS_YOUTUBE_LOGO_DIMENSIONS_INVALID"
+    );
+  }
+  return { buffer, mimeType };
+}
+
+function googleDemandGenOperations(row, { logoBase64, geoTargetResources }) {
+  const data = row.campaign_data || {};
+  const creative = data.creative || {};
+  const customerId = String(row.provider_account_id).replace(/\D/g, "");
+  const names = googleDemandGenNames(row);
+  const resourceNames = {
+    budget: `customers/${customerId}/campaignBudgets/-1`,
+    campaign: `customers/${customerId}/campaigns/-2`,
+    adGroup: `customers/${customerId}/adGroups/-3`,
+    videoAsset: `customers/${customerId}/assets/-4`,
+    logoAsset: `customers/${customerId}/assets/-5`,
+  };
+  return [
+    {
+      campaignBudgetOperation: {
+        create: {
+          resourceName: resourceNames.budget,
+          name: names.budget,
+          amountMicros: String(Math.round(Number(data.dailyBudget) * 1000000)),
+          deliveryMethod: "STANDARD",
+          explicitlyShared: false,
+        },
+      },
+    },
+    {
+      campaignOperation: {
+        create: {
+          resourceName: resourceNames.campaign,
+          name: names.campaign,
+          status: "PAUSED",
+          advertisingChannelType: "DEMAND_GEN",
+          campaignBudget: resourceNames.budget,
+          maximizeClicks: {},
+          startDateTime: `${data.startDate} 00:00:00`,
+          endDateTime: `${data.endDate} 23:59:59`,
+          containsEuPoliticalAdvertising: googlePoliticalAdvertisingStatus(data.containsEuPoliticalAdvertising),
+        },
+      },
+    },
+    {
+      adGroupOperation: {
+        create: {
+          resourceName: resourceNames.adGroup,
+          name: names.adGroup,
+          campaign: resourceNames.campaign,
+          demandGenAdGroupSettings: {
+            channelControls: {
+              selectedChannels: {
+                gmail: false,
+                discover: false,
+                display: false,
+                youtubeInFeed: true,
+                youtubeInStream: true,
+                youtubeShorts: true,
+              },
+            },
+          },
+        },
+      },
+    },
+    ...geoTargetResources.map((geoTargetConstant) => ({
+      adGroupCriterionOperation: {
+        create: {
+          adGroup: resourceNames.adGroup,
+          location: { geoTargetConstant },
+        },
+      },
+    })),
+    {
+      assetOperation: {
+        create: {
+          resourceName: resourceNames.videoAsset,
+          name: names.videoAsset,
+          youtubeVideoAsset: { youtubeVideoId: youtubeVideoId(creative.videoUrl) },
+        },
+      },
+    },
+    {
+      assetOperation: {
+        create: {
+          resourceName: resourceNames.logoAsset,
+          name: names.logoAsset,
+          imageAsset: { data: logoBase64 },
+        },
+      },
+    },
+    {
+      adGroupAdOperation: {
+        create: {
+          adGroup: resourceNames.adGroup,
+          ad: {
+            name: names.ad,
+            finalUrls: [creative.destinationUrl],
+            demandGenVideoResponsiveAd: {
+              businessName: { text: creative.businessName.trim() },
+              videos: [{ asset: resourceNames.videoAsset }],
+              logoImages: [{ asset: resourceNames.logoAsset }],
+              headlines: [{ text: creative.headline.trim() }],
+              longHeadlines: [{ text: creative.primaryText.trim() }],
+              descriptions: [{ text: creative.primaryText.trim() }],
+            },
+          },
+        },
+      },
+    },
+  ];
+}
+
+async function findExistingYouTubeDelivery(row, accessToken) {
+  const names = googleDemandGenNames(row);
+  const results = await googleSearch(
+    row,
+    accessToken,
+    `SELECT campaign.id, campaign.resource_name, campaign_budget.resource_name,
+            ad_group.resource_name, ad_group_ad.resource_name
+     FROM ad_group_ad
+     WHERE campaign.name = '${googleAdsQueryLiteral(names.campaign)}'
+       AND ad_group.name = '${googleAdsQueryLiteral(names.adGroup)}'
+       AND ad_group_ad.ad.name = '${googleAdsQueryLiteral(names.ad)}'
+       AND campaign.status != 'REMOVED'
+     LIMIT 1`,
+    "YouTube campaign retry recovery"
+  );
+  const existing = results[0];
+  if (!existing?.campaign?.resourceName || !existing?.adGroupAd?.resourceName) return null;
+  return {
+    providerCampaignId: String(existing.campaign.id || existing.campaign.resourceName.split("/").pop()),
+    providerResourceName: existing.campaign.resourceName,
+    providerBudgetId: existing.campaignBudget?.resourceName || null,
+    receipt: {
+      campaignResource: existing.campaign.resourceName,
+      budgetResource: existing.campaignBudget?.resourceName || null,
+      adGroupResource: existing.adGroup?.resourceName || null,
+      adResource: existing.adGroupAd.resourceName,
+      customerId: String(row.provider_account_id).replace(/\D/g, ""),
+      youtubeVideoId: youtubeVideoId(row.campaign_data?.creative?.videoUrl),
+      deliveryAdapter: "demand_gen_video",
+      youtubeOnly: true,
+      recovered: true,
+      state: "PAUSED",
+    },
+  };
+}
+
+function googleBulkResource(payload, resultKey) {
+  const response = (payload?.mutateOperationResponses || [])
+    .find((item) => item?.[resultKey]?.resourceName);
+  return response?.[resultKey]?.resourceName || "";
+}
+
+async function createYouTubeDelivery(row, accessToken) {
+  if (row.provider_resource_name) {
+    return {
+      providerCampaignId: row.provider_campaign_id,
+      providerResourceName: row.provider_resource_name,
+      providerBudgetId: row.provider_budget_id,
+      receipt: { ...row.receipt, state: "PAUSED" },
+    };
+  }
+  const recovered = await findExistingYouTubeDelivery(row, accessToken);
+  if (recovered) return recovered;
+  const [geoTargetResources, logo] = await Promise.all([
+    googleCountryTargets(row, accessToken),
+    loadGoogleLogoImage(row.campaign_data?.creative?.logoUrl),
+  ]);
+  const customerId = String(row.provider_account_id).replace(/\D/g, "");
+  const operations = googleDemandGenOperations(row, {
+    logoBase64: logo.buffer.toString("base64"),
+    geoTargetResources,
+  });
+  const { payload } = await requestJson(
+    `https://googleads.googleapis.com/v24/customers/${customerId}/googleAds:mutate`,
+    {
+      method: "POST",
+      headers: googleHeaders(accessToken),
+      body: JSON.stringify({
+        mutateOperations: operations,
+        partialFailure: false,
+        validateOnly: false,
+      }),
+    },
+    "YouTube Demand Gen campaign creation"
+  );
+  const campaignResource = googleBulkResource(payload, "campaignResult");
+  const budgetResource = googleBulkResource(payload, "campaignBudgetResult");
+  const adGroupResource = googleBulkResource(payload, "adGroupResult");
+  const adResource = googleBulkResource(payload, "adGroupAdResult");
+  if (!campaignResource || !budgetResource || !adGroupResource || !adResource) {
+    throw adsError(
+      "Google Ads did not return the complete YouTube campaign stack.",
+      502,
+      "GOODADS_YOUTUBE_CREATE_INCOMPLETE"
+    );
+  }
+  return {
+    providerCampaignId: campaignResource.split("/").pop(),
+    providerResourceName: campaignResource,
+    providerBudgetId: budgetResource,
+    receipt: {
+      campaignResource,
+      budgetResource,
+      adGroupResource,
+      adResource,
+      customerId,
+      youtubeVideoId: youtubeVideoId(row.campaign_data?.creative?.videoUrl),
+      geoTargetResources,
+      deliveryAdapter: "demand_gen_video",
+      youtubeOnly: true,
       state: "PAUSED",
     },
   };
@@ -2915,6 +3350,12 @@ function nativeAdapter(provider) {
       sync: syncGoogleStatus,
       statuses: { pause: "PAUSED", activate: "ENABLED", archive: "REMOVED" },
     },
+    youtube: {
+      create: createYouTubeDelivery,
+      updateStatus: updateGoogleStatus,
+      sync: syncGoogleStatus,
+      statuses: { pause: "PAUSED", activate: "ENABLED", archive: "REMOVED" },
+    },
     linkedin: {
       create: createLinkedInDelivery,
       updateStatus: updateLinkedInStatus,
@@ -3143,6 +3584,11 @@ module.exports = {
     providerAvailability,
     normalizeMetaAccount,
     normalizeGoogleCustomer,
+    youtubeVideoId,
+    googlePoliticalAdvertisingStatus,
+    googleDemandGenNames,
+    googleDemandGenOperations,
+    googleLogoDimensions,
     normalizeLinkedInAccount,
     normalizePinterestAccount,
     normalizeSnapchatAccount,

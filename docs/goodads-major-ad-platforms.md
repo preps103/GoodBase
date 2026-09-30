@@ -25,17 +25,33 @@ native GoodBase adapter are all installed.
 | --- | --- | --- | --- | --- |
 | Google Search | Google | Native | Native | Native |
 | Meta (Facebook and Instagram) | Meta | Native | Native | Native |
-| YouTube | Google | Registered | Not installed | Not installed |
+| YouTube | Google | Native | Native, paused by default | Native campaign state |
 | TikTok | TikTok | Registered | Not installed | Not installed |
 | LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
 | X | X | Registered | Not installed | Not installed |
 | Pinterest | Pinterest | Native | Native, paused by default | Not installed |
 | Snapchat | Snapchat Marketing API | Native | Native, paused by default | Not installed |
 
-The three unfinished providers remain visible in the readiness contract so the
+The two unfinished providers remain visible in the readiness contract so the
 GoodAds interface can show the exact setup gap. They are deliberately excluded
 from `supportedProviders` until an in-process adapter passes the paused-create,
 lifecycle, analytics, retry, and approval-gate tests.
+
+YouTube uses the approved Google Ads connection and creates an atomic Demand
+Gen video stack: non-shared daily budget, paused campaign, YouTube-only ad
+group channel controls, country targeting, YouTube video asset, managed square
+logo asset, and responsive video ad. The campaign is the final spend barrier
+and remains paused after one-click setup. Every retry first searches for the
+stable GoodAds campaign identity so a successful provider response followed by
+a local persistence interruption cannot duplicate the campaign.
+
+YouTube setup currently supports website-traffic campaigns with Maximize
+Clicks. The creative must reference an existing YouTube video and a managed
+GoodOS PNG or JPEG square logo of at most 5 MB, plus a business name, headline,
+and description within Google's current limits. Conversion objectives fail
+closed until GoodAds can verify an eligible Google conversion action. Google
+Search and YouTube both require an explicit EU political-advertising
+declaration and use the ad account's local time zone for start and end times.
 
 LinkedIn's native adapter discovers organization-backed ad accounts, resolves
 current Bing geo targets, uploads managed GoodOS images, and creates a paused
