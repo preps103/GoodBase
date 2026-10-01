@@ -1046,6 +1046,13 @@ async function discoverXAccounts(credentials) {
 }
 
 function requireConnectionScopes(connection, requiredScopes = []) {
+  if (requiredScopes.length && !connection.metadata?.scopeVerification?.verifiedAt) {
+    throw adsError(
+      "Reconnect this account so GoodAds can verify provider-granted advertising permissions.",
+      409,
+      "GOODADS_AD_CONNECTION_SCOPE_UNVERIFIED"
+    );
+  }
   const granted = new Set(Array.isArray(connection.scopes) ? connection.scopes : []);
   const missing = requiredScopes.filter((scope) => !granted.has(scope));
   if (missing.length) {

@@ -345,6 +345,7 @@ function publicConnection(connection) {
     scopes,
     requiredScopes,
     missingScopes: requiredScopes.filter((scope) => !scopes.includes(scope)),
+    scopeVerification: connection.metadata?.scopeVerification || null,
     tokenExpiresAt: connection.tokenExpiresAt || connection.token_expires_at || null,
     tokenHealth: connectionHealth(connection),
     status: connection.status,
@@ -360,6 +361,66 @@ function stateHash(state) {
 
 function codeChallenge(verifier) {
   return crypto.createHash("sha256").update(verifier).digest("base64url");
+}
+
+function normalizeGrantedScopes(value) {
+  const scopes = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[ ,]+/)
+      : [];
+  return [...new Set(scopes.map((scope) => String(scope || "").trim()).filter(Boolean))].sort();
+}
+
+function scopeGrantStatus(config, grantedScopes) {
+  const scopes = normalizeGrantedScopes(grantedScopes);
+  const granted = new Set(scopes);
+  const requiredScopes = normalizeGrantedScopes(config?.scopes);
+  return {
+    scopes,
+    requiredScopes,
+    missingScopes: requiredScopes.filter((scope) => !granted.has(scope)),
+  };
+}
+
+async function fetchMetaGrantedScopes(config, accessToken) {
+  const response = await fetch("https://graph.facebook.com/v23.0/me/permissions", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "User-Agent": "GoodAds/1.0",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !Array.isArray(payload.data)) {
+    throw socialError(
+      `${config.label} granted permissions could not be verified.`,
+      502,
+      "GOODADS_OAUTH_SCOPE_VERIFICATION_FAILED"
+    );
+  }
+  return payload.data
+    .filter((permission) => String(permission.status || "").toLowerCase() === "granted")
+    .map((permission) => permission.permission);
+}
+
+async function resolveGrantedScopes(config, token) {
+  let scopes = normalizeGrantedScopes(token?.scope);
+  let source = "token_response";
+  if (!scopes.length && ["facebook", "instagram"].includes(config.id)) {
+    scopes = normalizeGrantedScopes(await fetchMetaGrantedScopes(config, token.access_token));
+    source = "provider_permissions_api";
+  }
+  const grant = scopeGrantStatus(config, scopes);
+  if (grant.missingScopes.length) {
+    throw socialError(
+      `${config.label} did not grant the required permissions: ${grant.missingScopes.join(", ")}. Reconnect and approve every requested permission.`,
+      409,
+      "GOODADS_OAUTH_SCOPES_MISSING"
+    );
+  }
+  return { ...grant, source };
 }
 
 function oauth1Client(config) {
@@ -638,12 +699,13 @@ async function completeAuthorization({ provider, code, state, oauthToken }) {
   if (!code) throw socialError("OAuth authorization code is missing.");
   const stateRow = await consumeState(config.id, state);
   const token = await exchangeCode(config, code, stateRow, oauthToken);
+  const scopeGrant = await resolveGrantedScopes(config, token);
   const identity = await fetchIdentity(config, token.access_token, token);
   if (!identity.id) throw socialError(`${config.label} did not return an account identifier.`, 502, "GOODADS_ACCOUNT_ID_MISSING");
   const access = encrypt(token.access_token);
   const refresh = encrypt(token.refresh_token);
   const expiresAt = token.expires_in ? new Date(Date.now() + Number(token.expires_in) * 1000) : null;
-  const scopes = String(token.scope || config.scopes.join(" ")).split(/[ ,]+/).filter(Boolean);
+  const scopes = scopeGrant.scopes;
   const result = await query(
     `INSERT INTO goodads_social_connections (
        organization_id, user_id, provider, provider_account_id, account_name,
@@ -669,7 +731,14 @@ async function completeAuthorization({ provider, code, state, oauthToken }) {
       stateRow.organization_id, stateRow.user_id, config.id, identity.id, identity.name,
       identity.avatarUrl, scopes, access.ciphertext, access.iv, access.tag,
       refresh?.ciphertext || null, refresh?.iv || null, refresh?.tag || null,
-      expiresAt, JSON.stringify({ identity: identity.raw }),
+      expiresAt, JSON.stringify({
+        identity: identity.raw,
+        scopeVerification: {
+          source: scopeGrant.source,
+          verifiedAt: new Date().toISOString(),
+          requiredScopes: scopeGrant.requiredScopes,
+        },
+      }),
     ]
   );
   return { connection: result.rows[0], returnOrigin: stateRow.return_origin };
@@ -678,7 +747,7 @@ async function completeAuthorization({ provider, code, state, oauthToken }) {
 async function listConnections({ context, userId }) {
   const result = await query(
     `SELECT id, provider AS "platformId", provider_account_id AS "providerAccountId",
-       account_name AS username, avatar_url AS "avatarUrl", scopes,
+       account_name AS username, avatar_url AS "avatarUrl", scopes, metadata,
        token_expires_at AS "tokenExpiresAt", status,
        refresh_token_ciphertext IS NOT NULL AS refreshable,
        connected_at AS "connectedAt", last_verified_at AS "lastSyncAt", updated_at AS "updatedAt"
@@ -718,7 +787,7 @@ async function verifyConnection({ context, userId, id }) {
        last_verified_at = NOW(), updated_at = NOW()
      WHERE id = $1::uuid
      RETURNING id, provider AS "platformId", provider_account_id AS "providerAccountId",
-       account_name AS username, avatar_url AS "avatarUrl", scopes,
+       account_name AS username, avatar_url AS "avatarUrl", scopes, metadata,
        token_expires_at AS "tokenExpiresAt", status,
        refresh_token_ciphertext IS NOT NULL AS refreshable,
        connected_at AS "connectedAt", last_verified_at AS "lastSyncAt", updated_at AS "updatedAt"`,
@@ -869,6 +938,8 @@ async function capabilities({ context, userId }) {
       socialConnections: {
         available: true,
         configuredProviders: providers.filter((provider) => provider.configured).map((provider) => provider.id),
+        providerGrantedScopesVerified: true,
+        unverifiedConnectionsFailClosed: true,
       },
       immediateTextPublishing: {
         available: configuredTextProviders.length > 0,
@@ -1226,7 +1297,7 @@ async function resolvePublishConnections({ context, userId, connectionIds, provi
   if (selectedIds.length > 25 || legacyProviders.length > 12) throw socialError("Select no more than 25 connected accounts.");
   const result = selectedIds.length
     ? await query(
-      `SELECT id, provider, provider_account_id, account_name
+      `SELECT id, provider, provider_account_id, account_name, scopes, metadata
        FROM goodads_social_connections
        WHERE organization_id = $1 AND user_id = $2::uuid
          AND id = ANY($3::uuid[]) AND status = 'connected'
@@ -1234,7 +1305,7 @@ async function resolvePublishConnections({ context, userId, connectionIds, provi
       [context.organizationId, userId, selectedIds]
     )
     : await query(
-      `SELECT DISTINCT ON (provider) id, provider, provider_account_id, account_name
+      `SELECT DISTINCT ON (provider) id, provider, provider_account_id, account_name, scopes, metadata
        FROM goodads_social_connections
        WHERE organization_id = $1 AND user_id = $2::uuid
          AND provider = ANY($3::text[]) AND status = 'connected'
@@ -1251,6 +1322,21 @@ async function resolvePublishConnections({ context, userId, connectionIds, provi
         `${PROVIDERS[connection.provider]?.label || connection.provider} does not have an installed text-publishing adapter.`,
         422,
         "GOODADS_PROVIDER_CONTENT_REQUIRED"
+      );
+    }
+    if (!connection.metadata?.scopeVerification?.verifiedAt) {
+      throw socialError(
+        `${PROVIDERS[connection.provider]?.label || connection.provider} permissions were not verified by the provider. Reconnect this account.`,
+        409,
+        "GOODADS_CONNECTION_SCOPE_UNVERIFIED"
+      );
+    }
+    const scopeStatus = scopeGrantStatus(PROVIDERS[connection.provider], connection.scopes);
+    if (scopeStatus.missingScopes.length) {
+      throw socialError(
+        `${PROVIDERS[connection.provider]?.label || connection.provider} is missing required publishing permissions: ${scopeStatus.missingScopes.join(", ")}. Reconnect this account.`,
+        409,
+        "GOODADS_CONNECTION_SCOPES_MISSING"
       );
     }
   }
@@ -1606,6 +1692,19 @@ async function accessTokenForConnection(connection) {
     const nextExpiry = Number.isFinite(expiresIn) && expiresIn > 0
       ? new Date(Date.now() + expiresIn * 1000)
       : null;
+    const refreshedScopes = payload.scope === undefined || payload.scope === null
+      ? null
+      : normalizeGrantedScopes(payload.scope);
+    const refreshMetadata = {
+      oauthRefresh: { status: "succeeded", refreshedAt: new Date().toISOString() },
+      ...(refreshedScopes ? {
+        scopeVerification: {
+          source: "token_refresh_response",
+          verifiedAt: new Date().toISOString(),
+          requiredScopes: normalizeGrantedScopes(config.scopes),
+        },
+      } : {}),
+    };
     await client.query(
       `UPDATE goodads_social_connections SET
          access_token_ciphertext = $2, access_token_iv = $3, access_token_tag = $4,
@@ -1614,6 +1713,7 @@ async function accessTokenForConnection(connection) {
          refresh_token_tag = COALESCE($7, refresh_token_tag),
          token_expires_at = $8, status = 'connected',
          metadata = COALESCE(metadata, '{}'::jsonb) || $9::jsonb,
+         scopes = CASE WHEN $10::text[] IS NULL THEN scopes ELSE $10::text[] END,
          last_verified_at = NOW(), updated_at = NOW()
        WHERE id = $1::uuid`,
       [
@@ -1625,7 +1725,8 @@ async function accessTokenForConnection(connection) {
         nextRefresh?.iv || null,
         nextRefresh?.tag || null,
         nextExpiry,
-        JSON.stringify({ oauthRefresh: { status: "succeeded", refreshedAt: new Date().toISOString() } }),
+        JSON.stringify(refreshMetadata),
+        refreshedScopes,
       ]
     );
     return payload.access_token;
@@ -1887,6 +1988,8 @@ module.exports = {
     publicConnection,
     refreshFailureDetails,
     tokenExpiryTime,
+    normalizeGrantedScopes,
+    scopeGrantStatus,
     canonicalJson,
     publishingApprovalIsFresh,
     publishingApprovalHasIndependentDecision,
