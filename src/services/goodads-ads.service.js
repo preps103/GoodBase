@@ -75,7 +75,6 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "sponsored_content",
     adapterType: "native",
-    activationSupported: false,
     supportedObjectives: ["traffic"],
   },
   x: {
@@ -1293,6 +1292,24 @@ function googlePoliticalAdvertisingStatus(value) {
   );
 }
 
+function linkedInPolicyCompliance(data = {}) {
+  if (data.linkedinPoliticalIntent !== "NOT_POLITICAL") {
+    throw adsError(
+      "Confirm that the LinkedIn campaign is not political advertising before provider setup or activation.",
+      409,
+      "GOODADS_LINKEDIN_POLITICAL_CONFIRMATION_REQUIRED"
+    );
+  }
+  if (data.linkedinTargetingNoticeAcknowledged !== true) {
+    throw adsError(
+      "Acknowledge LinkedIn's targeting-discrimination notice before provider setup or activation.",
+      409,
+      "GOODADS_LINKEDIN_TARGETING_NOTICE_REQUIRED"
+    );
+  }
+  return "NOT_POLITICAL";
+}
+
 function metaPublisherPlatforms(data = {}) {
   const selected = new Set(
     (Array.isArray(data.platforms) ? data.platforms : [])
@@ -1570,6 +1587,7 @@ function validateCampaignForAccount(campaign, account) {
     );
   }
   if (account.provider === "linkedin") {
+    linkedInPolicyCompliance(data);
     if (!account.metadata?.deliveryReady || !/^urn:li:organization:\d+$/.test(account.metadata?.organizationUrn || "")) {
       throw adsError(
         "LinkedIn delivery requires an active organization-backed ad account and campaign-manager access.",
@@ -2136,6 +2154,7 @@ async function queueLifecycleOperation({
       status: campaign.campaign_status,
       data: campaign.campaign_data || {},
     };
+    if (campaign.provider === "linkedin") linkedInPolicyCompliance(currentSnapshot.data);
     if (snapshotHash(currentSnapshot) !== campaign.snapshot_hash) {
       throw adsError(
         "The campaign changed after provider creation. Create a fresh paused provider campaign before activation.",
@@ -2222,6 +2241,7 @@ async function requestActivationApproval({
       "GOODADS_AD_ACTIVATION_NOT_SUPPORTED"
     );
   }
+  if (campaign.provider === "linkedin") linkedInPolicyCompliance(campaign.campaign_data);
   if (campaign.status !== "paused") {
     throw adsError("The provider campaign must be created and paused before activation review.", 409, "GOODADS_AD_CAMPAIGN_NOT_PAUSED");
   }
@@ -3699,7 +3719,7 @@ function linkedInCampaignPayload(row, { campaignGroupUrn, locationUrns }) {
     name: boundedText(row.campaign_name, 200),
     objectiveType: linkedInObjective(data.objective),
     offsiteDeliveryEnabled: false,
-    politicalIntent: "NOT_DECLARED",
+    politicalIntent: linkedInPolicyCompliance(data),
     runSchedule: {
       start: linkedInScheduleDate(data.startDate, row.account_timezone),
       end: linkedInScheduleDate(data.endDate, row.account_timezone, true),
@@ -3958,7 +3978,7 @@ async function createLinkedInDelivery(row, accessToken) {
     if (!campaignUrn) throw adsError("LinkedIn did not return a campaign ID.", 502, "GOODADS_LINKEDIN_CAMPAIGN_CREATE_FAILED");
     await mergeProviderReceipt(
       row,
-      { campaignUrn, locationUrns, politicalIntent: "NOT_DECLARED" },
+      { campaignUrn, locationUrns, politicalIntent: campaignBody.politicalIntent },
       {
         providerCampaignId: campaignUrn.split(":").pop(),
         providerResourceName: campaignUrn,
@@ -3996,22 +4016,40 @@ async function createLinkedInDelivery(row, accessToken) {
       accountUrn,
       organizationUrn,
       state: "PAUSED",
-      activationSupported: false,
+      politicalIntent: linkedInPolicyCompliance(data),
+      activationSupported: true,
     },
   };
 }
 
 async function updateLinkedInStatus(row, accessToken, status) {
-  if (status === "ACTIVE") {
-    throw adsError(
-      "LinkedIn activation is disabled until policy confirmation is installed.",
-      409,
-      "GOODADS_AD_ACTIVATION_NOT_SUPPORTED"
-    );
-  }
+  if (status === "ACTIVE") linkedInPolicyCompliance(row.campaign_data || {});
   const accountId = linkedInAccountId(row.provider_account_id);
   const campaignId = linkedInNumericId(row.provider_campaign_id || row.provider_resource_name);
   if (!campaignId) throw adsError("LinkedIn campaign ID is invalid.", 409, "GOODADS_LINKEDIN_CAMPAIGN_ID_INVALID");
+  if (status === "ACTIVE") {
+    const creativeUrn = boundedText(row.receipt?.creativeUrn, 300);
+    if (!/^urn:li:sponsoredCreative:\d+$/.test(creativeUrn)) {
+      throw adsError(
+        "LinkedIn activation requires the exact draft creative created with this campaign.",
+        409,
+        "GOODADS_LINKEDIN_CREATIVE_REQUIRED"
+      );
+    }
+    await linkedInRequest(
+      `/rest/adAccounts/${encodeURIComponent(accountId)}/creatives/${encodeURIComponent(creativeUrn)}`,
+      accessToken,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-RestLi-Method": "PARTIAL_UPDATE",
+        },
+        body: JSON.stringify({ patch: { $set: { intendedStatus: "ACTIVE" } } }),
+      },
+      "LinkedIn creative activation"
+    );
+  }
   await linkedInRequest(
     `/rest/adAccounts/${encodeURIComponent(accountId)}/adCampaigns/${encodeURIComponent(campaignId)}`,
     accessToken,
@@ -4025,7 +4063,11 @@ async function updateLinkedInStatus(row, accessToken, status) {
     },
     "LinkedIn campaign status update"
   );
-  return { ...row.receipt, state: status };
+  return {
+    ...row.receipt,
+    creativeIntendedStatus: status === "ACTIVE" ? "ACTIVE" : row.receipt?.creativeIntendedStatus || "DRAFT",
+    state: status,
+  };
 }
 
 async function syncLinkedInStatus(row, accessToken) {
@@ -4924,6 +4966,7 @@ function validateActivationExecution(row) {
       "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
     );
   }
+  if (row.provider === "linkedin") linkedInPolicyCompliance(currentSnapshot.data);
   const approvalId = boundedText(row.operation_payload?.approvalId, 64);
   const approvalData = row.approval_data || {};
   if (
@@ -5170,6 +5213,7 @@ module.exports = {
     youtubeVideoId,
     providerCreativeVideoUrl,
     googlePoliticalAdvertisingStatus,
+    linkedInPolicyCompliance,
     googleDemandGenNames,
     googleDemandGenOperations,
     googleLogoDimensions,

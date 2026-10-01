@@ -248,7 +248,7 @@ test("LinkedIn delivery requires an approved OAuth app with advertising scopes",
     assert.equal(withScopes.adapterConfigured, true);
     assert.equal(withScopes.adapterType, "native");
     assert.equal(withScopes.safePausedCreation, true);
-    assert.equal(withScopes.activationSupported, false);
+    assert.equal(withScopes.activationSupported, true);
     assert.equal(typeof ads._test.nativeAdapter("linkedin").create, "function");
   } finally {
     for (const name of names) {
@@ -875,6 +875,8 @@ test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creat
     campaign_name: "GoodOS Launch",
     campaign_data: {
       objective: "traffic",
+      linkedinPoliticalIntent: "NOT_POLITICAL",
+      linkedinTargetingNoticeAcknowledged: true,
       dailyBudget: 25,
       maxCpc: 3.5,
       startDate: "2026-10-05",
@@ -898,7 +900,7 @@ test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creat
   assert.equal(campaign.account, "urn:li:sponsoredAccount:518121035");
   assert.equal(campaign.associatedEntity, "urn:li:organization:5803528");
   assert.equal(campaign.objectiveType, "WEBSITE_VISITS");
-  assert.equal(campaign.politicalIntent, "NOT_DECLARED");
+  assert.equal(campaign.politicalIntent, "NOT_POLITICAL");
   assert.deepEqual(campaign.runSchedule, {
     start: Date.parse("2026-10-05T00:00:00.000Z"),
     end: Date.parse("2026-10-13T00:00:00.000Z"),
@@ -920,6 +922,40 @@ test("LinkedIn adapter builds a paused campaign and draft direct-sponsored creat
     creative.creative.inlineContent.post.content.article.thumbnail,
     "urn:li:image:C4E22AQF_example"
   );
+  assert.throws(
+    () => ads._test.linkedInPolicyCompliance({ linkedinPoliticalIntent: "NOT_POLITICAL" }),
+    (error) => error.code === "GOODADS_LINKEDIN_TARGETING_NOTICE_REQUIRED"
+  );
+});
+
+test("LinkedIn activation enables the approved creative before the paused campaign", async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  try {
+    global.fetch = async (url, options) => {
+      calls.push({ url: String(url), body: JSON.parse(options.body) });
+      return new Response(null, { status: 204 });
+    };
+    const receipt = await ads._test.nativeAdapter("linkedin").updateStatus({
+      provider_account_id: "518121035",
+      provider_campaign_id: "360035215",
+      campaign_data: {
+        linkedinPoliticalIntent: "NOT_POLITICAL",
+        linkedinTargetingNoticeAcknowledged: true,
+      },
+      receipt: { creativeUrn: "urn:li:sponsoredCreative:120491345", state: "PAUSED" },
+    }, "access-token", "ACTIVE");
+
+    assert.equal(calls.length, 2);
+    assert.match(calls[0].url, /\/creatives\/urn%3Ali%3AsponsoredCreative%3A120491345$/);
+    assert.equal(calls[0].body.patch.$set.intendedStatus, "ACTIVE");
+    assert.match(calls[1].url, /\/adCampaigns\/360035215$/);
+    assert.equal(calls[1].body.patch.$set.status, "ACTIVE");
+    assert.equal(receipt.creativeIntendedStatus, "ACTIVE");
+    assert.equal(receipt.state, "ACTIVE");
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("Snapchat adapter builds a fully paused campaign stack with a shared Public Profile", () => {
@@ -1441,6 +1477,8 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /ON CONFLICT DO NOTHING/);
   assert.match(source, /active_operation\.operation_type IN \('create','pause','activate','archive'\)/);
   assert.match(source, /intendedStatus: "DRAFT"/);
-  assert.match(source, /activationSupported: false/);
+  assert.match(source, /creativeIntendedStatus/);
+  assert.match(source, /GOODADS_LINKEDIN_POLITICAL_CONFIRMATION_REQUIRED/);
+  assert.match(source, /GOODADS_LINKEDIN_TARGETING_NOTICE_REQUIRED/);
   assert.doesNotMatch(source, /row\.provider === "meta"[\s\S]{0,120}: createGoogleDelivery/);
 });

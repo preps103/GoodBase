@@ -27,10 +27,10 @@ native GoodBase adapter are all installed.
 | Meta (Facebook and Instagram) | Meta | Native | Native | Native |
 | YouTube | Google | Native | Native, paused by default | Native campaign state |
 | TikTok | TikTok Business | Native | Native, disabled by default | Native campaign state |
-| LinkedIn | LinkedIn | Native | Native, paused + draft only | Not installed |
-| X | X Ads (OAuth 1.0a) | Native | Native, paused by default | Native campaign state |
-| Pinterest | Pinterest | Native | Native, paused by default | Not installed |
-| Snapchat | Snapchat Marketing API | Native | Native, paused by default | Not installed |
+| LinkedIn | LinkedIn | Native | Native, paused by default | Native |
+| X | X Ads (OAuth 1.0a) | Native | Native, paused by default | Native |
+| Pinterest | Pinterest | Native | Native, paused by default | Native |
+| Snapchat | Snapchat Marketing API | Native | Native, paused by default | Native |
 
 X uses a separate X Ads authorization because the Ads API requires OAuth 1.0a
 user context and approved Ads API access; the OAuth 2.0 connection used for
@@ -96,12 +96,13 @@ existing connections must reconnect to grant `r_ads` and `rw_ads`. The adapter
 uses LinkedIn Marketing API version `202608` by default, overridable with
 `GOODADS_LINKEDIN_API_VERSION=YYYYMM`.
 
-LinkedIn activation remains deliberately disabled. GoodAds does not yet
-present LinkedIn's required political-advertising and targeting-discrimination
-confirmations, so the adapter can set up and archive campaigns but cannot
-request an activation review or activate one. This preserves the no-spend
-contract while making the campaign fully reviewable in LinkedIn Campaign
-Manager.
+LinkedIn campaigns require an explicit non-political-advertising confirmation
+and acknowledgement of LinkedIn's targeting-discrimination notice. GoodAds
+binds those confirmations to the immutable campaign snapshot, creates the
+campaign paused with a draft direct-sponsored creative, and revalidates the
+campaign, approval, account, authorization, and policy fields in the worker.
+Activation promotes the creative to `ACTIVE` before enabling the parent
+campaign, so the paused campaign remains the final spend barrier.
 
 Pinterest's native v5 adapter discovers advertiser accounts and requires owner,
 admin, or campaign-manager access plus an account currency and IANA time zone.
