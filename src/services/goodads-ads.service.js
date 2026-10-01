@@ -176,13 +176,25 @@ function canonicalProvider(value) {
 function providerAvailability(provider) {
   const id = canonicalProvider(provider);
   const definition = PROVIDERS[id];
-  const oauthConfigured = definition.connectionProviders.some((connectionProvider) => {
+  const oauthSetup = definition.connectionProviders.map((connectionProvider) => {
     try {
-      return social.providerConfig(connectionProvider).configured;
+      const config = social.providerConfig(connectionProvider);
+      return {
+        provider: config.id,
+        name: config.label,
+        configured: config.configured,
+        credentialEnvironment: config.credentialEnvironment,
+      };
     } catch {
-      return false;
+      return {
+        provider: connectionProvider,
+        name: connectionProvider,
+        configured: false,
+        credentialEnvironment: null,
+      };
     }
   });
+  const oauthConfigured = oauthSetup.some((setup) => setup.configured);
   const requiredEnvironment = [...new Set([
     ...definition.requiredEnvironment,
     OAUTH_ENCRYPTION_ENVIRONMENT,
@@ -218,6 +230,7 @@ function providerAvailability(provider) {
     missingOAuthScopes,
     configurationErrors,
     connectionProviders: [...definition.connectionProviders],
+    oauthSetup,
     callbackUrls: definition.connectionProviders.map((connectionProvider) => ({
       provider: connectionProvider,
       url: social.callbackUrl(connectionProvider),

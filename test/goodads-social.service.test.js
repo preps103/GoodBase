@@ -29,6 +29,36 @@ test("unconfigured providers are reported without fabricated success", () => {
   assert.throws(() => social.providerConfig("unknown"), /Unsupported social provider/);
 });
 
+test("provider diagnostics expose standardized credential names without secret values", () => {
+  const names = ["GOODADS_LINKEDIN_CLIENT_ID", "GOODADS_LINKEDIN_CLIENT_SECRET"];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      GOODADS_LINKEDIN_CLIENT_ID: "configured-linkedin-client",
+      GOODADS_LINKEDIN_CLIENT_SECRET: "never-return-this-secret",
+    });
+    const xAds = social.providerConfig("x_ads");
+    assert.deepEqual(xAds.credentialEnvironment, {
+      clientId: "GOODADS_X_ADS_CONSUMER_KEY",
+      clientSecret: "GOODADS_X_ADS_CONSUMER_SECRET",
+      advertisingOAuthEnabled: null,
+    });
+    const linkedin = social.publicProviders().find((provider) => provider.id === "linkedin");
+    assert.deepEqual(linkedin.credentialEnvironment, {
+      clientId: "GOODADS_LINKEDIN_CLIENT_ID",
+      clientSecret: "GOODADS_LINKEDIN_CLIENT_SECRET",
+      advertisingOAuthEnabled: "GOODADS_LINKEDIN_ADS_OAUTH_ENABLED",
+    });
+    assert.equal(linkedin.configured, true);
+    assert.equal(JSON.stringify(linkedin).includes("never-return-this-secret"), false);
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
 test("provider capability registry reports only installed publishing adapters", () => {
   for (const provider of ["x", "linkedin", "threads", "reddit"]) {
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].text, true);

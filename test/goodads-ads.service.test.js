@@ -31,6 +31,11 @@ test("GoodAds paid providers fail closed until server credentials are complete",
   delete process.env.GOODADS_OAUTH_ENCRYPTION_KEY;
   const unavailable = ads._test.providerAvailability("google");
   assert.equal(unavailable.available, false);
+  assert.deepEqual(unavailable.oauthSetup[0].credentialEnvironment, {
+    clientId: "GOODADS_GOOGLE_CLIENT_ID",
+    clientSecret: "GOODADS_GOOGLE_CLIENT_SECRET",
+    advertisingOAuthEnabled: null,
+  });
   assert.equal(unavailable.missingEnvironment.includes("GOODADS_OAUTH_ENCRYPTION_KEY"), true);
   assert.equal(unavailable.configurationErrors.includes("Secure OAuth token storage is not configured."), true);
   Object.assign(process.env, {
