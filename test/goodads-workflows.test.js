@@ -72,6 +72,16 @@ test("GoodAds bounds engagement, approval, and automation inputs", () => {
   assert.equal(approval.status, "pending");
   assert.equal(approval.publication.content.text, "Approved copy");
 
+  const paidActivationApproval = workflows._test.normalizeApprovalPayload({
+    name: "Activate protected campaign",
+    reviewType: "paid_campaign_activation",
+    campaignId: "11111111-1111-4111-8111-111111111111",
+    providerCampaignId: "22222222-2222-4222-8222-222222222222",
+    snapshotHash: "snapshot-hash",
+  });
+  assert.equal(paidActivationApproval.reviewType, "paid_campaign_activation");
+  assert.equal(paidActivationApproval.status, "pending");
+
   const automation = workflows._test.normalizeAutomationPayload({
     name: "Weekly draft",
     triggerType: "schedule",
