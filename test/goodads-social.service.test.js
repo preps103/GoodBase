@@ -177,6 +177,7 @@ test("OAuth refresh serializes token rotation and reuses the refreshed credentia
             refresh_token_iv: params[5] || current.refresh_token_iv,
             refresh_token_tag: params[6] || current.refresh_token_tag,
             token_expires_at: params[7],
+            scopes: params[9] || current.scopes,
             status: "connected",
           });
         }
@@ -186,13 +187,19 @@ test("OAuth refresh serializes token rotation and reuses the refreshed credentia
     });
     global.fetch = async () => {
       fetches += 1;
-      return Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
+      return Response.json({
+        access_token: "new-access",
+        refresh_token: "new-refresh",
+        expires_in: 3600,
+        scope: "openid profile",
+      });
     };
 
     assert.equal(await social.accessTokenForConnection(stale), "new-access");
     assert.equal(await social.accessTokenForConnection(stale), "new-access");
     assert.equal(fetches, 1);
     assert.equal(current.status, "connected");
+    assert.deepEqual(current.scopes, ["openid", "profile"]);
     assert.equal(
       social.decrypt(current.refresh_token_ciphertext, current.refresh_token_iv, current.refresh_token_tag),
       "new-refresh"
@@ -291,6 +298,30 @@ test("publishing input is bounded and scheduling is timezone aware", () => {
   assert.equal(schedule.timezone, "America/Los_Angeles");
   assert.equal(schedule.scheduled, true);
   assert.throws(() => social.normalizeSchedule(new Date().toISOString(), "Not/A_Zone"), /IANA timezone/);
+});
+
+test("OAuth permission truth never substitutes requested scopes for provider grants", () => {
+  assert.deepEqual(
+    social._test.normalizeGrantedScopes("profile openid,profile email"),
+    ["email", "openid", "profile"]
+  );
+  assert.deepEqual(
+    social._test.scopeGrantStatus(
+      { scopes: ["openid", "profile", "email"] },
+      ["profile", "openid"]
+    ),
+    {
+      scopes: ["openid", "profile"],
+      requiredScopes: ["email", "openid", "profile"],
+      missingScopes: ["email"],
+    }
+  );
+  const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-social.service.js"), "utf8");
+  assert.doesNotMatch(source, /token\.scope \|\| config\.scopes/);
+  assert.match(source, /GOODADS_OAUTH_SCOPES_MISSING/);
+  assert.match(source, /GOODADS_CONNECTION_SCOPES_MISSING/);
+  assert.match(source, /GOODADS_CONNECTION_SCOPE_UNVERIFIED/);
+  assert.match(source, /provider_permissions_api/);
 });
 
 test("publishing targets require opaque UUID account identifiers", () => {

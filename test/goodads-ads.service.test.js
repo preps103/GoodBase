@@ -203,6 +203,12 @@ test("paid activation approvals are system-generated and expire after a bounded 
   }
 });
 
+test("paid provider operations require provider-verified OAuth scope evidence", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
+  assert.match(source, /metadata\?\.scopeVerification\?\.verifiedAt/);
+  assert.match(source, /GOODADS_AD_CONNECTION_SCOPE_UNVERIFIED/);
+});
+
 test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
   const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
