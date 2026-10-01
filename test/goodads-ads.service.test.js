@@ -9,6 +9,20 @@ const ads = require("../src/services/goodads-ads.service");
 const TEST_OAUTH_ENCRYPTION_KEY = "test-goodads-oauth-encryption-key-32-bytes";
 const ORIGINAL_OAUTH_ENCRYPTION_KEY = process.env.GOODADS_OAUTH_ENCRYPTION_KEY;
 
+function withVerifiedAdConnection(account, connectionProvider = "facebook") {
+  return {
+    ...account,
+    connection_provider: connectionProvider,
+    connection_status: "connected",
+    connection_scopes: ads._test.providerConnectionScopes(account.provider, connectionProvider),
+    connection_metadata: {
+      scopeVerification: { verifiedAt: "2026-10-01T00:00:00.000Z" },
+    },
+    connection_token_expires_at: null,
+    connection_refreshable: false,
+  };
+}
+
 test.before(() => {
   process.env.GOODADS_OAUTH_ENCRYPTION_KEY = TEST_OAUTH_ENCRYPTION_KEY;
 });
@@ -255,6 +269,34 @@ test("paid worker preserves and validates separate ad-network and OAuth provider
   );
 });
 
+test("campaign preflight rejects disconnected, expiring, and permission-unverified account connections", () => {
+  const account = withVerifiedAdConnection({
+    id: "a73b7d9f-292f-48b1-9557-3c02b185683c",
+    provider: "meta",
+  });
+  assert.doesNotThrow(() => ads._test.validateAdAccountConnection(account));
+  assert.throws(
+    () => ads._test.validateAdAccountConnection({ ...account, connection_status: "disconnected" }),
+    (error) => error.code === "GOODADS_CONNECTION_EXPIRED"
+  );
+  assert.throws(
+    () => ads._test.validateAdAccountConnection({ ...account, connection_metadata: {} }),
+    (error) => error.code === "GOODADS_AD_CONNECTION_SCOPE_UNVERIFIED"
+  );
+  assert.throws(
+    () => ads._test.validateAdAccountConnection({
+      ...account,
+      connection_token_expires_at: "2026-10-01T00:03:00.000Z",
+    }, new Date("2026-10-01T00:00:00.000Z")),
+    (error) => error.code === "GOODADS_CONNECTION_EXPIRED"
+  );
+  assert.doesNotThrow(() => ads._test.validateAdAccountConnection({
+    ...account,
+    connection_token_expires_at: "2026-10-01T00:03:00.000Z",
+    connection_refreshable: true,
+  }, new Date("2026-10-01T00:00:00.000Z")));
+});
+
 test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
   const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
@@ -493,7 +535,7 @@ test("campaign preflight proves read-only paused exposure for the exact saved ve
     },
   };
   const accounts = [
-    {
+    withVerifiedAdConnection({
       id: "a73b7d9f-292f-48b1-9557-3c02b185683c",
       provider: "meta",
       name: "GoodOS Main",
@@ -501,8 +543,8 @@ test("campaign preflight proves read-only paused exposure for the exact saved ve
       currency: "USD",
       timezone: "America/Los_Angeles",
       metadata: { pageId: "12345" },
-    },
-    {
+    }),
+    withVerifiedAdConnection({
       id: "9660d441-897d-4464-b960-c92ded8a4f12",
       provider: "meta",
       name: "GoodOS West",
@@ -510,7 +552,7 @@ test("campaign preflight proves read-only paused exposure for the exact saved ve
       currency: "USD",
       timezone: "America/Los_Angeles",
       metadata: { pageId: "67890" },
-    },
+    }),
   ];
   const report = ads._test.campaignPreflightReport({
     campaign,
@@ -617,7 +659,7 @@ test("campaign-wide exposure limits block multiplied spend across accounts and t
       },
     },
     requestedAccountIds: ["new-account"],
-    accounts: [{
+    accounts: [withVerifiedAdConnection({
       id: "new-account",
       provider: "meta",
       name: "New account",
@@ -625,7 +667,7 @@ test("campaign-wide exposure limits block multiplied spend across accounts and t
       currency: "USD",
       timezone: "America/Los_Angeles",
       metadata: { pageId: "12345" },
-    }],
+    })],
     providerCampaigns: Array.from({ length: 10 }, (_, index) => ({
       id: `delivery-${index}`,
       ad_account_id: `existing-account-${index}`,
@@ -702,7 +744,7 @@ test("campaign preflight and launch fail closed when account locale is incomplet
       },
     },
     requestedAccountIds: [accountId],
-    accounts: [{
+    accounts: [withVerifiedAdConnection({
       id: accountId,
       provider: "meta",
       name: "Incomplete account",
@@ -710,7 +752,7 @@ test("campaign preflight and launch fail closed when account locale is incomplet
       currency: "USD",
       timezone: "",
       metadata: { pageId: "12345" },
-    }],
+    })],
     availabilityByProvider: { meta: { available: false, name: "Meta Ads" } },
     generatedAt: "2026-09-30T12:00:00.000Z",
   });
