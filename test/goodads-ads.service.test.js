@@ -297,6 +297,21 @@ test("campaign preflight rejects disconnected, expiring, and permission-unverifi
   }, new Date("2026-10-01T00:00:00.000Z")));
 });
 
+test("campaign recovery selects only the newest failed create per provider delivery", () => {
+  const candidates = ads._test.selectLatestFailedCreateOperations([
+    { operation_record_id: "old", provider_campaign_record_id: "delivery-a", provider_campaign_status: "failed", provider_campaign_id: null, operation_type: "create", operation_status: "failed", operation_created_at: "2026-09-30T10:00:00.000Z" },
+    { operation_record_id: "new", provider_campaign_record_id: "delivery-a", provider_campaign_status: "failed", provider_campaign_id: null, operation_type: "create", operation_status: "dead_letter", operation_created_at: "2026-09-30T11:00:00.000Z" },
+    { operation_record_id: "pause", provider_campaign_record_id: "delivery-a", provider_campaign_status: "failed", provider_campaign_id: null, operation_type: "pause", operation_status: "failed", operation_created_at: "2026-09-30T12:00:00.000Z" },
+    { operation_record_id: "complete", provider_campaign_record_id: "delivery-b", provider_campaign_status: "failed", provider_campaign_id: null, operation_type: "create", operation_status: "completed", operation_created_at: "2026-09-30T12:00:00.000Z" },
+    { operation_record_id: "already-created", provider_campaign_record_id: "delivery-b", provider_campaign_status: "paused", provider_campaign_id: "provider-123", operation_type: "create", operation_status: "failed", operation_created_at: "2026-09-30T13:00:00.000Z" },
+    { operation_record_id: "other", provider_campaign_record_id: "delivery-c", provider_campaign_status: "failed", provider_campaign_id: null, operation_type: "create", operation_status: "failed", operation_created_at: "2026-09-30T09:00:00.000Z" },
+  ]);
+  assert.deepEqual(candidates.map((candidate) => candidate.operation_record_id), ["new", "other"]);
+  assert.equal(ads.capabilities().paidAdvertising.campaignRecoveryBatchRetry, true);
+  const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
+  assert.match(source, /provider_campaign\.status = 'failed' AND provider_campaign\.provider_campaign_id IS NULL/);
+});
+
 test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
   const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
@@ -1789,6 +1804,7 @@ test("paid campaign migration installs verified accounts, durable operations, an
   assert.match(routes, /ads\.requestActivationApproval/);
   assert.match(routes, /ads\.queueLifecycleOperation/);
   assert.match(routes, /ads\.retryOperation/);
+  assert.match(routes, /ads\.retryFailedCampaignCreates/);
   assert.match(packageJson.scripts.build, /apply-goodads-paid-campaigns-migration/);
   assert.match(packageJson.scripts.build, /apply-goodads-major-ad-platforms-migration/);
   for (const provider of ["youtube", "tiktok", "linkedin", "x", "pinterest", "snapchat"]) {
