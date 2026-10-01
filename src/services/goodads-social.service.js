@@ -5,6 +5,8 @@ const OAuth = require("oauth-1.0a");
 const database = require("../config/database");
 const { query } = database;
 
+const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
 const PROVIDERS = {
   google: {
     label: "Google / YouTube",
@@ -233,6 +235,67 @@ function connectionHealth(connection, now = Date.now()) {
     return { status: "expiring_soon", refreshable, expiresAt, expiresInSeconds };
   }
   return { status: "healthy", refreshable, expiresAt, expiresInSeconds };
+}
+
+function refreshFailureDetails(response, payload = {}) {
+  const providerError = payload.error;
+  const code = String(
+    (providerError && typeof providerError === "object" ? providerError.code || providerError.type : providerError)
+      || payload.error_code
+      || payload.code
+      || ""
+  ).toLowerCase();
+  const message = String(
+    payload.error_description
+      || (providerError && typeof providerError === "object" ? providerError.message : "")
+      || payload.message
+      || ""
+  ).slice(0, 300);
+  const terminalCodes = new Set([
+    "invalid_grant",
+    "invalid_token",
+    "invalid_refresh_token",
+    "access_denied",
+    "token_revoked",
+  ]);
+  return {
+    code,
+    message,
+    terminal: terminalCodes.has(code)
+      || (response.status === 401 && code !== "invalid_client" && code !== "unauthorized_client"),
+  };
+}
+
+function tokenExpiryTime(connection) {
+  const raw = connection.token_expires_at || connection.tokenExpiresAt || null;
+  if (!raw) return null;
+  const value = new Date(raw).getTime();
+  return Number.isFinite(value) ? value : null;
+}
+
+function decryptAccessToken(connection) {
+  return decrypt(connection.access_token_ciphertext, connection.access_token_iv, connection.access_token_tag);
+}
+
+async function withConnectionRefreshLock(connectionId, operation) {
+  const client = await database.pool.connect();
+  const lockName = `goodads:oauth-refresh:${connectionId}`;
+  let locked = false;
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [lockName]);
+    locked = true;
+    return await operation(client);
+  } finally {
+    let releaseError = null;
+    if (locked) {
+      try {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockName]);
+      } catch (error) {
+        releaseError = error;
+      }
+    }
+    client.release(releaseError);
+  }
 }
 
 function publicConnection(connection) {
@@ -1326,75 +1389,120 @@ async function publishBatch({
 }
 
 async function accessTokenForConnection(connection) {
-  const expiresAt = connection.token_expires_at ? new Date(connection.token_expires_at).getTime() : null;
-  if (!expiresAt || expiresAt > Date.now() + 5 * 60 * 1000) {
-    return decrypt(connection.access_token_ciphertext, connection.access_token_iv, connection.access_token_tag);
+  const initialExpiry = tokenExpiryTime(connection);
+  if (!initialExpiry || initialExpiry > Date.now() + TOKEN_REFRESH_SKEW_MS) {
+    return decryptAccessToken(connection);
   }
-  if (!connection.refresh_token_ciphertext) {
-    await query(
-      `UPDATE goodads_social_connections SET status = 'expired', updated_at = NOW() WHERE id = $1::uuid`,
+  return withConnectionRefreshLock(connection.id, async (client) => {
+    const selected = await client.query(
+      `SELECT * FROM goodads_social_connections
+       WHERE id = $1::uuid AND status <> 'disconnected'
+       LIMIT 1`,
       [connection.id]
     );
-    throw socialError("The connected account authorization has expired.", 401, "GOODADS_CONNECTION_EXPIRED");
-  }
-  const config = providerConfig(connection.provider);
-  if (!config.configured) throw socialError(`${config.label} OAuth credentials are not configured.`, 503, "GOODADS_PROVIDER_NOT_CONFIGURED");
-  const refreshToken = decrypt(
-    connection.refresh_token_ciphertext,
-    connection.refresh_token_iv,
-    connection.refresh_token_tag
-  );
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    [config.clientIdParameter || "client_id"]: config.clientId,
-  });
-  if (config.clientSecret) body.set("client_secret", config.clientSecret);
-  const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
-  if (config.id === "reddit" || config.id === "pinterest" || config.id === "x") {
-    headers.Authorization = `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`;
-  }
-  const response = await fetch(config.tokenUrl, {
-    method: "POST",
-    headers,
-    body,
-    signal: AbortSignal.timeout(15000),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.access_token) {
-    await query(
-      `UPDATE goodads_social_connections SET status = 'expired', updated_at = NOW() WHERE id = $1::uuid`,
-      [connection.id]
+    const current = selected.rows[0];
+    if (!current) throw socialError("Connected account not found.", 404, "GOODADS_CONNECTION_NOT_FOUND");
+    if (String(current.status || "").toLowerCase() !== "connected") {
+      throw socialError("The connected account needs to be authorized again.", 401, "GOODADS_CONNECTION_EXPIRED");
+    }
+
+    const currentExpiry = tokenExpiryTime(current);
+    if (!currentExpiry || currentExpiry > Date.now() + TOKEN_REFRESH_SKEW_MS) {
+      return decryptAccessToken(current);
+    }
+    if (!current.refresh_token_ciphertext) {
+      if (currentExpiry && currentExpiry > Date.now()) return decryptAccessToken(current);
+      await client.query(
+        `UPDATE goodads_social_connections SET status = 'expired', updated_at = NOW() WHERE id = $1::uuid`,
+        [current.id]
+      );
+      throw socialError("The connected account authorization has expired.", 401, "GOODADS_CONNECTION_EXPIRED");
+    }
+
+    const config = providerConfig(current.provider);
+    if (!config.configured) throw socialError(`${config.label} OAuth credentials are not configured.`, 503, "GOODADS_PROVIDER_NOT_CONFIGURED");
+    const refreshToken = decrypt(
+      current.refresh_token_ciphertext,
+      current.refresh_token_iv,
+      current.refresh_token_tag
     );
-    throw socialError(
-      payload.error_description || payload.message || `${config.label} authorization could not be refreshed.`,
-      401,
-      "GOODADS_CONNECTION_EXPIRED"
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      [config.clientIdParameter || "client_id"]: config.clientId,
+    });
+    if (config.clientSecret) body.set("client_secret", config.clientSecret);
+    const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
+    if (config.id === "reddit" || config.id === "pinterest" || config.id === "x") {
+      headers.Authorization = `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`;
+    }
+
+    let response;
+    try {
+      response = await fetch(config.tokenUrl, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch {
+      throw socialError(`${config.label} authorization refresh is temporarily unavailable.`, 503, "GOODADS_TOKEN_REFRESH_TEMPORARY");
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.access_token) {
+      const failure = refreshFailureDetails(response, payload);
+      if (failure.terminal) {
+        await client.query(
+          `UPDATE goodads_social_connections SET
+             status = 'expired',
+             metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+             updated_at = NOW()
+           WHERE id = $1::uuid`,
+          [current.id, JSON.stringify({ oauthRefresh: { status: "reauthorization_required", failedAt: new Date().toISOString(), code: failure.code || null } })]
+        );
+        throw socialError(
+          failure.message || `${config.label} authorization must be renewed.`,
+          401,
+          "GOODADS_CONNECTION_EXPIRED"
+        );
+      }
+      throw socialError(
+        `${config.label} authorization refresh is temporarily unavailable.`,
+        response.status === 429 ? 429 : 503,
+        "GOODADS_TOKEN_REFRESH_TEMPORARY"
+      );
+    }
+
+    const access = encrypt(payload.access_token);
+    const nextRefresh = payload.refresh_token ? encrypt(payload.refresh_token) : null;
+    const expiresIn = Number(payload.expires_in);
+    const nextExpiry = Number.isFinite(expiresIn) && expiresIn > 0
+      ? new Date(Date.now() + expiresIn * 1000)
+      : null;
+    await client.query(
+      `UPDATE goodads_social_connections SET
+         access_token_ciphertext = $2, access_token_iv = $3, access_token_tag = $4,
+         refresh_token_ciphertext = COALESCE($5, refresh_token_ciphertext),
+         refresh_token_iv = COALESCE($6, refresh_token_iv),
+         refresh_token_tag = COALESCE($7, refresh_token_tag),
+         token_expires_at = $8, status = 'connected',
+         metadata = COALESCE(metadata, '{}'::jsonb) || $9::jsonb,
+         last_verified_at = NOW(), updated_at = NOW()
+       WHERE id = $1::uuid`,
+      [
+        current.id,
+        access.ciphertext,
+        access.iv,
+        access.tag,
+        nextRefresh?.ciphertext || null,
+        nextRefresh?.iv || null,
+        nextRefresh?.tag || null,
+        nextExpiry,
+        JSON.stringify({ oauthRefresh: { status: "succeeded", refreshedAt: new Date().toISOString() } }),
+      ]
     );
-  }
-  const access = encrypt(payload.access_token);
-  const nextRefresh = payload.refresh_token ? encrypt(payload.refresh_token) : null;
-  const nextExpiry = payload.expires_in ? new Date(Date.now() + Number(payload.expires_in) * 1000) : null;
-  await query(
-    `UPDATE goodads_social_connections SET
-       access_token_ciphertext = $2, access_token_iv = $3, access_token_tag = $4,
-       refresh_token_ciphertext = COALESCE($5, refresh_token_ciphertext),
-       refresh_token_iv = COALESCE($6, refresh_token_iv),
-       refresh_token_tag = COALESCE($7, refresh_token_tag),
-       token_expires_at = $8, status = 'connected', last_verified_at = NOW(), updated_at = NOW()
-     WHERE id = $1::uuid`,
-    [
-      connection.id,
-      access.ciphertext,
-      access.iv,
-      access.tag,
-      nextRefresh?.ciphertext || null,
-      nextRefresh?.iv || null,
-      nextRefresh?.tag || null,
-      nextExpiry,
-    ]
-  );
-  return payload.access_token;
+    return payload.access_token;
+  });
 }
 
 async function oauth1CredentialsForConnection(connection) {
@@ -1635,6 +1743,8 @@ module.exports = {
   _test: {
     connectionHealth,
     publicConnection,
+    refreshFailureDetails,
+    tokenExpiryTime,
   },
   validatePublishingApproval,
   rejectPaidCampaignLaunch,

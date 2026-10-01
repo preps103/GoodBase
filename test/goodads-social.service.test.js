@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const database = require("../src/config/database");
 const social = require("../src/services/goodads-social.service");
 
 test("GoodAds social registry includes major publishing networks", () => {
@@ -101,6 +102,133 @@ test("X Ads uses a separate OAuth 1.0a business authorization", () => {
     for (const name of names) {
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];
+    }
+  }
+});
+
+test("OAuth refresh serializes token rotation and reuses the refreshed credential", async () => {
+  const envNames = ["GOODADS_OAUTH_ENCRYPTION_KEY", "GOODADS_GOOGLE_CLIENT_ID", "GOODADS_GOOGLE_CLIENT_SECRET"];
+  const savedEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+  const originalConnect = database.pool.connect;
+  const originalFetch = global.fetch;
+  const queries = [];
+  let fetches = 0;
+  try {
+    Object.assign(process.env, {
+      GOODADS_OAUTH_ENCRYPTION_KEY: "refresh-test-encryption-key",
+      GOODADS_GOOGLE_CLIENT_ID: "google-client",
+      GOODADS_GOOGLE_CLIENT_SECRET: "google-secret",
+    });
+    const oldAccess = social.encrypt("old-access");
+    const oldRefresh = social.encrypt("old-refresh");
+    const current = {
+      id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+      provider: "google",
+      status: "connected",
+      access_token_ciphertext: oldAccess.ciphertext,
+      access_token_iv: oldAccess.iv,
+      access_token_tag: oldAccess.tag,
+      refresh_token_ciphertext: oldRefresh.ciphertext,
+      refresh_token_iv: oldRefresh.iv,
+      refresh_token_tag: oldRefresh.tag,
+      token_expires_at: new Date(Date.now() - 1000),
+    };
+    const stale = { ...current };
+    database.pool.connect = async () => ({
+      async query(sql, params = []) {
+        queries.push(sql);
+        if (/SELECT \* FROM goodads_social_connections/.test(sql)) return { rows: [{ ...current }] };
+        if (/access_token_ciphertext = \$2/.test(sql)) {
+          Object.assign(current, {
+            access_token_ciphertext: params[1],
+            access_token_iv: params[2],
+            access_token_tag: params[3],
+            refresh_token_ciphertext: params[4] || current.refresh_token_ciphertext,
+            refresh_token_iv: params[5] || current.refresh_token_iv,
+            refresh_token_tag: params[6] || current.refresh_token_tag,
+            token_expires_at: params[7],
+            status: "connected",
+          });
+        }
+        return { rows: [] };
+      },
+      release() {},
+    });
+    global.fetch = async () => {
+      fetches += 1;
+      return Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
+    };
+
+    assert.equal(await social.accessTokenForConnection(stale), "new-access");
+    assert.equal(await social.accessTokenForConnection(stale), "new-access");
+    assert.equal(fetches, 1);
+    assert.equal(current.status, "connected");
+    assert.equal(
+      social.decrypt(current.refresh_token_ciphertext, current.refresh_token_iv, current.refresh_token_tag),
+      "new-refresh"
+    );
+    assert.equal(queries.filter((sql) => /pg_advisory_lock/.test(sql)).length, 2);
+    assert.equal(queries.filter((sql) => /pg_advisory_unlock/.test(sql)).length, 2);
+  } finally {
+    database.pool.connect = originalConnect;
+    global.fetch = originalFetch;
+    for (const name of envNames) {
+      if (savedEnv[name] === undefined) delete process.env[name];
+      else process.env[name] = savedEnv[name];
+    }
+  }
+});
+
+test("temporary OAuth refresh failures preserve the authorized connection", async () => {
+  const envNames = ["GOODADS_OAUTH_ENCRYPTION_KEY", "GOODADS_GOOGLE_CLIENT_ID", "GOODADS_GOOGLE_CLIENT_SECRET"];
+  const savedEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+  const originalConnect = database.pool.connect;
+  const originalFetch = global.fetch;
+  const queries = [];
+  try {
+    Object.assign(process.env, {
+      GOODADS_OAUTH_ENCRYPTION_KEY: "refresh-test-encryption-key",
+      GOODADS_GOOGLE_CLIENT_ID: "google-client",
+      GOODADS_GOOGLE_CLIENT_SECRET: "google-secret",
+    });
+    const access = social.encrypt("access");
+    const refresh = social.encrypt("refresh");
+    const current = {
+      id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+      provider: "google",
+      status: "connected",
+      access_token_ciphertext: access.ciphertext,
+      access_token_iv: access.iv,
+      access_token_tag: access.tag,
+      refresh_token_ciphertext: refresh.ciphertext,
+      refresh_token_iv: refresh.iv,
+      refresh_token_tag: refresh.tag,
+      token_expires_at: new Date(Date.now() - 1000),
+    };
+    database.pool.connect = async () => ({
+      async query(sql) {
+        queries.push(sql);
+        if (/SELECT \* FROM goodads_social_connections/.test(sql)) return { rows: [{ ...current }] };
+        return { rows: [] };
+      },
+      release() {},
+    });
+    global.fetch = async () => Response.json({ error: "temporarily_unavailable" }, { status: 503 });
+
+    await assert.rejects(
+      social.accessTokenForConnection(current),
+      (error) => error.code === "GOODADS_TOKEN_REFRESH_TEMPORARY" && error.statusCode === 503
+    );
+    assert.equal(current.status, "connected");
+    assert.equal(queries.some((sql) => /status = 'expired'/.test(sql)), false);
+    assert.equal(social._test.refreshFailureDetails({ status: 400 }, { error: "invalid_grant" }).terminal, true);
+    assert.equal(social._test.refreshFailureDetails({ status: 401 }, { error: "invalid_client" }).terminal, false);
+  } finally {
+    database.pool.connect = originalConnect;
+    global.fetch = originalFetch;
+    for (const name of envNames) {
+      if (savedEnv[name] === undefined) delete process.env[name];
+      else process.env[name] = savedEnv[name];
     }
   }
 });
