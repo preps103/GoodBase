@@ -1981,7 +1981,11 @@ async function getCampaignState({ campaignId, context }) {
        approval.status AS activation_approval_status
      FROM goodads_provider_campaigns provider_campaign
      JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
-     LEFT JOIN goodads_resources approval ON approval.id = provider_campaign.activation_approval_id
+     LEFT JOIN goodads_resources approval
+       ON approval.id = provider_campaign.activation_approval_id
+       AND approval.organization_id = provider_campaign.organization_id
+       AND approval.resource_type = 'approvals'
+       AND approval.archived_at IS NULL
      WHERE provider_campaign.organization_id = $1
        AND provider_campaign.campaign_id = $2::uuid
      ORDER BY provider_campaign.created_at`,
@@ -2405,6 +2409,7 @@ async function queueLifecycleOperation({
      LEFT JOIN goodads_resources approval
        ON approval.id = $4::uuid AND approval.organization_id = provider_campaign.organization_id
        AND approval.resource_type = 'approvals'
+       AND approval.archived_at IS NULL
      WHERE provider_campaign.id = $1::uuid
        AND provider_campaign.campaign_id = $2::uuid
        AND provider_campaign.organization_id = $3`,
@@ -5808,6 +5813,7 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
          ON approval.id::text = operation.payload->>'approvalId'
          AND approval.organization_id = provider_campaign.organization_id
          AND approval.resource_type = 'approvals'
+         AND approval.archived_at IS NULL
        WHERE operation.id = $1::uuid`,
       [operation.id]
     );
@@ -5877,6 +5883,7 @@ function capabilities() {
       activationApprovalValidityMinutes: activationApprovalValidityMinutes(),
       paidActivationApprovalsSystemGenerated: true,
       paidActivationApprovalsRequireIndependentReviewer: true,
+      archivedActivationApprovalsRevoked: true,
       durableOperations: true,
       boundedRetries: true,
       immutableLaunchSnapshots: true,
