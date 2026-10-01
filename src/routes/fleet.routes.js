@@ -10,6 +10,12 @@ const teamsService = require("../services/teams.service");
 const { encryptValue } = require("../services/secret.service");
 const fleetPricing = require("../services/fleet-pricing.service");
 const fleetReporting = require("../services/fleet-reporting.service");
+const {
+  loadCustomerProgram,
+  loyaltyTier,
+  loyaltyTierDiscount,
+  rentalPoints,
+} = require("../services/fleet-customer-programs.service");
 
 const router = express.Router();
 const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
@@ -409,13 +415,61 @@ async function calculateBookingPrice(client, org, input, pickupAt, returnAt) {
     error.code = "VEHICLE_NOT_FOUND";
     throw error;
   }
+  const vehicle = vehicleResult.rows[0];
+  const customerProgram = await loadCustomerProgram(client, {
+    organizationId: org,
+    customerId: input.customerId,
+    vehicleCategory: fleetPricing.vehicleCategory(vehicle),
+    branchId: text(input.pickupLocationId || input.pickupBranchId, 200),
+    pickupAt,
+  });
   return fleetPricing.calculateBookingPrice({
-    vehicle: vehicleResult.rows[0],
+    vehicle,
     state: workspaceResult.rows[0]?.state_json || {},
-    input,
+    input: { ...input, customerProgram },
     pickupAt,
     returnAt
   });
+}
+
+async function awardCompletedRentalLoyalty(client, org, booking, actingUserId) {
+  const points = rentalPoints(booking.paidAmount);
+  if (points <= 0) return null;
+  const accountResult = await client.query(
+    `SELECT * FROM fleet_loyalty_accounts
+      WHERE organization_id=$1 AND customer_id=$2 AND status='active'
+      FOR UPDATE`,
+    [org, booking.customerId]
+  );
+  if (!accountResult.rowCount) return null;
+  const account = accountResult.rows[0];
+  const idempotencyKey = `completed-rental:${booking.id}`;
+  const duplicate = await client.query(
+    `SELECT id FROM fleet_loyalty_events
+      WHERE organization_id=$1 AND idempotency_key=$2`,
+    [org, idempotencyKey]
+  );
+  if (duplicate.rowCount) return null;
+  const balanceAfter = Number(account.points_balance) + points;
+  const lifetimePoints = Number(account.lifetime_points) + points;
+  const tier = loyaltyTier(lifetimePoints);
+  const tierDiscount = loyaltyTierDiscount(tier);
+  await client.query(
+    `UPDATE fleet_loyalty_accounts
+        SET points_balance=$3,lifetime_points=$4,tier=$5,
+            discount_percent=GREATEST(discount_percent,$6),updated_by=$7,updated_at=NOW()
+      WHERE organization_id=$1 AND id=$2`,
+    [org, account.id, balanceAfter, lifetimePoints, tier, tierDiscount, actingUserId]
+  );
+  await client.query(
+    `INSERT INTO fleet_loyalty_events
+      (organization_id,loyalty_account_id,idempotency_key,booking_id,event_type,
+       points_delta,balance_after,notes,actor_id)
+     VALUES ($1,$2,$3,$4,'rental_earned',$5,$6,$7,$8)`,
+    [org, account.id, idempotencyKey, booking.id, points, balanceAfter,
+      `Points earned for completed rental ${booking.reservationNumber}.`, actingUserId]
+  );
+  return { accountId: account.id, points, balanceAfter, tier };
 }
 
 function dateOnly(value) {
@@ -917,6 +971,11 @@ router.get("/health", async (request, response, next) => {
         to_regclass('public.fleet_staff_onboarding_progress') IS NOT NULL AS onboarding_ready,
         to_regclass('public.fleet_payment_operations') IS NOT NULL AS payment_schema_ready,
         to_regclass('public.fleet_contract_envelopes') IS NOT NULL AS contract_schema_ready,
+        (to_regclass('public.fleet_corporate_accounts') IS NOT NULL
+          AND to_regclass('public.fleet_corporate_memberships') IS NOT NULL
+          AND to_regclass('public.fleet_negotiated_rates') IS NOT NULL
+          AND to_regclass('public.fleet_loyalty_accounts') IS NOT NULL
+          AND to_regclass('public.fleet_loyalty_events') IS NOT NULL) AS customer_programs_ready,
         to_regclass('public.fleet_workspace_revisions') IS NOT NULL AS workspace_recovery_ready`
     );
     const readiness = result.rows[0];
@@ -2830,6 +2889,26 @@ router.patch("/bookings/:bookingId", requireBookingEditor, async (request, respo
             details: `Vehicle returned for reservation ${booking.reservationNumber}`
           });
       }
+    }
+    const loyaltyAward = returnCompleted
+      ? await awardCompletedRentalLoyalty(client, org, booking, actor(request))
+      : null;
+    if (loyaltyAward) {
+      await audit(
+        client,
+        request,
+        "loyalty.points_earned",
+        "loyalty_account",
+        loyaltyAward.accountId,
+        null,
+        {
+          bookingId: booking.id,
+          points: loyaltyAward.points,
+          balanceAfter: loyaltyAward.balanceAfter,
+          tier: loyaltyAward.tier,
+          details: `${loyaltyAward.points} loyalty points earned for ${booking.reservationNumber}`
+        }
+      );
     }
     await audit(client, request, "booking.updated", "booking", booking.id, before, booking);
     let returnedVehicle = null;
