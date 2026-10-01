@@ -1563,6 +1563,7 @@ test("automatic provider reconciliation pauses unexpected activation drift", () 
     "utf8"
   );
   assert.match(source, /automatic-reconcile:/);
+  assert.match(source, /\$2::integer \* 60/);
   assert.match(source, /unexpected_provider_activation/);
   assert.match(source, /automatic-drift-pause:/);
   assert.match(source, /row\.operation_type === "sync" \|\| retry \? row\.status : "failed"/);

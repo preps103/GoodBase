@@ -5404,7 +5404,7 @@ async function queueStaleProviderReconciliations(limit = 25) {
      )
      SELECT candidates.organization_id, candidates.id, NULL, 'sync',
        'automatic-reconcile:' || candidates.id::text || ':'
-         || FLOOR(EXTRACT(EPOCH FROM NOW()) / ($2 * 60))::bigint::text,
+         || FLOOR(EXTRACT(EPOCH FROM NOW()) / ($2::integer * 60))::bigint::text,
        jsonb_build_object('automaticReconciliation', TRUE, 'intervalMinutes', $2)
      FROM candidates
      ON CONFLICT DO NOTHING
