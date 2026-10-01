@@ -111,7 +111,9 @@ test("queued paid activation revalidates the live snapshot, approval, account, a
     const row = {
       operation_type: "activate",
       operation_payload: { approvalId: "2ef6b324-78c5-46a2-a598-00920b1eb8a6" },
-      provider: "meta",
+      ad_provider: "meta",
+      connection_provider: "facebook",
+      provider: "facebook",
       provider_campaign_record_id: "50f11ad4-5897-47b3-ab07-c1359989f379",
       campaign_id: snapshot.id,
       campaign_name: snapshot.name,
@@ -122,6 +124,10 @@ test("queued paid activation revalidates the live snapshot, approval, account, a
       status: "paused",
       account_status: "verified",
       connection_status: "connected",
+      scopes: ads._test.providerConnectionScopes("meta", "facebook"),
+      metadata: {
+        scopeVerification: { verifiedAt: new Date().toISOString() },
+      },
       approval_status: "approved",
       approval_data: {
         reviewType: "paid_campaign_activation",
@@ -207,6 +213,46 @@ test("paid provider operations require provider-verified OAuth scope evidence", 
   const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
   assert.match(source, /metadata\?\.scopeVerification\?\.verifiedAt/);
   assert.match(source, /GOODADS_AD_CONNECTION_SCOPE_UNVERIFIED/);
+});
+
+test("paid worker preserves and validates separate ad-network and OAuth provider identities", () => {
+  const requiredScopes = ads._test.providerConnectionScopes("meta", "facebook");
+  assert.ok(requiredScopes.includes("ads_management"));
+  assert.deepEqual(
+    ads._test.operationProviderBindings({
+      ad_provider: "meta",
+      connection_provider: "facebook",
+      provider: "facebook",
+    }),
+    { adProvider: "meta", connectionProvider: "facebook", requiredScopes }
+  );
+  assert.doesNotThrow(() => ads._test.validateOperationConnection({
+    ad_provider: "meta",
+    connection_provider: "facebook",
+    provider: "facebook",
+    connection_status: "connected",
+    scopes: requiredScopes,
+    metadata: { scopeVerification: { verifiedAt: "2026-10-01T00:00:00.000Z" } },
+  }));
+  assert.throws(
+    () => ads._test.operationProviderBindings({
+      ad_provider: "meta",
+      connection_provider: "google",
+      provider: "google",
+    }),
+    (error) => error.code === "GOODADS_AD_CONNECTION_PROVIDER_MISMATCH"
+  );
+  assert.throws(
+    () => ads._test.validateOperationConnection({
+      ad_provider: "meta",
+      connection_provider: "facebook",
+      provider: "facebook",
+      connection_status: "connected",
+      scopes: requiredScopes,
+      metadata: {},
+    }),
+    (error) => error.code === "GOODADS_AD_CONNECTION_SCOPE_UNVERIFIED"
+  );
 });
 
 test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
@@ -1722,8 +1768,10 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /GOODADS_ADAPTER_NOT_INSTALLED/);
   assert.match(source, /GOODADS_AD_ACTIVATION_NOT_SUPPORTED/);
   assert.match(source, /account\.status AS account_status/);
+  assert.match(source, /provider_campaign\.provider AS ad_provider/);
+  assert.match(source, /connection\.provider AS connection_provider/);
   const createValidationIndex = source.indexOf("validateCreateExecution(executionRow);");
-  const providerTokenIndex = source.indexOf("social.accessTokenForConnection(executionRow)", createValidationIndex);
+  const providerTokenIndex = source.indexOf("social.accessTokenForConnection(connection)", createValidationIndex);
   assert.ok(createValidationIndex >= 0 && providerTokenIndex > createValidationIndex);
   assert.match(source, /GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED/);
   assert.match(source, /ON CONFLICT DO NOTHING/);
