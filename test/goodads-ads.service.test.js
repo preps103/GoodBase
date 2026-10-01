@@ -1419,6 +1419,34 @@ test("provider creation executes the immutable launch snapshot instead of later 
   assert.equal(ads.capabilities().paidAdvertising.oneOpenMutationPerProviderCampaign, true);
 });
 
+test("workspace emergency pause blocks activation and durably queues provider pauses", () => {
+  const marker = {
+    active: true,
+    requestKey: "goodads:emergency-pause:test",
+    requestedAt: "2026-10-01T00:00:00.000Z",
+    requestedByUserId: "31b71666-f376-4233-be5e-8282a61c0d40",
+  };
+  assert.deepEqual(ads._test.emergencyPauseMarker({ emergencyPause: marker }), marker);
+  assert.equal(ads._test.emergencyPauseMarker({}), null);
+  assert.throws(
+    () => ads._test.validateActivationExecution({ operation_type: "activate", receipt: { emergencyPause: marker } }),
+    (error) => error.code === "GOODADS_EMERGENCY_PAUSE_ACTIVE"
+  );
+
+  const source = fs.readFileSync(
+    path.join(__dirname, "../src/services/goodads-ads.service.js"),
+    "utf8"
+  );
+  const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  assert.match(source, /EMERGENCY_PAUSE_CONFIRMATION = "PAUSE ALL CAMPAIGNS"/);
+  assert.match(source, /pg_advisory_xact_lock/);
+  assert.match(source, /Cancelled by the workspace emergency pause/);
+  assert.match(source, /inFlightActivationsIntercepted/);
+  assert.match(routes, /router\.post\("\/ads\/emergency-pause"/);
+  assert.match(routes, /ads\.emergencyPauseAll/);
+  assert.equal(ads.capabilities().paidAdvertising.emergencyPauseAll, true);
+});
+
 test("paid campaign migration installs verified accounts, durable operations, and worker dispatch", () => {
   const migration = fs.readFileSync(
     path.join(__dirname, "../migrations/20260729_goodads_paid_campaigns.sql"),

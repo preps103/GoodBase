@@ -896,6 +896,16 @@ router.post("/campaigns/:id/launch", publishingLimiter, (req, res) => (
     idempotencyKey: req.get("Idempotency-Key"),
   }))
 ));
+router.post("/ads/emergency-pause", publishingLimiter, (req, res) => handle(
+  res,
+  "ads.emergency-pause",
+  ads.emergencyPauseAll({
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+    confirmation: req.body?.confirmation,
+  })
+));
 router.post("/campaigns/:id/provider-campaigns/:providerCampaignId/activation-approval", (req, res) => (
   handle(res, "campaign.activation-approval", ads.requestActivationApproval({
     campaignId: req.params.id,

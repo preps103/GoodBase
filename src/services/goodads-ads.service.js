@@ -17,6 +17,7 @@ const MAX_LINKEDIN_IMAGE_BYTES = 10 * 1024 * 1024;
 const GOOGLE_LOGO_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const MAX_GOOGLE_LOGO_BYTES = 5 * 1024 * 1024;
 const OAUTH_ENCRYPTION_ENVIRONMENT = "GOODADS_OAUTH_ENCRYPTION_KEY";
+const EMERGENCY_PAUSE_CONFIRMATION = "PAUSE ALL CAMPAIGNS";
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -146,6 +147,24 @@ function requireIdempotencyKey(value) {
   const key = boundedText(value, 180);
   if (!key) throw adsError("Idempotency-Key header is required.", 400, "GOODADS_IDEMPOTENCY_REQUIRED");
   return key;
+}
+
+function emergencyPauseMarker(receipt) {
+  const marker = receipt && typeof receipt === "object" && !Array.isArray(receipt)
+    ? receipt.emergencyPause
+    : null;
+  if (!marker || typeof marker !== "object" || marker.active !== true) return null;
+  return marker;
+}
+
+async function emergencyPauseMarkerForProviderCampaign(providerCampaignId) {
+  const result = await query(
+    `SELECT receipt->'emergencyPause' AS marker
+     FROM goodads_provider_campaigns
+     WHERE id = $1::uuid`,
+    [providerCampaignId]
+  );
+  return emergencyPauseMarker({ emergencyPause: result.rows[0]?.marker });
 }
 
 function canonicalProvider(value) {
@@ -2207,6 +2226,128 @@ async function queueLifecycleOperation({
     );
   }
   return getCampaignState({ campaignId, context });
+}
+
+async function emergencyPauseAll({ context, userId, idempotencyKey, confirmation }) {
+  requireManagement(context);
+  const requestKey = requireIdempotencyKey(idempotencyKey);
+  if (boundedText(confirmation, 80) !== EMERGENCY_PAUSE_CONFIRMATION) {
+    throw adsError(
+      `Type ${EMERGENCY_PAUSE_CONFIRMATION} to confirm the emergency pause.`,
+      400,
+      "GOODADS_EMERGENCY_PAUSE_CONFIRMATION_REQUIRED"
+    );
+  }
+
+  const requestedAt = new Date().toISOString();
+  const marker = {
+    active: true,
+    requestKey,
+    requestedAt,
+    requestedByUserId: userId,
+  };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+      [`goodads:emergency-pause:${context.organizationId}`]
+    );
+    const selected = await client.query(
+      `SELECT id, campaign_id, status
+       FROM goodads_provider_campaigns
+       WHERE organization_id = $1
+         AND provider_campaign_id IS NOT NULL
+         AND status IN ('active','activating','pausing','paused')
+       ORDER BY id
+       FOR UPDATE`,
+      [context.organizationId]
+    );
+    const providerCampaignIds = selected.rows.map((row) => row.id);
+    const campaignIds = [...new Set(
+      selected.rows
+        .filter((row) => row.status !== "paused")
+        .map((row) => row.campaign_id)
+    )];
+    const processing = await client.query(
+      `SELECT COUNT(*)::integer AS count
+       FROM goodads_ad_operations operation
+       WHERE operation.organization_id = $1
+         AND operation.provider_campaign_id = ANY($2::uuid[])
+         AND operation.operation_type = 'activate'
+         AND operation.status = 'processing'`,
+      [context.organizationId, providerCampaignIds]
+    );
+    const cancelled = await client.query(
+      `UPDATE goodads_ad_operations operation
+       SET status = 'failed',
+           last_error = 'Cancelled by the workspace emergency pause.',
+           completed_at = NOW(), locked_by = NULL, locked_until = NULL, updated_at = NOW()
+       WHERE operation.organization_id = $1
+         AND operation.provider_campaign_id = ANY($2::uuid[])
+         AND operation.operation_type = 'activate'
+         AND operation.status IN ('queued','retrying')
+       RETURNING operation.id`,
+      [context.organizationId, providerCampaignIds]
+    );
+    await client.query(
+      `UPDATE goodads_provider_campaigns
+       SET receipt = jsonb_set(COALESCE(receipt, '{}'::jsonb), '{emergencyPause}', $2::jsonb, true),
+           status = CASE WHEN status IN ('active','activating') THEN 'pausing' ELSE status END,
+           updated_at = NOW()
+       WHERE organization_id = $1 AND id = ANY($3::uuid[])`,
+      [context.organizationId, JSON.stringify(marker), providerCampaignIds]
+    );
+    const queued = await client.query(
+      `INSERT INTO goodads_ad_operations (
+         organization_id, provider_campaign_id, requested_by_user_id,
+         operation_type, idempotency_key, payload
+       )
+       SELECT provider_campaign.organization_id, provider_campaign.id, $3::uuid,
+         'pause', $4 || ':' || provider_campaign.id::text || ':emergency-pause',
+         $5::jsonb
+       FROM goodads_provider_campaigns provider_campaign
+       WHERE provider_campaign.organization_id = $1
+         AND provider_campaign.id = ANY($2::uuid[])
+         AND provider_campaign.status = 'pausing'
+       ON CONFLICT DO NOTHING
+       RETURNING provider_campaign_id`,
+      [context.organizationId, providerCampaignIds, userId, requestKey, JSON.stringify({ emergencyPause: marker })]
+    );
+    if (campaignIds.length) {
+      await client.query(
+        `UPDATE goodads_resources
+         SET status = 'paused',
+             data = data || jsonb_build_object(
+               'status', 'paused',
+               'emergencyPausedAt', $3::text,
+               'emergencyPausedByUserId', $4::text,
+               'updatedAt', NOW()::text
+             ),
+             version = version + 1,
+             updated_at = NOW()
+         WHERE organization_id = $1
+           AND id = ANY($2::uuid[])
+           AND resource_type = 'campaigns'
+           AND archived_at IS NULL`,
+        [context.organizationId, campaignIds, requestedAt, userId]
+      );
+    }
+    await client.query("COMMIT");
+    return {
+      requestedAt,
+      matchedProviderCampaigns: providerCampaignIds.length,
+      providerPausesQueued: queued.rows.length,
+      queuedActivationsCancelled: cancelled.rows.length,
+      inFlightActivationsIntercepted: Number(processing.rows[0]?.count || 0),
+      affectedCampaigns: campaignIds.length,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function requestActivationApproval({
@@ -4923,6 +5064,13 @@ function validateCreateExecution(row) {
 
 function validateActivationExecution(row) {
   if (row.operation_type !== "activate") return;
+  if (emergencyPauseMarker(row.receipt)) {
+    throw adsError(
+      "Workspace emergency pause is active for this provider campaign.",
+      409,
+      "GOODADS_EMERGENCY_PAUSE_ACTIVE"
+    );
+  }
   const availability = providerAvailability(row.provider);
   if (!availability.available) {
     throw adsError(
@@ -5003,6 +5151,24 @@ async function executeOperation(row) {
   }
   if (executionRow.operation_type === "activate") {
     const receipt = await adapter.updateStatus(executionRow, accessToken, adapter.statuses.activate);
+    const emergencyPause = await emergencyPauseMarkerForProviderCampaign(executionRow.provider_campaign_record_id);
+    if (emergencyPause) {
+      const appliedAt = new Date().toISOString();
+      const pausedReceipt = await adapter.updateStatus({
+        ...executionRow,
+        receipt: {
+          ...(receipt || executionRow.receipt || {}),
+          emergencyPause: { ...emergencyPause, appliedAt },
+        },
+      }, accessToken, adapter.statuses.pause);
+      return {
+        receipt: {
+          ...(pausedReceipt || {}),
+          emergencyPause: { ...emergencyPause, appliedAt },
+        },
+        status: "paused",
+      };
+    }
     return { receipt, status: "active" };
   }
   if (executionRow.operation_type === "archive") {
@@ -5046,7 +5212,10 @@ async function processOperation(row) {
     return { id: row.operation_id, status: "completed" };
   } catch (error) {
     const attempts = Number(row.attempts || 1);
-    const retry = error.retryable === true && attempts < Number(row.max_attempts || 5);
+    const emergencyPause = row.operation_type === "activate"
+      ? await emergencyPauseMarkerForProviderCampaign(row.provider_campaign_record_id)
+      : null;
+    const retry = !emergencyPause && error.retryable === true && attempts < Number(row.max_attempts || 5);
     const nextStatus = retry ? "retrying" : attempts >= Number(row.max_attempts || 5) ? "dead_letter" : "failed";
     const retrySeconds = Math.min(3600, 30 * (2 ** Math.max(0, attempts - 1)));
     await query(
@@ -5062,9 +5231,36 @@ async function processOperation(row) {
       `UPDATE goodads_provider_campaigns
        SET status = $2, last_error = $3, updated_at = NOW()
        WHERE id = $1::uuid`,
-      [row.provider_campaign_record_id, retry ? row.status : "failed", boundedText(error.message, 2000)]
+      [
+        row.provider_campaign_record_id,
+        emergencyPause ? "pausing" : retry ? row.status : "failed",
+        boundedText(error.message, 2000),
+      ]
     );
-    return { id: row.operation_id, status: nextStatus, error: boundedText(error.message, 2000) };
+    if (emergencyPause) {
+      await query(
+        `INSERT INTO goodads_ad_operations (
+           organization_id, provider_campaign_id, requested_by_user_id,
+           operation_type, idempotency_key, payload
+         ) VALUES ($1, $2::uuid, $3::uuid, 'pause', $4, $5::jsonb)
+         ON CONFLICT DO NOTHING`,
+        [
+          row.organization_id,
+          row.provider_campaign_record_id,
+          UUID_PATTERN.test(String(emergencyPause.requestedByUserId || ""))
+            ? emergencyPause.requestedByUserId
+            : null,
+          `${boundedText(emergencyPause.requestKey, 180)}:${row.provider_campaign_record_id}:emergency-pause`,
+          JSON.stringify({ emergencyPause }),
+        ]
+      );
+    }
+    return {
+      id: row.operation_id,
+      status: nextStatus,
+      error: boundedText(error.message, 2000),
+      emergencyPauseQueued: Boolean(emergencyPause),
+    };
   }
 }
 
@@ -5093,7 +5289,7 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
   const results = [];
   for (const operation of claimed.rows) {
     const selected = await query(
-      `SELECT operation.id AS operation_id, operation.operation_type, operation.attempts,
+      `SELECT operation.id AS operation_id, operation.organization_id, operation.operation_type, operation.attempts,
          operation.max_attempts, operation.payload AS operation_payload,
          provider_campaign.id AS provider_campaign_record_id, provider_campaign.campaign_id,
          provider_campaign.provider_campaign_id, provider_campaign.provider_resource_name,
@@ -5186,6 +5382,7 @@ function capabilities() {
       executionTimeRevalidation: true,
       objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
+      emergencyPauseAll: true,
       maximumAccountsPerLaunch: 10,
     },
   };
@@ -5202,6 +5399,7 @@ module.exports = {
   preflightCampaign,
   launchCampaign,
   queueLifecycleOperation,
+  emergencyPauseAll,
   requestActivationApproval,
   processDueOperations,
   retryOperation,
@@ -5254,6 +5452,7 @@ module.exports = {
     validateProviderObjective,
     validateCreateExecution,
     validateActivationExecution,
+    emergencyPauseMarker,
     campaignPreflightReport,
     campaignScheduleBounds,
   },
