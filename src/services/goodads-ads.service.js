@@ -34,6 +34,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "search",
     adapterType: "native",
+    supportedObjectives: ["traffic"],
   },
   meta: {
     name: "Meta Ads",
@@ -43,6 +44,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "link_ad",
     adapterType: "native",
+    supportedObjectives: ["traffic"],
   },
   youtube: {
     name: "YouTube Ads",
@@ -52,6 +54,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "demand_gen_video",
     adapterType: "native",
+    supportedObjectives: ["traffic"],
   },
   tiktok: {
     name: "TikTok Ads",
@@ -61,6 +64,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "video",
     adapterType: "native",
+    supportedObjectives: ["traffic"],
   },
   linkedin: {
     name: "LinkedIn Ads",
@@ -72,6 +76,7 @@ const PROVIDERS = Object.freeze({
     deliveryAdapter: "sponsored_content",
     adapterType: "native",
     activationSupported: false,
+    supportedObjectives: ["traffic"],
   },
   x: {
     name: "X Ads",
@@ -81,6 +86,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "promoted_post",
     adapterType: "native",
+    supportedObjectives: ["traffic"],
   },
   pinterest: {
     name: "Pinterest Ads",
@@ -91,6 +97,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "promoted_pin",
     adapterType: "native",
+    supportedObjectives: ["traffic", "awareness"],
   },
   snapchat: {
     name: "Snapchat Ads",
@@ -100,6 +107,7 @@ const PROVIDERS = Object.freeze({
     safePausedCreation: true,
     deliveryAdapter: "snap_ad",
     adapterType: "native",
+    supportedObjectives: ["traffic", "awareness"],
   },
 });
 
@@ -200,6 +208,7 @@ function providerAvailability(provider) {
     safePausedCreation: definition.safePausedCreation && adapterConfigured,
     activationSupported: definition.activationSupported !== false && adapterConfigured,
     deliveryAdapter: definition.deliveryAdapter,
+    supportedObjectives: [...definition.supportedObjectives],
   };
 }
 
@@ -1379,10 +1388,30 @@ function campaignScheduleBounds(data = {}, timezone) {
   };
 }
 
+function validateProviderObjective(provider, value) {
+  const definition = PROVIDERS[provider];
+  const objective = boundedText(value || "traffic", 40).toLowerCase();
+  if (definition.supportedObjectives.includes(objective)) return objective;
+  const supported = definition.supportedObjectives
+    .map((item) => item === "traffic" ? "website traffic" : item)
+    .join(" or ");
+  const measurementRequired = ["conversions", "sales", "leads"].includes(objective);
+  throw adsError(
+    measurementRequired
+      ? `${definition.name} ${objective} setup requires a verified provider conversion source and objective-specific delivery adapter. Use ${supported} until that measurement contract is connected.`
+      : `${definition.name} one-click delivery currently supports ${supported}.`,
+    409,
+    measurementRequired ? "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED" : "GOODADS_PROVIDER_OBJECTIVE_UNSUPPORTED"
+  );
+}
+
 function validateCampaignForAccount(campaign, account) {
   const data = campaign.data || {};
   if (campaign.status !== "ready") {
     throw adsError("Mark this campaign ready before creating it on an ad network.", 409, "GOODADS_CAMPAIGN_NOT_READY");
+  }
+  if (account.status && account.status !== "verified") {
+    throw adsError("Refresh and verify this ad account before provider creation.", 409, "GOODADS_AD_ACCOUNT_NOT_VERIFIED");
   }
   const dailyBudget = Number(data.dailyBudget);
   const maximum = Math.max(Number(process.env.GOODADS_MAX_DAILY_BUDGET || 10000), 1);
@@ -1395,6 +1424,7 @@ function validateCampaignForAccount(campaign, account) {
   if (!matchesProvider) {
     throw adsError(`${definition.name} is not selected on this campaign.`, 409, "GOODADS_AD_ACCOUNT_NOT_SELECTED");
   }
+  validateProviderObjective(account.provider, data.objective);
   if (!data.startDate || !data.endDate || data.endDate < data.startDate) {
     throw adsError("Campaign dates are invalid.", 409, "GOODADS_CAMPAIGN_DATES_INVALID");
   }
@@ -1482,13 +1512,6 @@ function validateCampaignForAccount(campaign, account) {
         "GOODADS_TIKTOK_BUDGET_MINIMUM"
       );
     }
-    if (String(data.objective || "traffic").toLowerCase() !== "traffic") {
-      throw adsError(
-        "TikTok one-click setup currently supports website-traffic campaigns. Conversion, sales, and lead objectives require a verified TikTok Pixel or lead form.",
-        409,
-        "GOODADS_TIKTOK_EVENT_SOURCE_REQUIRED"
-      );
-    }
     if (!isManagedGoodOsHttpsUrl(providerVideoUrl)) {
       throw adsError(
         "TikTok creative video must be stored on a managed GoodOS HTTPS address.",
@@ -1507,13 +1530,6 @@ function validateCampaignForAccount(campaign, account) {
   }
   if (account.provider === "youtube") {
     googlePoliticalAdvertisingStatus(data.containsEuPoliticalAdvertising);
-    if (String(data.objective || "traffic").toLowerCase() !== "traffic") {
-      throw adsError(
-        "YouTube one-click setup currently supports website-traffic campaigns. Conversion objectives require a verified Google conversion action.",
-        409,
-        "GOODADS_YOUTUBE_CONVERSION_ACTION_REQUIRED"
-      );
-    }
     if (!youtubeVideoId(providerVideoUrl)) {
       throw adsError(
         "YouTube delivery requires a valid YouTube watch, Shorts, live, embed, or youtu.be video URL.",
@@ -1561,13 +1577,6 @@ function validateCampaignForAccount(campaign, account) {
         "GOODADS_LINKEDIN_ORGANIZATION_REQUIRED"
       );
     }
-    if (String(data.objective || "traffic").toLowerCase() === "leads") {
-      throw adsError(
-        "LinkedIn lead-generation campaigns require a verified LinkedIn lead form before setup.",
-        409,
-        "GOODADS_LINKEDIN_LEAD_FORM_REQUIRED"
-      );
-    }
     if (!boundedText(creative.primaryText, 600) || !boundedText(creative.headline, 200)) {
       throw adsError(
         "LinkedIn delivery requires primary text and a headline.",
@@ -1582,14 +1591,6 @@ function validateCampaignForAccount(campaign, account) {
         "Pinterest delivery requires an ad account with owner, admin, or campaign-manager access.",
         409,
         "GOODADS_PINTEREST_CAMPAIGN_ACCESS_REQUIRED"
-      );
-    }
-    const objective = String(data.objective || "traffic").toLowerCase();
-    if (!["traffic", "awareness", "engagement"].includes(objective)) {
-      throw adsError(
-        "Pinterest one-click setup currently supports traffic, awareness, and engagement campaigns. Sales, conversion, and lead campaigns require a verified Pinterest Tag or lead form.",
-        409,
-        "GOODADS_PINTEREST_EVENT_SOURCE_REQUIRED"
       );
     }
     const headline = String(creative.headline || "").trim();
@@ -1629,13 +1630,6 @@ function validateCampaignForAccount(campaign, account) {
         "GOODADS_X_BUDGET_MINIMUM"
       );
     }
-    if (String(data.objective || "traffic").toLowerCase() !== "traffic") {
-      throw adsError(
-        "X Ads one-click setup currently supports website-traffic campaigns. Conversion objectives require a verified X website tag and event source.",
-        409,
-        "GOODADS_X_EVENT_SOURCE_REQUIRED"
-      );
-    }
     const primaryText = String(creative.primaryText || "").trim();
     const promotedText = `${primaryText}\n${String(creative.destinationUrl || "").trim()}`;
     if (!primaryText || promotedText.length > 280) {
@@ -1659,14 +1653,6 @@ function validateCampaignForAccount(campaign, account) {
         "Snapchat requires a daily budget of at least 5 account-currency units.",
         409,
         "GOODADS_SNAPCHAT_BUDGET_MINIMUM"
-      );
-    }
-    const objective = String(data.objective || "traffic").toLowerCase();
-    if (!["traffic", "awareness", "engagement"].includes(objective)) {
-      throw adsError(
-        "Snapchat one-click setup currently supports traffic, awareness, and engagement campaigns. Sales, conversion, and lead campaigns require a verified Pixel or lead form.",
-        409,
-        "GOODADS_SNAPCHAT_EVENT_SOURCE_REQUIRED"
       );
     }
     if (!boundedText(creative.headline, 34)) {
@@ -4858,15 +4844,44 @@ function bindCreateOperationSnapshot(row) {
   }
   return {
     ...row,
+    campaign_id: snapshot.id,
+    campaign_version: Number(snapshot.version),
     campaign_name: boundedText(snapshot.name, 240),
+    campaign_status: boundedText(snapshot.status, 40),
     campaign_data: snapshot.data && typeof snapshot.data === "object" && !Array.isArray(snapshot.data)
       ? snapshot.data
       : {},
   };
 }
 
+function validateCreateExecution(row) {
+  if (row.operation_type !== "create") return;
+  const availability = providerAvailability(row.provider);
+  if (!availability.available) {
+    throw adsError(
+      `${availability.name} is no longer fully configured in GoodBase.`,
+      503,
+      "GOODADS_AD_PROVIDER_NOT_CONFIGURED"
+    );
+  }
+  validateCampaignForAccount({
+    id: row.campaign_id,
+    version: row.campaign_version,
+    name: row.campaign_name,
+    status: row.campaign_status,
+    data: row.campaign_data,
+  }, {
+    provider: row.provider,
+    status: row.account_status,
+    currency: row.account_currency,
+    timezone: row.account_timezone,
+    metadata: row.account_metadata || {},
+  });
+}
+
 async function executeOperation(row) {
   const executionRow = bindCreateOperationSnapshot(row);
+  validateCreateExecution(executionRow);
   const adapter = nativeAdapter(executionRow.provider);
   const accessToken = executionRow.provider === "x"
     ? await social.oauth1CredentialsForConnection(executionRow)
@@ -4973,11 +4988,11 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
     const selected = await query(
       `SELECT operation.id AS operation_id, operation.operation_type, operation.attempts,
          operation.max_attempts, operation.payload AS operation_payload,
-         provider_campaign.id AS provider_campaign_record_id,
+         provider_campaign.id AS provider_campaign_record_id, provider_campaign.campaign_id,
          provider_campaign.provider_campaign_id, provider_campaign.provider_resource_name,
          provider_campaign.provider_budget_id, provider_campaign.status,
          provider_campaign.receipt, provider_campaign.provider, provider_campaign.snapshot_hash,
-         account.provider_account_id, account.currency AS account_currency,
+         account.provider_account_id, account.status AS account_status, account.currency AS account_currency,
          account.timezone AS account_timezone, account.metadata AS account_metadata,
          connection.*,
          campaign.name AS campaign_name, campaign.data AS campaign_data
@@ -5054,6 +5069,8 @@ function capabilities() {
       durableOperations: true,
       boundedRetries: true,
       immutableLaunchSnapshots: true,
+      executionTimeRevalidation: true,
+      objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
       maximumAccountsPerLaunch: 10,
     },
@@ -5119,6 +5136,8 @@ module.exports = {
     bindCreateOperationSnapshot,
     snapshotHash,
     validateCampaignForAccount,
+    validateProviderObjective,
+    validateCreateExecution,
     campaignPreflightReport,
     campaignScheduleBounds,
   },

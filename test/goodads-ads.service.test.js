@@ -68,8 +68,23 @@ test("all major paid platforms have explicit native delivery adapters", () => {
     const availability = ads._test.providerAvailability(provider);
     assert.equal(availability.adapterConfigured, true);
     assert.equal(availability.adapterType, "native");
+    assert.equal(availability.supportedObjectives.includes("traffic"), true);
     assert.equal(typeof ads._test.nativeAdapter(provider).create, "function");
   }
+});
+
+test("provider objective contracts fail closed before an unsupported bidding path can be queued", () => {
+  assert.equal(ads._test.validateProviderObjective("meta", "traffic"), "traffic");
+  assert.equal(ads._test.validateProviderObjective("pinterest", "awareness"), "awareness");
+  assert.equal(ads._test.validateProviderObjective("snapchat", "awareness"), "awareness");
+  assert.throws(
+    () => ads._test.validateProviderObjective("meta", "conversions"),
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateProviderObjective("google", "awareness"),
+    (error) => error.code === "GOODADS_PROVIDER_OBJECTIVE_UNSUPPORTED"
+  );
 });
 
 test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
@@ -275,6 +290,20 @@ test("Meta delivery enforces exact Facebook and Instagram placement intent", () 
     ...campaign,
     data: { ...campaign.data, platforms: ["facebook"] },
   }, account));
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, platforms: ["facebook"], objective: "conversions" },
+    }, account),
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
+  );
+  assert.throws(
+    () => ads._test.validateCampaignForAccount({
+      ...campaign,
+      data: { ...campaign.data, platforms: ["facebook"] },
+    }, { ...account, status: "disabled" }),
+    (error) => error.code === "GOODADS_AD_ACCOUNT_NOT_VERIFIED"
+  );
 });
 
 test("campaign preflight proves read-only paused exposure for the exact saved version", () => {
@@ -570,7 +599,7 @@ test("YouTube setup fails closed on compliance, objective, asset, and copy gaps"
       ...campaign,
       data: { ...campaign.data, objective: "conversions" },
     }, account),
-    (error) => error.code === "GOODADS_YOUTUBE_CONVERSION_ACTION_REQUIRED"
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount({
@@ -1081,7 +1110,7 @@ test("Pinterest setup fails closed on missing campaign access, event sources, an
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
-    (error) => error.code === "GOODADS_PINTEREST_EVENT_SOURCE_REQUIRED"
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount({
@@ -1128,7 +1157,7 @@ test("Snapchat setup fails closed on unsafe budgets, objectives, profiles, and m
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
-    (error) => error.code === "GOODADS_SNAPCHAT_EVENT_SOURCE_REQUIRED"
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount(campaign, { ...account, metadata: {} }),
@@ -1178,7 +1207,7 @@ test("TikTok setup fails closed on unsafe budgets, objectives, identities, media
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
-    (error) => error.code === "GOODADS_TIKTOK_EVENT_SOURCE_REQUIRED"
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount(campaign, { ...account, metadata: {} }),
@@ -1229,7 +1258,7 @@ test("X Ads setup fails closed on objectives, funding prerequisites, and oversiz
   assert.doesNotThrow(() => ads._test.validateCampaignForAccount(campaign, account));
   assert.throws(
     () => ads._test.validateCampaignForAccount({ ...campaign, data: { ...campaign.data, objective: "sales" } }, account),
-    (error) => error.code === "GOODADS_X_EVENT_SOURCE_REQUIRED"
+    (error) => error.code === "GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED"
   );
   assert.throws(
     () => ads._test.validateCampaignForAccount(campaign, { ...account, metadata: {} }),
@@ -1247,9 +1276,7 @@ test("X Ads setup fails closed on objectives, funding prerequisites, and oversiz
   );
 });
 
-test("paid campaign adapters map objectives and bind approvals to immutable snapshots", () => {
-  assert.equal(ads._test.metaObjective("leads"), "OUTCOME_LEADS");
-  assert.equal(ads._test.metaObjective("sales"), "OUTCOME_SALES");
+test("paid campaign adapters bind approvals to immutable snapshots", () => {
   const snapshot = {
     id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
     version: 3,
@@ -1279,6 +1306,8 @@ test("provider creation executes the immutable launch snapshot instead of later 
   });
 
   assert.equal(bound.campaign_name, "Approved launch");
+  assert.equal(bound.campaign_status, "ready");
+  assert.equal(bound.campaign_version, 3);
   assert.deepEqual(bound.campaign_data, snapshot.data);
   assert.throws(
     () => ads._test.bindCreateOperationSnapshot({
@@ -1289,6 +1318,8 @@ test("provider creation executes the immutable launch snapshot instead of later 
     /immutable campaign snapshot/
   );
   assert.equal(ads.capabilities().paidAdvertising.immutableLaunchSnapshots, true);
+  assert.equal(ads.capabilities().paidAdvertising.executionTimeRevalidation, true);
+  assert.equal(ads.capabilities().paidAdvertising.objectiveContracts, true);
   assert.equal(ads.capabilities().paidAdvertising.oneOpenMutationPerProviderCampaign, true);
 });
 
@@ -1344,6 +1375,9 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /dead_letter/);
   assert.match(source, /GOODADS_ADAPTER_NOT_INSTALLED/);
   assert.match(source, /GOODADS_AD_ACTIVATION_NOT_SUPPORTED/);
+  assert.match(source, /account\.status AS account_status/);
+  assert.match(source, /validateCreateExecution\(executionRow\);[\s\S]{0,260}social\.accessTokenForConnection/);
+  assert.match(source, /GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED/);
   assert.match(source, /ON CONFLICT DO NOTHING/);
   assert.match(source, /active_operation\.operation_type IN \('create','pause','activate','archive'\)/);
   assert.match(source, /intendedStatus: "DRAFT"/);
