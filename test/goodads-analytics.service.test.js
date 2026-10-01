@@ -341,6 +341,10 @@ test("analytics migration persists provider snapshots and automatic sync", () =>
     "utf8"
   );
   const jobs = fs.readFileSync(path.join(__dirname, "../src/services/job.service.js"), "utf8");
+  const migrationRunner = fs.readFileSync(
+    path.join(__dirname, "../scripts/apply-goodads-analytics-migration.js"),
+    "utf8"
+  );
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../package.json"), "utf8"));
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_analytics_snapshots/);
   assert.match(migration, /spend_micros BIGINT/);
@@ -353,6 +357,10 @@ test("analytics migration persists provider snapshots and automatic sync", () =>
   assert.match(routes, /\/campaigns\/:id\/attribution/);
   assert.match(attributionMigration, /uq_goodads_attribution_event_id/);
   assert.match(attributionMigration, /idx_goodads_attribution_reporting/);
+  assert.match(migrationRunner, /function coreReady/);
+  assert.match(migrationRunner, /function attributionReady/);
+  assert.match(migrationRunner, /applyOwnerMigration/);
+  assert.match(migrationRunner, /runuser/);
   assert.match(jobs, /case "goodads\.analytics\.sync"/);
   assert.match(packageJson.scripts.build, /apply-goodads-analytics-migration/);
 });
