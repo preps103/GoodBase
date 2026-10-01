@@ -65,6 +65,12 @@ const publicLinkClickLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const publicAttributionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 const chatMessageLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 240,
@@ -186,6 +192,37 @@ router.post("/public/engagement-webhooks/:provider", paymentWebhookLimiter, (req
     rawBody: req.rawBody,
     headers: req.headers,
   }))
+));
+router.get("/public/attribution/:token/tracker.js", publicAttributionLimiter, (req, res) => {
+  try {
+    const script = analytics.publicAttributionScript(req.params.token);
+    return res
+      .set("Cache-Control", "public, max-age=300")
+      .set("X-Content-Type-Options", "nosniff")
+      .type("application/javascript")
+      .send(script);
+  } catch (requestError) {
+    return res.status(requestError.statusCode || 404).type("text/plain").send("Attribution tracker unavailable.");
+  }
+});
+router.get("/public/attribution/:token/pixel.gif", publicAttributionLimiter, (req, res) => (
+  analytics.recordAttributionEvent({
+    token: req.params.token,
+    event: req.query.event,
+    eventId: req.query.event_id,
+    valueMinor: req.query.value_minor,
+    currency: req.query.currency,
+    pageOrigin: req.query.page_origin,
+    referrer: req.get("Referer"),
+    userAgent: req.get("User-Agent"),
+  }).then(() => res
+    .set("Cache-Control", "no-store")
+    .set("Content-Type", "image/gif")
+    .send(Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=", "base64")))
+    .catch((requestError) => {
+      console.error("GoodAds attribution collection failed:", requestError.message);
+      return res.status(requestError.statusCode || 400).end();
+    })
 ));
 router.get("/public/payment-offers/:slug", publicFormReadLimiter, (req, res) => (
   handle(res, "payment-offer.public", payments.getPublicOffer(req.params.slug))
@@ -822,6 +859,14 @@ router.get("/analytics/overview", (req, res) => handle(res, "analytics.overview"
   from: req.query.from,
   to: req.query.to,
 })));
+router.get("/campaigns/:id/attribution", (req, res) => handle(
+  res,
+  "analytics.attribution-installation",
+  analytics.attributionInstallation({
+    campaignId: req.params.id,
+    context: req.tenantContext,
+  })
+));
 router.post("/analytics/provider-sync", publishingLimiter, (req, res) => handle(
   res,
   "analytics.provider-sync",
