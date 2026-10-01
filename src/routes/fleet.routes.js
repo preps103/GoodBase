@@ -9,6 +9,7 @@ const notificationService = require("../services/notification.service");
 const teamsService = require("../services/teams.service");
 const { encryptValue } = require("../services/secret.service");
 const fleetPricing = require("../services/fleet-pricing.service");
+const fleetReporting = require("../services/fleet-reporting.service");
 
 const router = express.Router();
 const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
@@ -283,6 +284,98 @@ function absoluteTimestamp(value, field) {
     throw error;
   }
   return parsed.toISOString();
+}
+
+function performanceReportRange(queryParams = {}) {
+  const today = new Date();
+  const defaultEnd = new Date(Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate() + 1
+  ));
+  const parseDateOnly = (value, field) => {
+    const normalized = text(value, 30);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      const error = new Error(`${field} must use YYYY-MM-DD.`);
+      error.statusCode = 400;
+      error.code = "INVALID_REPORT_RANGE";
+      throw error;
+    }
+    const parsed = new Date(`${normalized}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) {
+      const error = new Error(`${field} is invalid.`);
+      error.statusCode = 400;
+      error.code = "INVALID_REPORT_RANGE";
+      throw error;
+    }
+    return parsed;
+  };
+  const toInclusive = queryParams.to ? parseDateOnly(queryParams.to, "to") : new Date(defaultEnd.getTime() - 86_400_000);
+  const toExclusive = new Date(toInclusive.getTime() + 86_400_000);
+  const from = queryParams.from
+    ? parseDateOnly(queryParams.from, "from")
+    : new Date(toExclusive.getTime() - 30 * 86_400_000);
+  const reportDays = Math.ceil((toExclusive.getTime() - from.getTime()) / 86_400_000);
+  if (toExclusive <= from || reportDays > 366) {
+    const error = new Error("Reporting periods must span between 1 and 366 days.");
+    error.statusCode = 400;
+    error.code = "INVALID_REPORT_RANGE";
+    throw error;
+  }
+  return {
+    from,
+    toExclusive,
+    branchId: text(queryParams.branchId, 80),
+    category: text(queryParams.category, 80)
+  };
+}
+
+async function loadPerformanceReport(organizationId, filters) {
+  const [vehicles, bookings, payments, workspace] = await Promise.all([
+    query(
+      `SELECT id,make,model,model_year,status,assigned_branch_id,daily_rate,payload
+         FROM fleet_vehicles
+        WHERE organization_id=$1 AND archived_at IS NULL`,
+      [organizationId]
+    ),
+    query(
+      `SELECT id,reservation_number,customer_id,vehicle_id,pickup_at,return_at,
+              pickup_branch_id,return_branch_id,status,payment_status,total_amount,
+              paid_amount,payload,created_at
+         FROM fleet_bookings
+        WHERE organization_id=$1
+          AND archived_at IS NULL
+          AND pickup_at<$3
+          AND return_at>=$2`,
+      [organizationId, filters.from.toISOString(), filters.toExclusive.toISOString()]
+    ),
+    query(
+      `SELECT operation.id,operation.booking_id,operation.operation_type,
+              operation.amount,operation.status,operation.created_at,
+              booking.pickup_branch_id,booking.return_branch_id,booking.vehicle_id,
+              booking.payload AS booking_payload
+         FROM fleet_payment_operations operation
+         LEFT JOIN fleet_bookings booking
+           ON booking.organization_id=operation.organization_id
+          AND booking.id=operation.booking_id
+        WHERE operation.organization_id=$1
+          AND operation.created_at>=$2
+          AND operation.created_at<$3`,
+      [organizationId, filters.from.toISOString(), filters.toExclusive.toISOString()]
+    ),
+    query(`SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`, [organizationId])
+  ]);
+  const state = workspace.rows[0]?.state_json || {};
+  return {
+    report: fleetReporting.buildPerformanceReport({
+      vehicles: vehicles.rows,
+      bookings: bookings.rows,
+      payments: payments.rows,
+      state,
+      ...filters
+    }),
+    state
+  };
 }
 
 function rentalDays(pickupAt, returnAt) {
@@ -953,6 +1046,35 @@ router.post("/pricing/preview", async (request, response, next) => {
     return response.json({ success: true, data: { ...pricing, available: true } });
   } catch (error) { next(error); }
   finally { client.release(); }
+});
+
+router.get("/reports/performance", async (request, response, next) => {
+  try {
+    const filters = performanceReportRange(request.query);
+    const { report } = await loadPerformanceReport(organization(request), filters);
+    return response.json({ success: true, data: report });
+  } catch (error) { next(error); }
+});
+
+router.get("/reports/performance.csv", async (request, response, next) => {
+  try {
+    const filters = performanceReportRange(request.query);
+    const { report, state } = await loadPerformanceReport(organization(request), filters);
+    const restricted = state?.ownerSettings?.security?.restrictExportsToOwners === true;
+    if (restricted && !OWNER_ROLES.has(goodFleetAccessRole(request))) {
+      return fail(
+        response,
+        403,
+        "REPORT_EXPORT_ACCESS_REQUIRED",
+        "This business restricts report exports to owners."
+      );
+    }
+    const filename = `goodfleet-performance-${report.period.from.slice(0, 10)}-${new Date(report.period.toExclusive).toISOString().slice(0, 10)}.csv`;
+    response.setHeader("Content-Type", "text/csv; charset=utf-8");
+    response.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    response.setHeader("Cache-Control", "private, no-store");
+    return response.send(fleetReporting.performanceCsv(report));
+  } catch (error) { next(error); }
 });
 
 router.post("/staff/invitations", requireOwner, async (request, response, next) => {
