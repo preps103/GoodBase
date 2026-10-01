@@ -21,6 +21,27 @@ test("GoodAds analytics accepts bounded provider reporting periods", () => {
   );
 });
 
+test("first-party attribution tokens are signed, origin-bound, and event allowlisted", () => {
+  const key = "test-attribution-signing-key-with-at-least-32-characters";
+  const payload = {
+    campaignId: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    organizationId: "org_goodos",
+  };
+  const token = analytics._test.encodeAttributionToken(payload, key);
+  assert.deepEqual(analytics._test.decodeAttributionToken(token, key), payload);
+  assert.throws(
+    () => analytics._test.decodeAttributionToken(`${token.slice(0, -1)}x`, key),
+    /invalid/
+  );
+  assert.equal(analytics._test.normalizedPageOrigin("https://goodos.app/checkout?secret=no"), "https://goodos.app");
+  assert.equal(analytics._test.normalizedAttributionEvent("purchase"), "purchase");
+  assert.throws(() => analytics._test.normalizedAttributionEvent("arbitrary_event"), /not supported/);
+  const script = analytics._test.attributionScript(token);
+  assert.match(script, /globalThis\.goodAdsTrack=send/);
+  assert.match(script, /send\("page_view"\)/);
+  assert.match(script, /page_origin/);
+});
+
 test("Meta conversion parsing counts only explicit result actions", () => {
   const actions = [
     { action_type: "lead", value: "3" },
@@ -75,6 +96,8 @@ test("analytics capabilities include native X Ads reporting", () => {
   );
   assert.equal(analytics.capabilities().providerAnalytics.crossChannelBudgetRecommendations, true);
   assert.equal(analytics.capabilities().providerAnalytics.budgetRecommendationsAdvisoryOnly, true);
+  assert.equal(analytics.capabilities().providerAnalytics.firstPartyWebsitePixel, true);
+  assert.equal(analytics.capabilities().providerAnalytics.attributionReplayDeduplication, true);
 });
 
 test("cross-channel budget recommendations preserve the total and never execute automatically", () => {
@@ -313,6 +336,10 @@ test("analytics migration persists provider snapshots and automatic sync", () =>
     "utf8"
   );
   const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  const attributionMigration = fs.readFileSync(
+    path.join(__dirname, "../migrations/20261001_goodads_first_party_attribution.sql"),
+    "utf8"
+  );
   const jobs = fs.readFileSync(path.join(__dirname, "../src/services/job.service.js"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../package.json"), "utf8"));
   assert.match(migration, /CREATE TABLE IF NOT EXISTS goodads_analytics_snapshots/);
@@ -321,6 +348,11 @@ test("analytics migration persists provider snapshots and automatic sync", () =>
   assert.match(migration, /'goodads\.analytics\.sync'/);
   assert.match(routes, /\/analytics\/overview/);
   assert.match(routes, /\/analytics\/provider-sync/);
+  assert.match(routes, /\/public\/attribution\/:token\/tracker\.js/);
+  assert.match(routes, /\/public\/attribution\/:token\/pixel\.gif/);
+  assert.match(routes, /\/campaigns\/:id\/attribution/);
+  assert.match(attributionMigration, /uq_goodads_attribution_event_id/);
+  assert.match(attributionMigration, /idx_goodads_attribution_reporting/);
   assert.match(jobs, /case "goodads\.analytics\.sync"/);
   assert.match(packageJson.scripts.build, /apply-goodads-analytics-migration/);
 });
@@ -335,5 +367,7 @@ test("analytics reports verified provider values and keeps revenue separated by 
   assert.match(source, /GROUP BY currency/);
   assert.match(source, /resource_type = 'leads'/);
   assert.match(source, /link_hubs\.clicked/);
+  assert.match(source, /attribution\.page_view/);
+  assert.match(source, /websiteConversions/);
   assert.doesNotMatch(source, /sample/i);
 });

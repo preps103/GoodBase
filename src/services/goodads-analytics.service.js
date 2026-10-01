@@ -1,9 +1,15 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const { query } = require("../config/database");
 const social = require("./goodads-social.service");
 
 const MANAGEMENT_ROLES = new Set(["owner", "admin", "manager"]);
+const ATTRIBUTION_TOKEN_VERSION = "v1";
+const ATTRIBUTION_EVENTS = new Set(["page_view", "lead", "purchase", "complete_registration", "subscribe"]);
+const ATTRIBUTION_CONVERSIONS = new Set(["lead", "purchase", "complete_registration", "subscribe"]);
+const EVENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{7,119}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function analyticsError(message, statusCode = 400, code = "GOODADS_ANALYTICS_ERROR", retryable = false) {
   const error = new Error(message);
@@ -26,6 +32,205 @@ function requireManagement(context) {
       "GOODADS_ANALYTICS_MANAGEMENT_REQUIRED"
     );
   }
+}
+
+function attributionSigningKey(explicitKey) {
+  const key = boundedText(
+    explicitKey || process.env.GOODADS_ATTRIBUTION_SIGNING_KEY || process.env.JWT_SECRET,
+    10000
+  );
+  if (key.length < 32) {
+    throw analyticsError(
+      "First-party attribution signing is not configured.",
+      503,
+      "GOODADS_ATTRIBUTION_SIGNING_NOT_CONFIGURED"
+    );
+  }
+  return key;
+}
+
+function encodeAttributionToken(payload, explicitKey) {
+  const body = Buffer.from(JSON.stringify({
+    campaignId: boundedText(payload.campaignId, 64),
+    organizationId: boundedText(payload.organizationId, 160),
+  })).toString("base64url");
+  const unsigned = `${ATTRIBUTION_TOKEN_VERSION}.${body}`;
+  const signature = crypto.createHmac("sha256", attributionSigningKey(explicitKey))
+    .update(`goodads:first-party-attribution:${unsigned}`)
+    .digest("base64url");
+  return `${unsigned}.${signature}`;
+}
+
+function decodeAttributionToken(token, explicitKey) {
+  const [version, body, signature, extra] = boundedText(token, 1200).split(".");
+  if (version !== ATTRIBUTION_TOKEN_VERSION || !body || !signature || extra) {
+    throw analyticsError("The attribution token is invalid.", 404, "GOODADS_ATTRIBUTION_TOKEN_INVALID");
+  }
+  const unsigned = `${version}.${body}`;
+  const expected = crypto.createHmac("sha256", attributionSigningKey(explicitKey))
+    .update(`goodads:first-party-attribution:${unsigned}`)
+    .digest();
+  let supplied;
+  try {
+    supplied = Buffer.from(signature, "base64url");
+  } catch {
+    supplied = Buffer.alloc(0);
+  }
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    throw analyticsError("The attribution token is invalid.", 404, "GOODADS_ATTRIBUTION_TOKEN_INVALID");
+  }
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    throw analyticsError("The attribution token is invalid.", 404, "GOODADS_ATTRIBUTION_TOKEN_INVALID");
+  }
+  if (!UUID_PATTERN.test(String(payload.campaignId || "")) || !boundedText(payload.organizationId, 160)) {
+    throw analyticsError("The attribution token is invalid.", 404, "GOODADS_ATTRIBUTION_TOKEN_INVALID");
+  }
+  return {
+    campaignId: payload.campaignId,
+    organizationId: boundedText(payload.organizationId, 160),
+  };
+}
+
+function normalizedAttributionEvent(value) {
+  const event = boundedText(value, 40).toLowerCase();
+  if (!ATTRIBUTION_EVENTS.has(event)) {
+    throw analyticsError("This first-party attribution event is not supported.", 400, "GOODADS_ATTRIBUTION_EVENT_INVALID");
+  }
+  return event;
+}
+
+function normalizedPageOrigin(value) {
+  try {
+    const url = new URL(boundedText(value, 2000));
+    if (url.protocol !== "https:") throw new Error("HTTPS required");
+    return url.origin;
+  } catch {
+    throw analyticsError("A valid HTTPS page origin is required.", 400, "GOODADS_ATTRIBUTION_ORIGIN_INVALID");
+  }
+}
+
+function destinationOrigin(campaignData) {
+  return normalizedPageOrigin(campaignData?.creative?.destinationUrl);
+}
+
+function attributionScript(token, publicOrigin = "https://base.goodos.app") {
+  const collector = `${publicOrigin}/api/apps/goodads/v1/public/attribution/${encodeURIComponent(token)}/pixel.gif`;
+  return `(()=>{const endpoint=${JSON.stringify(collector)};const send=(event,options={})=>{const id=String(options.eventId||((globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now()+"-"+Math.random())).slice(0,120);const query=new URLSearchParams({event,event_id:id,page_origin:location.origin});if(options.valueMinor!=null)query.set("value_minor",String(options.valueMinor));if(options.currency)query.set("currency",String(options.currency));const pixel=new Image();pixel.referrerPolicy="strict-origin-when-cross-origin";pixel.src=endpoint+"?"+query.toString();return id};globalThis.goodAdsTrack=send;send("page_view")})();`;
+}
+
+function publicAttributionScript(token) {
+  decodeAttributionToken(token);
+  return attributionScript(token);
+}
+
+async function attributionInstallation({ campaignId, context }) {
+  const result = await query(
+    `SELECT id, name, data
+     FROM goodads_resources
+     WHERE id = $1::uuid AND organization_id = $2
+       AND resource_type = 'campaigns' AND archived_at IS NULL`,
+    [campaignId, context.organizationId]
+  );
+  const campaign = result.rows[0];
+  if (!campaign) throw analyticsError("Campaign was not found.", 404, "GOODADS_CAMPAIGN_NOT_FOUND");
+  const token = encodeAttributionToken({ campaignId: campaign.id, organizationId: context.organizationId });
+  const root = "https://base.goodos.app/api/apps/goodads/v1/public/attribution";
+  const scriptUrl = `${root}/${encodeURIComponent(token)}/tracker.js`;
+  return {
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    destinationOrigin: destinationOrigin(campaign.data),
+    scriptUrl,
+    snippet: `<script async src="${scriptUrl}"></script>`,
+    eventTypes: [...ATTRIBUTION_EVENTS],
+    conversionEvents: [...ATTRIBUTION_CONVERSIONS],
+    browserObserved: true,
+    providerVerified: false,
+  };
+}
+
+async function recordAttributionEvent({
+  token,
+  event: requestedEvent,
+  eventId,
+  valueMinor,
+  currency,
+  pageOrigin,
+  referrer,
+  userAgent,
+}) {
+  const tokenPayload = decodeAttributionToken(token);
+  const event = normalizedAttributionEvent(requestedEvent);
+  const safeEventId = boundedText(eventId, 120);
+  if (!EVENT_ID_PATTERN.test(safeEventId)) {
+    throw analyticsError("A valid unique event ID is required.", 400, "GOODADS_ATTRIBUTION_EVENT_ID_INVALID");
+  }
+  const safePageOrigin = normalizedPageOrigin(pageOrigin);
+  const campaignResult = await query(
+    `SELECT id, data
+     FROM goodads_resources
+     WHERE id = $1::uuid AND organization_id = $2
+       AND resource_type = 'campaigns' AND archived_at IS NULL`,
+    [tokenPayload.campaignId, tokenPayload.organizationId]
+  );
+  const campaign = campaignResult.rows[0];
+  if (!campaign) throw analyticsError("Campaign was not found.", 404, "GOODADS_CAMPAIGN_NOT_FOUND");
+  const expectedOrigin = destinationOrigin(campaign.data);
+  if (safePageOrigin !== expectedOrigin) {
+    throw analyticsError("The attribution event did not originate from this campaign destination.", 403, "GOODADS_ATTRIBUTION_ORIGIN_MISMATCH");
+  }
+  let referrerOrigin = null;
+  if (boundedText(referrer, 2000)) {
+    try {
+      referrerOrigin = new URL(boundedText(referrer, 2000)).origin;
+    } catch {}
+    if (referrerOrigin && referrerOrigin !== expectedOrigin) {
+      throw analyticsError("The attribution referrer did not match this campaign destination.", 403, "GOODADS_ATTRIBUTION_REFERRER_MISMATCH");
+    }
+  }
+  const rawValueMinor = boundedText(valueMinor, 40);
+  const parsedValue = Number(rawValueMinor);
+  if (rawValueMinor && (!Number.isSafeInteger(parsedValue) || parsedValue < 0 || parsedValue > 100000000000)) {
+    throw analyticsError("Purchase value must be a bounded non-negative integer in minor currency units.", 400, "GOODADS_ATTRIBUTION_VALUE_INVALID");
+  }
+  const safeValueMinor = rawValueMinor ? parsedValue : 0;
+  const safeCurrency = boundedText(currency, 3).toUpperCase();
+  if (safeCurrency && !/^[A-Z]{3}$/.test(safeCurrency)) {
+    throw analyticsError("Currency must use a three-letter code.", 400, "GOODADS_ATTRIBUTION_CURRENCY_INVALID");
+  }
+  if (event !== "purchase" && (safeValueMinor || safeCurrency)) {
+    throw analyticsError("Only purchase events may include value and currency.", 400, "GOODADS_ATTRIBUTION_VALUE_INVALID");
+  }
+  if (event === "purchase" && ((safeValueMinor > 0) !== Boolean(safeCurrency))) {
+    throw analyticsError("Purchase value and currency must be supplied together.", 400, "GOODADS_ATTRIBUTION_VALUE_INVALID");
+  }
+  const inserted = await query(
+    `INSERT INTO goodads_resource_events (
+       resource_id, organization_id, actor_user_id, event_type, metadata
+     ) VALUES ($1::uuid, $2, NULL, $3, $4::jsonb)
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
+    [
+      campaign.id,
+      tokenPayload.organizationId,
+      `attribution.${event}`,
+      JSON.stringify({
+        eventId: safeEventId,
+        pageOrigin: safePageOrigin,
+        referrerOrigin,
+        referrerVerified: referrerOrigin === expectedOrigin,
+        valueMinor: safeValueMinor,
+        currency: safeCurrency || null,
+        userAgent: boundedText(userAgent, 300),
+        browserObserved: true,
+        providerVerified: false,
+      }),
+    ]
+  );
+  return { recorded: Boolean(inserted.rows[0]), event, eventId: safeEventId };
 }
 
 function normalizePeriod(from, to) {
@@ -901,7 +1106,12 @@ async function overview({ context, from, to }) {
     query(
       `SELECT
          COUNT(*) FILTER (WHERE event_type = 'link_hubs.clicked')::integer AS link_clicks,
-         COUNT(*) FILTER (WHERE event_type = 'leads.captured')::integer AS captured_events
+         COUNT(*) FILTER (WHERE event_type = 'leads.captured')::integer AS captured_events,
+         COUNT(*) FILTER (WHERE event_type = 'attribution.page_view')::integer AS website_page_views,
+         COUNT(*) FILTER (WHERE event_type IN (
+           'attribution.lead', 'attribution.purchase',
+           'attribution.complete_registration', 'attribution.subscribe'
+         ))::integer AS website_conversions
        FROM goodads_resource_events
        WHERE organization_id = $1 AND created_at::date BETWEEN $2::date AND $3::date`,
       [context.organizationId, period.start, period.end]
@@ -976,6 +1186,10 @@ async function overview({ context, from, to }) {
     firstPartyEvents: {
       linkClicks: number(eventResult.rows[0]?.link_clicks),
       capturedLeads: number(eventResult.rows[0]?.captured_events),
+      websitePageViews: number(eventResult.rows[0]?.website_page_views),
+      websiteConversions: number(eventResult.rows[0]?.website_conversions),
+      browserObserved: true,
+      providerVerified: false,
     },
     budgetOptimization: budgetRecommendations(recommendationResult.rows),
     totals: providerMetrics.reduce((total, item) => ({
@@ -997,6 +1211,9 @@ function capabilities() {
       maximumRangeDays: 93,
       automaticSyncMinutes: 15,
       firstPartyAttribution: true,
+      firstPartyWebsitePixel: true,
+      attributionOriginBound: true,
+      attributionReplayDeduplication: true,
       revenueSeparatedByCurrency: true,
       crossChannelBudgetRecommendations: true,
       budgetRecommendationsAdvisoryOnly: true,
@@ -1009,6 +1226,9 @@ module.exports = {
   overview,
   syncProviderMetrics,
   syncAllProviderMetrics,
+  attributionInstallation,
+  publicAttributionScript,
+  recordAttributionEvent,
   capabilities,
   _test: {
     normalizePeriod,
@@ -1023,5 +1243,10 @@ module.exports = {
     linkedInMetricsFromPayload,
     providerMetricsAdapter,
     budgetRecommendations,
+    encodeAttributionToken,
+    decodeAttributionToken,
+    normalizedAttributionEvent,
+    normalizedPageOrigin,
+    attributionScript,
   },
 };
