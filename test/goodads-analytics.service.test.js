@@ -96,6 +96,8 @@ test("analytics capabilities include native X Ads reporting", () => {
   );
   assert.equal(analytics.capabilities().providerAnalytics.crossChannelBudgetRecommendations, true);
   assert.equal(analytics.capabilities().providerAnalytics.budgetRecommendationsAdvisoryOnly, true);
+  assert.equal(analytics.capabilities().providerAnalytics.budgetPacingSignals, true);
+  assert.equal(analytics.capabilities().providerAnalytics.budgetPacingAdvisoryOnly, true);
   assert.equal(analytics.capabilities().providerAnalytics.firstPartyWebsitePixel, true);
   assert.equal(analytics.capabilities().providerAnalytics.attributionReplayDeduplication, true);
 });
@@ -153,6 +155,92 @@ test("budget recommendations exclude stale and cross-currency evidence", () => {
   ], { now: Date.parse("2026-09-30T23:00:00.000Z") });
   assert.equal(result.excluded.stale, 1);
   assert.deepEqual(result.recommendations, []);
+});
+
+test("budget pacing classifies verified spend without changing budgets", () => {
+  const result = analytics._test.budgetPacingSignals([
+    {
+      provider_campaign_record_id: "meta-delivery",
+      campaign_id: "campaign-meta",
+      campaign_name: "Meta launch",
+      provider: "meta",
+      currency: "USD",
+      timezone: "America/Los_Angeles",
+      status: "active",
+      daily_budget: "100",
+      start_date: "2026-09-01",
+      end_date: "2026-09-30",
+      spend_micros: 300000000,
+      captured_at: "2026-09-05T20:00:00.000Z",
+      period_start: "2026-09-01",
+      period_end: "2026-09-05",
+    },
+    {
+      provider_campaign_record_id: "google-delivery",
+      campaign_id: "campaign-google",
+      campaign_name: "Google launch",
+      provider: "google",
+      currency: "USD",
+      timezone: "America/Los_Angeles",
+      status: "active",
+      daily_budget: "100",
+      start_date: "2026-09-01",
+      end_date: "2026-09-30",
+      spend_micros: 600000000,
+      captured_at: "2026-09-05T20:00:00.000Z",
+      period_start: "2026-09-01",
+      period_end: "2026-09-05",
+    },
+  ], { now: Date.parse("2026-09-05T20:10:00.000Z") });
+
+  assert.equal(result.advisoryOnly, true);
+  assert.equal(result.automaticExecution, false);
+  assert.equal(result.providerVerified, true);
+  assert.equal(result.eligibleCampaigns, 2);
+  assert.deepEqual(result.statusCounts, { overspending: 1, onTrack: 0, underspending: 1 });
+  assert.equal(result.signals[0].status, "overspending");
+  assert.equal(result.signals[0].provider, "google");
+  assert.equal(result.signals[1].status, "underspending");
+  assert.equal(result.signals[1].provider, "meta");
+  assert.equal(result.signals.every((signal) => signal.automaticExecution === false), true);
+});
+
+test("budget pacing excludes stale evidence and campaigns without enough elapsed schedule", () => {
+  const result = analytics._test.budgetPacingSignals([
+    {
+      providerCampaignRecordId: "stale",
+      provider: "meta",
+      currency: "USD",
+      timezone: "UTC",
+      status: "active",
+      dailyBudget: 50,
+      startDate: "2026-09-01",
+      endDate: "2026-09-30",
+      spendMicros: 10000000,
+      capturedAt: "2026-09-04T10:00:00.000Z",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-05",
+    },
+    {
+      providerCampaignRecordId: "too-early",
+      provider: "google",
+      currency: "USD",
+      timezone: "UTC",
+      status: "active",
+      dailyBudget: 50,
+      startDate: "2026-09-05",
+      endDate: "2026-09-30",
+      spendMicros: 1000000,
+      capturedAt: "2026-09-05T02:00:00.000Z",
+      periodStart: "2026-09-05",
+      periodEnd: "2026-09-05",
+    },
+  ], { now: Date.parse("2026-09-05T02:10:00.000Z") });
+
+  assert.equal(result.eligibleCampaigns, 0);
+  assert.equal(result.excluded.stale, 1);
+  assert.equal(result.excluded.insufficientElapsedTime, 1);
+  assert.deepEqual(result.signals, []);
 });
 
 test("YouTube campaigns use the verified Google Ads reporting adapter", () => {

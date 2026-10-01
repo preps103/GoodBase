@@ -1056,6 +1056,178 @@ function budgetRecommendations(rows, options = {}) {
   };
 }
 
+const DAY_MILLISECONDS = 86400000;
+
+function calendarDayNumber(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const timestamp = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== Number(match[1])
+    || date.getUTCMonth() !== Number(match[2]) - 1
+    || date.getUTCDate() !== Number(match[3])
+  ) return null;
+  return Math.floor(timestamp / DAY_MILLISECONDS);
+}
+
+function localCalendarPosition(timestamp, timezone) {
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: boundedText(timezone, 120),
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(timestamp))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]));
+    const day = calendarDayNumber(
+      `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`
+    );
+    if (day === null || !Number.isFinite(parts.hour) || !Number.isFinite(parts.minute) || !Number.isFinite(parts.second)) {
+      return null;
+    }
+    return {
+      day,
+      elapsedDayFraction: Math.min(Math.max(
+        ((parts.hour * 3600) + (parts.minute * 60) + parts.second) / 86400,
+        0
+      ), 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function budgetPacingSignals(rows, options = {}) {
+  const now = Number(options.now) || Date.now();
+  const staleAfterMinutes = Math.min(Math.max(Number(options.staleAfterMinutes) || 45, 15), 1440);
+  const overspendThresholdPercent = Math.min(Math.max(Number(options.overspendThresholdPercent) || 20, 10), 100);
+  const underspendThresholdPercent = Math.min(Math.max(Number(options.underspendThresholdPercent) || 30, 10), 100);
+  const minimumElapsedDayFraction = Math.min(Math.max(Number(options.minimumElapsedDayFraction) || 0.25, 0.1), 1);
+  const minimumExpectedSpendMicros = Math.max(Number(options.minimumExpectedSpendMicros) || 1000000, 1000000);
+  const excluded = {
+    inactive: 0,
+    stale: 0,
+    invalidBudget: 0,
+    invalidSchedule: 0,
+    invalidTimezone: 0,
+    insufficientElapsedTime: 0,
+  };
+  const signals = [];
+  const statusCounts = { overspending: 0, onTrack: 0, underspending: 0 };
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row.status !== "active") {
+      excluded.inactive += 1;
+      continue;
+    }
+    const capturedAt = new Date(row.captured_at || row.capturedAt || 0).getTime();
+    if (
+      !Number.isFinite(capturedAt)
+      || now - capturedAt > staleAfterMinutes * 60000
+      || capturedAt - now > 5 * 60000
+    ) {
+      excluded.stale += 1;
+      continue;
+    }
+    const dailyBudget = Number(row.daily_budget ?? row.dailyBudget);
+    if (!Number.isFinite(dailyBudget) || dailyBudget <= 0) {
+      excluded.invalidBudget += 1;
+      continue;
+    }
+    const periodStart = calendarDayNumber(row.period_start || row.periodStart);
+    const periodEnd = calendarDayNumber(row.period_end || row.periodEnd);
+    const campaignStart = calendarDayNumber(row.start_date || row.startDate);
+    const campaignEnd = calendarDayNumber(row.end_date || row.endDate);
+    if (
+      periodStart === null || periodEnd === null || campaignStart === null || campaignEnd === null
+      || periodEnd < periodStart || campaignEnd < campaignStart
+    ) {
+      excluded.invalidSchedule += 1;
+      continue;
+    }
+    const timezone = boundedText(row.timezone, 120);
+    const localPosition = localCalendarPosition(capturedAt, timezone);
+    if (!timezone || !localPosition) {
+      excluded.invalidTimezone += 1;
+      continue;
+    }
+    const overlapStart = Math.max(periodStart, campaignStart);
+    const overlapEnd = Math.min(periodEnd, campaignEnd, localPosition.day);
+    const completedDays = Math.max(Math.min(overlapEnd, localPosition.day - 1) - overlapStart + 1, 0);
+    const currentDayFraction = localPosition.day >= overlapStart && localPosition.day <= overlapEnd
+      ? localPosition.elapsedDayFraction
+      : 0;
+    const elapsedBudgetDays = completedDays + currentDayFraction;
+    const expectedSpendMicros = Math.round(dailyBudget * 1000000 * elapsedBudgetDays);
+    if (
+      overlapEnd < overlapStart
+      || (completedDays === 0 && currentDayFraction < minimumElapsedDayFraction)
+      || expectedSpendMicros < minimumExpectedSpendMicros
+    ) {
+      excluded.insufficientElapsedTime += 1;
+      continue;
+    }
+    const spendMicros = Math.max(number(row.spend_micros ?? row.spendMicros), 0);
+    const varianceMicros = spendMicros - expectedSpendMicros;
+    const variancePercent = (varianceMicros / expectedSpendMicros) * 100;
+    const status = variancePercent >= overspendThresholdPercent
+      ? "overspending"
+      : variancePercent <= -underspendThresholdPercent
+        ? "underspending"
+        : "onTrack";
+    statusCounts[status] += 1;
+    signals.push({
+      id: String(row.provider_campaign_record_id || row.providerCampaignRecordId || `${row.provider}:${row.campaign_id || row.campaignId}`),
+      providerCampaignRecordId: row.provider_campaign_record_id || row.providerCampaignRecordId,
+      campaignId: row.campaign_id || row.campaignId,
+      campaignName: boundedText(row.campaign_name || row.campaignName || "Campaign", 200),
+      provider: boundedText(row.provider, 40),
+      currency: boundedText(row.currency || "", 12).toUpperCase(),
+      timezone,
+      status,
+      severity: status === "onTrack" ? "normal" : Math.abs(variancePercent) >= 50 ? "critical" : "warning",
+      advisoryOnly: true,
+      automaticExecution: false,
+      actualSpendMicros: Math.round(spendMicros),
+      expectedSpendMicros,
+      varianceMicros: Math.round(varianceMicros),
+      variancePercent: Math.round(variancePercent * 10) / 10,
+      dailyBudgetMicros: Math.round(dailyBudget * 1000000),
+      elapsedBudgetDays: Math.round(elapsedBudgetDays * 10000) / 10000,
+      periodStart: String(row.period_start || row.periodStart),
+      periodEnd: String(row.period_end || row.periodEnd),
+      capturedAt: new Date(capturedAt).toISOString(),
+    });
+  }
+
+  const statusOrder = { overspending: 0, underspending: 1, onTrack: 2 };
+  signals.sort((left, right) => (
+    statusOrder[left.status] - statusOrder[right.status]
+    || Math.abs(right.variancePercent) - Math.abs(left.variancePercent)
+    || left.campaignName.localeCompare(right.campaignName)
+  ));
+  return {
+    advisoryOnly: true,
+    automaticExecution: false,
+    providerVerified: true,
+    staleAfterMinutes,
+    overspendThresholdPercent,
+    underspendThresholdPercent,
+    minimumElapsedDayFraction,
+    eligibleCampaigns: signals.length,
+    attentionCampaigns: statusCounts.overspending + statusCounts.underspending,
+    statusCounts,
+    excluded,
+    signals,
+  };
+}
+
 async function overview({ context, from, to }) {
   const period = normalizePeriod(from, to);
   const [metricsResult, attributionResult, revenueResult, eventResult, recommendationResult] = await Promise.all([
@@ -1131,11 +1303,15 @@ async function overview({ context, from, to }) {
          provider_campaign.provider, provider_campaign.status,
          latest.currency, latest.spend_micros, latest.conversions,
          latest.conversion_value_micros, latest.period_start, latest.period_end,
-         latest.captured_at, campaign.data->>'dailyBudget' AS daily_budget
+         latest.captured_at, campaign.data->>'dailyBudget' AS daily_budget,
+         campaign.data->>'startDate' AS start_date,
+         campaign.data->>'endDate' AS end_date,
+         account.timezone
        FROM latest
        JOIN goodads_provider_campaigns provider_campaign
          ON provider_campaign.id = latest.provider_campaign_id
        JOIN goodads_resources campaign ON campaign.id = provider_campaign.campaign_id
+       JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
        WHERE provider_campaign.organization_id = $1
          AND campaign.organization_id = $1
          AND campaign.resource_type = 'campaigns'
@@ -1192,6 +1368,7 @@ async function overview({ context, from, to }) {
       providerVerified: false,
     },
     budgetOptimization: budgetRecommendations(recommendationResult.rows),
+    budgetPacing: budgetPacingSignals(recommendationResult.rows),
     totals: providerMetrics.reduce((total, item) => ({
       campaigns: total.campaigns + item.campaigns,
       impressions: total.impressions + item.impressions,
@@ -1217,6 +1394,8 @@ function capabilities() {
       revenueSeparatedByCurrency: true,
       crossChannelBudgetRecommendations: true,
       budgetRecommendationsAdvisoryOnly: true,
+      budgetPacingSignals: true,
+      budgetPacingAdvisoryOnly: true,
       maximumRecommendedShiftPercent: 20,
     },
   };
@@ -1243,6 +1422,7 @@ module.exports = {
     linkedInMetricsFromPayload,
     providerMetricsAdapter,
     budgetRecommendations,
+    budgetPacingSignals,
     encodeAttributionToken,
     decodeAttributionToken,
     normalizedAttributionEvent,
