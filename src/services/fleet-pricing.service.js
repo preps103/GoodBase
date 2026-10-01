@@ -1,5 +1,7 @@
 "use strict";
 
+const { programDiscount } = require("./fleet-customer-programs.service");
+
 const ACTIVE_BOOKING_STATUSES = new Set([
   "quote", "pending_payment", "confirmed", "assigned", "checked_in",
   "checked_out", "extended", "overdue"
@@ -168,14 +170,20 @@ function calculateBookingPrice({ vehicle, state = {}, input = {}, pickupAt, retu
     pickupAt,
     pickupBranchId
   );
-  let discount = 0;
+  let promotionalDiscount = 0;
   if (discountRecord) {
     const value = Math.max(0, number(discountRecord.value));
-    discount = discountRecord.type === "percentage"
+    promotionalDiscount = discountRecord.type === "percentage"
       ? adjustedBase * Math.min(value, 100) / 100
       : Math.min(value, adjustedBase);
   }
-  discount = rounded(discount);
+  promotionalDiscount = rounded(promotionalDiscount);
+  const selectedDiscount = programDiscount({
+    adjustedBase,
+    promotionalDiscount,
+    program: input.customerProgram,
+  });
+  const discount = selectedDiscount.amount;
   const discountedBase = Math.max(0, rounded(adjustedBase - discount));
 
   const feeLines = (Array.isArray(state.fees) ? state.fees : [])
@@ -223,7 +231,17 @@ function calculateBookingPrice({ vehicle, state = {}, input = {}, pickupAt, retu
     seasonalPercent: rounded(seasonalPercent, 3),
     seasonalRules,
     discount,
-    discountCode: discountRecord?.code || null,
+    discountCode: selectedDiscount.source === "promotion" ? discountRecord?.code || null : null,
+    discountSource: selectedDiscount.source,
+    discountLabel: selectedDiscount.label,
+    discountPercent: selectedDiscount.percent,
+    customerProgram: input.customerProgram ? {
+      corporateAccountId: input.customerProgram.corporateAccountId || null,
+      corporateAccountName: input.customerProgram.corporateAccountName || null,
+      corporateRateId: input.customerProgram.corporateRate?.id || null,
+      loyaltyAccountId: input.customerProgram.loyalty?.id || null,
+      loyaltyTier: input.customerProgram.loyalty?.tier || null,
+    } : null,
     mandatoryFees,
     feeLines,
     locationSurcharge,

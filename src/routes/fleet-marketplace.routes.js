@@ -8,6 +8,11 @@ const multer = require("multer");
 const authRequired = require("../middleware/authRequired");
 const { pool, query } = require("../config/database");
 const notificationService = require("../services/notification.service");
+const fleetPricing = require("../services/fleet-pricing.service");
+const {
+  loadCustomerProgram,
+  programDiscount,
+} = require("../services/fleet-customer-programs.service");
 const { publicBackendUrl } = require("../utils/managedAssetUrl");
 
 const router = express.Router();
@@ -816,7 +821,7 @@ async function delegatedHostAccess(
   return Boolean(result.rowCount);
 }
 
-async function priceQuote(client, listing, input, pickupAt, returnAt) {
+async function priceQuote(client, listing, input, pickupAt, returnAt, customerId = null) {
   const days = rentalDays(pickupAt, returnAt);
   if (
     days < listing.minimum_trip_days ||
@@ -886,6 +891,15 @@ async function priceQuote(client, listing, input, pickupAt, returnAt) {
   const state = workspace.rows[0]?.state_json || {};
   const dailyRate = Number(listing.daily_rate);
   const base = dailyRate * days;
+  const customerProgram = await loadCustomerProgram(client, {
+    organizationId: PUBLIC_ORGANIZATION_ID,
+    customerId,
+    vehicleCategory: fleetPricing.vehicleCategory({ payload: listing.vehicle_payload }),
+    branchId: input.pickupLocationId,
+    pickupAt,
+  });
+  const selectedDiscount = programDiscount({ adjustedBase: base, program: customerProgram });
+  const discountedBase = Math.max(0, base - selectedDiscount.amount);
   const deliveryFee =
     input.delivery === true && listing.delivery_enabled
       ? Number(listing.delivery_fee)
@@ -907,12 +921,23 @@ async function priceQuote(client, listing, input, pickupAt, returnAt) {
   const taxRate = Number.isFinite(configuredTax)
     ? Math.min(Math.max(configuredTax, 0), 100)
     : 0;
-  const taxable = base + deliveryFee;
+  const taxable = discountedBase + deliveryFee;
   const tax = (taxable * taxRate) / 100;
   return {
     days,
     dailyRate: Number(dailyRate.toFixed(2)),
     base: Number(base.toFixed(2)),
+    discount: selectedDiscount.amount,
+    discountSource: selectedDiscount.source,
+    discountLabel: selectedDiscount.label,
+    discountPercent: selectedDiscount.percent,
+    customerProgram: customerProgram ? {
+      corporateAccountId: customerProgram.corporateAccountId || null,
+      corporateAccountName: customerProgram.corporateAccountName || null,
+      corporateRateId: customerProgram.corporateRate?.id || null,
+      loyaltyAccountId: customerProgram.loyalty?.id || null,
+      loyaltyTier: customerProgram.loyalty?.tier || null,
+    } : null,
     deliveryFee: Number(deliveryFee.toFixed(2)),
     taxRate: Number(taxRate.toFixed(4)),
     tax: Number(tax.toFixed(2)),
@@ -1221,12 +1246,21 @@ router.post("/quote", async (request, response, next) => {
         "Return must be after pickup.",
       );
     }
+    const customer = await client.query(
+      `SELECT id FROM fleet_customers
+        WHERE organization_id=$1 AND archived_at IS NULL
+          AND (user_id=$2 OR lower(email)=lower($3))
+        ORDER BY (user_id=$2) DESC
+        LIMIT 1`,
+      [PUBLIC_ORGANIZATION_ID, request.user.id, clean(request.user.email, 320)],
+    );
     const quote = await priceQuote(
       client,
       listing,
       request.body || {},
       pickupAt,
       returnAt,
+      customer.rows[0]?.id || null,
     );
     const conflict = await client.query(
       `SELECT 1
@@ -1357,6 +1391,7 @@ router.post("/reservations", async (request, response, next) => {
       request.body || {},
       pickupAt,
       returnAt,
+      customer.id,
     );
     const conflict = await client.query(
       `SELECT reservation_number
@@ -1972,6 +2007,7 @@ router.post(
           },
           pickupAt,
           returnAt,
+          record.customer_id,
         );
         const conflict = await client.query(
           `SELECT 1
