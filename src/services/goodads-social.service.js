@@ -132,6 +132,17 @@ const PROVIDER_ALIASES = {
   google_business: "google",
 };
 
+const PROVIDER_CREDENTIAL_ENVIRONMENT = Object.freeze({
+  x_ads: {
+    clientId: "GOODADS_X_ADS_CONSUMER_KEY",
+    clientSecret: "GOODADS_X_ADS_CONSUMER_SECRET",
+  },
+  tiktok_ads: {
+    clientId: "GOODADS_TIKTOK_ADS_APP_ID",
+    clientSecret: "GOODADS_TIKTOK_ADS_CLIENT_SECRET",
+  },
+});
+
 const PROVIDER_PUBLISH_CAPABILITIES = Object.freeze({
   google: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
   facebook: { text: false, media: false, video: false, immediate: false, scheduling: false, paidAds: false },
@@ -153,6 +164,23 @@ function socialError(message, statusCode = 400, code = "GOODADS_SOCIAL_ERROR", r
   error.code = code;
   error.retryable = retryable;
   return error;
+}
+
+function credentialEnvironment(provider) {
+  const requestedId = String(provider || "").toLowerCase();
+  const id = PROVIDER_ALIASES[requestedId] || requestedId;
+  const definition = PROVIDERS[id];
+  if (!definition) throw socialError("Unsupported social provider.", 404, "GOODADS_PROVIDER_NOT_FOUND");
+  const prefix = `GOODADS_${id.toUpperCase()}_`;
+  return {
+    ...(PROVIDER_CREDENTIAL_ENVIRONMENT[id] || {
+      clientId: `${prefix}CLIENT_ID`,
+      clientSecret: `${prefix}CLIENT_SECRET`,
+    }),
+    advertisingOAuthEnabled: definition.advertisingScopes?.length
+      ? `${prefix}ADS_OAUTH_ENABLED`
+      : null,
+  };
 }
 
 function providerConfig(provider) {
@@ -183,6 +211,7 @@ function providerConfig(provider) {
     clientId,
     clientSecret,
     configured: Boolean(clientId && clientSecret),
+    credentialEnvironment: credentialEnvironment(id),
   };
 }
 
@@ -801,6 +830,7 @@ function publicProviders() {
       id,
       name: config.label,
       configured: config.configured,
+      credentialEnvironment: config.credentialEnvironment,
       scopes: config.scopes,
       callbackUrl: callbackUrl(id),
       capabilities: PROVIDER_PUBLISH_CAPABILITIES[id],
@@ -1724,6 +1754,7 @@ module.exports = {
   PROVIDERS,
   PROVIDER_PUBLISH_CAPABILITIES,
   providerConfig,
+  credentialEnvironment,
   encrypt,
   decrypt,
   publicProviders,
