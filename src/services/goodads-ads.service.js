@@ -23,6 +23,10 @@ const DEFAULT_MAX_CAMPAIGN_ACCOUNTS = 10;
 const DEFAULT_MAX_COMBINED_DAILY_BUDGET = 1000;
 const DEFAULT_MAX_PLANNING_BUDGET = 30000;
 const DEFAULT_PROVIDER_RECONCILIATION_MINUTES = 5;
+const AUTOMATIC_SPEND_GUARD_INTERVAL_MINUTES = 15;
+const AUTOMATIC_SPEND_GUARD_FIRST_RUN_MINUTES = 20;
+const AUTOMATIC_SPEND_GUARD_STALE_MINUTES = 45;
+const AUTOMATIC_SPEND_GUARD_WINDOW_DAYS = 30;
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -1480,6 +1484,64 @@ function campaignExposure(data, accountCount, timezone) {
   };
 }
 
+function automaticSpendGuardId(campaignId) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(`goodads:automatic-spend-guard:v1:${requireUuid(campaignId, "campaign ID")}`)
+    .digest();
+  digest[6] = (digest[6] & 0x0f) | 0x50;
+  digest[8] = (digest[8] & 0x3f) | 0x80;
+  const hex = digest.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function automaticSpendGuardSpec({ campaign, exposure, now = new Date() }) {
+  const campaignId = requireUuid(campaign.campaign_id || campaign.id, "campaign ID");
+  const currency = boundedText(exposure?.currency, 12).toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw adsError("Automatic spend protection requires a verified three-letter account currency.", 409, "GOODADS_SPEND_GUARD_CURRENCY_INVALID");
+  }
+  const evaluatedAt = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+  if (Number.isNaN(evaluatedAt.getTime())) throw adsError("Automatic spend protection could not be scheduled.");
+  const deliveryDays = Math.max(1, Math.min(Number(exposure?.deliveryDays) || 1, AUTOMATIC_SPEND_GUARD_WINDOW_DAYS));
+  const maximumTrackedSpend = Math.round(Math.max(Number(exposure?.combinedDailyBudget) || 0, 0) * deliveryDays * 1000000) / 1000000;
+  if (maximumTrackedSpend <= 0) {
+    throw adsError("Automatic spend protection requires a positive verified campaign budget.", 409, "GOODADS_SPEND_GUARD_BUDGET_INVALID");
+  }
+  const campaignName = boundedText(campaign.campaign_name || campaign.name || "Campaign", 180);
+  const firstRunAt = new Date(evaluatedAt.getTime() + AUTOMATIC_SPEND_GUARD_FIRST_RUN_MINUTES * 60000).toISOString();
+  return {
+    id: automaticSpendGuardId(campaignId),
+    name: `Automatic budget stop — ${campaignName}`,
+    status: "active",
+    data: {
+      name: `Automatic budget stop — ${campaignName}`,
+      status: "active",
+      description: `System-managed stop for ${campaignName}. Verified provider spend at or above ${maximumTrackedSpend} ${currency}, or stale measurement, queues a campaign-wide pause.`,
+      triggerType: "schedule",
+      actionType: "enforce_spend_guard",
+      campaignId,
+      intervalMinutes: AUTOMATIC_SPEND_GUARD_INTERVAL_MINUTES,
+      scheduledAt: firstRunAt,
+      nextRunAt: firstRunAt,
+      owner: "GoodAds safety system",
+      conditions: `Pause when verified ${currency} spend reaches ${maximumTrackedSpend} within the reporting window.`,
+      guardrails: "Pause-only. Cannot activate advertising. Missing, stale, inconsistent, or wrong-currency metrics fail closed.",
+      currency,
+      maximumTrackedSpend,
+      maximumCostPerConversion: null,
+      minimumTrackedSpend: 0,
+      minimumConversions: 1,
+      staleAfterMinutes: AUTOMATIC_SPEND_GUARD_STALE_MINUTES,
+      pauseOnStaleMetrics: true,
+      systemManaged: true,
+      guardType: "automatic_campaign_budget",
+      maximumWindowDays: AUTOMATIC_SPEND_GUARD_WINDOW_DAYS,
+      createdFromActivation: true,
+    },
+  };
+}
+
 function campaignExposureIssues(exposure, policy = campaignExposurePolicy()) {
   const issues = [];
   if (exposure.accountCount > policy.maximumAccountsPerCampaign) {
@@ -1530,7 +1592,11 @@ async function validateStoredCampaignExposure({ organizationId, campaignId, camp
       "GOODADS_AD_ACCOUNT_LOCALE_MISMATCH"
     );
   }
-  return validateCampaignExposure(campaignData, result.rows.length, result.rows[0].timezone);
+  return {
+    ...validateCampaignExposure(campaignData, result.rows.length, result.rows[0].timezone),
+    currency: boundedText(result.rows[0].currency, 12).toUpperCase(),
+    timezone: boundedText(result.rows[0].timezone, 120),
+  };
 }
 
 function validateProviderObjective(provider, value) {
@@ -2296,7 +2362,9 @@ async function queueLifecycleOperation({
   const selected = await query(
     `SELECT provider_campaign.*, campaign.name AS campaign_name,
        campaign.status AS campaign_status, campaign.data AS campaign_data,
-       campaign.version AS current_version,
+       campaign.version AS current_version, campaign.project_id AS campaign_project_id,
+       campaign.environment_id AS campaign_environment_id,
+       campaign.owner_user_id AS campaign_owner_user_id,
        approval.status AS approval_status, approval.data AS approval_data
      FROM goodads_provider_campaigns provider_campaign
      JOIN goodads_resources campaign ON campaign.id = provider_campaign.campaign_id
@@ -2315,6 +2383,7 @@ async function queueLifecycleOperation({
   );
   const campaign = selected.rows[0];
   if (!campaign) throw adsError("Provider campaign was not found.", 404, "GOODADS_PROVIDER_CAMPAIGN_NOT_FOUND");
+  let activationExposure = null;
   if (operationType === "activate") {
     if (PROVIDERS[campaign.provider]?.activationSupported === false) {
       throw adsError(
@@ -2338,7 +2407,7 @@ async function queueLifecycleOperation({
         "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
       );
     }
-    await validateStoredCampaignExposure({
+    activationExposure = await validateStoredCampaignExposure({
       organizationId: context.organizationId,
       campaignId: campaign.campaign_id,
       campaignData: currentSnapshot.data,
@@ -2364,28 +2433,73 @@ async function queueLifecycleOperation({
       );
     }
   }
-  await query(
-    `INSERT INTO goodads_ad_operations (
-       organization_id, provider_campaign_id, requested_by_user_id,
-       operation_type, idempotency_key, payload
-     ) VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6::jsonb)
-     ON CONFLICT DO NOTHING`,
-    [
-      context.organizationId,
-      campaign.id,
-      userId,
-      operationType,
-      `${requestKey}:${campaign.id}:${operationType}`,
-      JSON.stringify({ approvalId: approvalId || null }),
-    ]
-  );
-  if (operationType === "activate") {
-    await query(
-      `UPDATE goodads_provider_campaigns
-       SET activation_approval_id = $2::uuid, updated_at = NOW()
-       WHERE id = $1::uuid`,
-      [campaign.id, approvalId]
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (operationType === "activate") {
+      const guard = automaticSpendGuardSpec({ campaign, exposure: activationExposure });
+      const protectedGuard = await client.query(
+        `INSERT INTO goodads_resources (
+           id, resource_type, organization_id, project_id, environment_id,
+           owner_user_id, name, status, data
+         ) VALUES ($1::uuid, 'automations', $2, $3, $4, $5::uuid, $6, 'active', $7::jsonb)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           status = 'active',
+           data = COALESCE(goodads_resources.data, '{}'::jsonb) || (EXCLUDED.data - 'nextRunAt' - 'scheduledAt'),
+           archived_at = NULL,
+           version = goodads_resources.version + 1,
+           updated_at = NOW()
+         WHERE goodads_resources.organization_id = EXCLUDED.organization_id
+           AND goodads_resources.resource_type = 'automations'
+         RETURNING id`,
+        [
+          guard.id,
+          context.organizationId,
+          campaign.campaign_project_id,
+          campaign.campaign_environment_id,
+          campaign.campaign_owner_user_id || userId,
+          guard.name,
+          JSON.stringify(guard.data),
+        ]
+      );
+      if (!protectedGuard.rows[0]) {
+        throw adsError(
+          "GoodAds could not provision the protected campaign spend stop. Activation was not queued.",
+          409,
+          "GOODADS_SPEND_GUARD_PROVISION_FAILED"
+        );
+      }
+    }
+    await client.query(
+      `INSERT INTO goodads_ad_operations (
+         organization_id, provider_campaign_id, requested_by_user_id,
+         operation_type, idempotency_key, payload
+       ) VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [
+        context.organizationId,
+        campaign.id,
+        userId,
+        operationType,
+        `${requestKey}:${campaign.id}:${operationType}`,
+        JSON.stringify({ approvalId: approvalId || null }),
+      ]
     );
+    if (operationType === "activate") {
+      await client.query(
+        `UPDATE goodads_provider_campaigns
+         SET activation_approval_id = $2::uuid, updated_at = NOW()
+         WHERE id = $1::uuid`,
+        [campaign.id, approvalId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
   return getCampaignState({ campaignId, context });
 }
@@ -5702,6 +5816,10 @@ function capabilities() {
       unexpectedActivationAutoPause: true,
       providerReconciliationMinutes: providerReconciliationMinutes(),
       campaignWideExposureLimits: true,
+      automaticSpendGuards: true,
+      spendGuardIntervalMinutes: AUTOMATIC_SPEND_GUARD_INTERVAL_MINUTES,
+      spendGuardReportingWindowDays: AUTOMATIC_SPEND_GUARD_WINDOW_DAYS,
+      spendGuardFailsClosedOnStaleMetrics: true,
       maximumAccountsPerLaunch: MAX_ACCOUNTS_PER_LAUNCH,
       exposureLimits: campaignExposurePolicy(),
     },
@@ -5781,5 +5899,7 @@ module.exports = {
     emergencyPauseMarker,
     campaignPreflightReport,
     campaignScheduleBounds,
+    automaticSpendGuardId,
+    automaticSpendGuardSpec,
   },
 };
