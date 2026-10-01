@@ -63,11 +63,16 @@ test("Phase 1 provisioning validates migrations, PostgREST, and backend health",
   assert.match(script, /pm2 restart "\$PM2_PROCESS" --update-env/);
 });
 
-test("Goodbase Nginx template serves only the canonical hostname and Realtime", () => {
+test("Goodbase Nginx template serves the canonical hostname through HA and Realtime", () => {
   const nginx = read("deploy/nginx/base.goodos.app.conf.example");
 
   assert.match(nginx, /server_name base\.goodos\.app/);
-  assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:8001/);
+  assert.match(nginx, /upstream goodbase_api/);
+  assert.match(nginx, /server 127\.0\.0\.1:8001 max_fails=1 fail_timeout=5s/);
+  assert.match(nginx, /server 127\.0\.0\.1:8002 backup/);
+  assert.match(nginx, /proxy_pass http:\/\/goodbase_api/);
+  assert.match(nginx, /proxy_next_upstream error timeout http_502 http_503 http_504/);
+  assert.match(nginx, /proxy_next_upstream_tries 2/);
   assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:8400/);
   assert.match(nginx, /return 308 https:\/\/base\.goodos\.app\$request_uri/);
   assert.doesNotMatch(nginx, /backend\.goodos\.app/);
