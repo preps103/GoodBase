@@ -28,6 +28,7 @@ const AUTOMATIC_SPEND_GUARD_FIRST_RUN_MINUTES = 20;
 const AUTOMATIC_SPEND_GUARD_STALE_MINUTES = 45;
 const AUTOMATIC_SPEND_GUARD_WINDOW_DAYS = 30;
 const DEFAULT_ACTIVATION_APPROVAL_VALID_MINUTES = 1440;
+const AD_CONNECTION_EXPIRY_SKEW_MS = 5 * 60 * 1000;
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -1090,6 +1091,40 @@ function requireConnectionScopes(connection, requiredScopes = []) {
   }
 }
 
+function validateAdAccountConnection(account, now = new Date()) {
+  const requiredScopes = providerConnectionScopes(account.provider, account.connection_provider);
+  if (account.connection_status !== "connected") {
+    throw adsError(
+      "Reconnect the provider authorization before campaign setup.",
+      409,
+      "GOODADS_CONNECTION_EXPIRED"
+    );
+  }
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const expiresAtMs = account.connection_token_expires_at
+    ? new Date(account.connection_token_expires_at).getTime()
+    : NaN;
+  if (
+    Number.isFinite(expiresAtMs)
+    && expiresAtMs <= nowMs + AD_CONNECTION_EXPIRY_SKEW_MS
+    && account.connection_refreshable !== true
+  ) {
+    throw adsError(
+      "Reconnect the provider authorization before campaign setup because its token is expiring.",
+      409,
+      "GOODADS_CONNECTION_EXPIRED"
+    );
+  }
+  requireConnectionScopes({
+    metadata: account.connection_metadata,
+    scopes: account.connection_scopes,
+  }, requiredScopes);
+  return {
+    provider: account.connection_provider,
+    requiredScopes,
+  };
+}
+
 async function discoverAccounts({ provider, connectionId, context, userId }) {
   requireManagement(context);
   const id = canonicalProvider(provider);
@@ -1141,6 +1176,11 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
 }
 
 function rowToAdAccount(row) {
+  let providerPermissionsVerified = false;
+  try {
+    validateAdAccountConnection(row);
+    providerPermissionsVerified = true;
+  } catch {}
   return {
     id: row.id,
     connectionId: row.connection_id,
@@ -1151,6 +1191,9 @@ function rowToAdAccount(row) {
     timezone: row.timezone,
     status: row.status,
     metadata: row.metadata || {},
+    connectionStatus: row.connection_status || null,
+    providerPermissionsVerified,
+    connectionRefreshable: row.connection_refreshable === true,
     verifiedAt: row.verified_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1159,9 +1202,17 @@ function rowToAdAccount(row) {
 
 async function listAdAccounts({ context }) {
   const result = await query(
-    `SELECT * FROM goodads_ad_accounts
-     WHERE organization_id = $1
-     ORDER BY status = 'verified' DESC, provider, name`,
+    `SELECT account.*,
+       connection.provider AS connection_provider,
+       connection.status AS connection_status,
+       connection.scopes AS connection_scopes,
+       connection.metadata AS connection_metadata,
+       connection.token_expires_at AS connection_token_expires_at,
+       connection.refresh_token_ciphertext IS NOT NULL AS connection_refreshable
+     FROM goodads_ad_accounts account
+     JOIN goodads_social_connections connection ON connection.id = account.connection_id
+     WHERE account.organization_id = $1
+     ORDER BY account.status = 'verified' DESC, account.provider, account.name`,
     [context.organizationId]
   );
   return result.rows.map(rowToAdAccount);
@@ -2107,6 +2158,14 @@ function campaignPreflightReport({
       });
     }
     try {
+      validateAdAccountConnection(account);
+    } catch (error) {
+      issues.push({
+        code: boundedText(error.code, 100) || "GOODADS_AD_CONNECTION_INVALID",
+        detail: boundedText(error.message, 1000) || "Provider authorization validation failed.",
+      });
+    }
+    try {
       validateCampaignForAccount(campaign, account);
     } catch (error) {
       issues.push({
@@ -2197,8 +2256,16 @@ async function preflightCampaign({ campaignId, adAccountIds, context }) {
       [safeCampaignId, context.organizationId]
     ),
     query(
-      `SELECT * FROM goodads_ad_accounts
-       WHERE organization_id = $1 AND id = ANY($2::uuid[])`,
+      `SELECT account.*,
+         connection.provider AS connection_provider,
+         connection.status AS connection_status,
+         connection.scopes AS connection_scopes,
+         connection.metadata AS connection_metadata,
+         connection.token_expires_at AS connection_token_expires_at,
+         connection.refresh_token_ciphertext IS NOT NULL AS connection_refreshable
+       FROM goodads_ad_accounts account
+       JOIN goodads_social_connections connection ON connection.id = account.connection_id
+       WHERE account.organization_id = $1 AND account.id = ANY($2::uuid[])`,
       [context.organizationId, accountIds]
     ),
     query(
@@ -2243,8 +2310,17 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   const campaign = campaignResult.rows[0];
   if (!campaign) throw adsError("Campaign was not found.", 404, "GOODADS_CAMPAIGN_NOT_FOUND");
   const accountResult = await query(
-    `SELECT * FROM goodads_ad_accounts
-     WHERE organization_id = $1 AND id = ANY($2::uuid[]) AND status = 'verified'`,
+    `SELECT account.*,
+       connection.provider AS connection_provider,
+       connection.status AS connection_status,
+       connection.scopes AS connection_scopes,
+       connection.metadata AS connection_metadata,
+       connection.token_expires_at AS connection_token_expires_at,
+       connection.refresh_token_ciphertext IS NOT NULL AS connection_refreshable
+     FROM goodads_ad_accounts account
+     JOIN goodads_social_connections connection ON connection.id = account.connection_id
+     WHERE account.organization_id = $1 AND account.id = ANY($2::uuid[])
+       AND account.status = 'verified'`,
     [context.organizationId, accountIds]
   );
   if (accountResult.rows.length !== accountIds.length) {
@@ -2267,6 +2343,7 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   const hash = snapshotHash(snapshot);
   const accounts = [...accountResult.rows].sort((left, right) => String(left.id).localeCompare(String(right.id)));
   for (const account of accounts) {
+    validateAdAccountConnection(account);
     const availability = providerAvailability(account.provider);
     if (!availability.available) {
       throw adsError(`${availability.name} is not fully configured in GoodBase.`, 503, "GOODADS_AD_PROVIDER_NOT_CONFIGURED");
@@ -5944,6 +6021,7 @@ function capabilities() {
       executionTimeRevalidation: true,
       providerIdentityRoutingValidated: true,
       providerGrantedScopesRevalidatedAtExecution: true,
+      launchPreflightConnectionRevalidation: true,
       objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
       emergencyPauseAll: true,
@@ -6021,6 +6099,7 @@ module.exports = {
     nativeAdapter,
     bindCreateOperationSnapshot,
     providerConnectionScopes,
+    validateAdAccountConnection,
     operationProviderBindings,
     validateOperationConnection,
     snapshotHash,
