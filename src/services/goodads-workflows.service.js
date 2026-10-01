@@ -395,7 +395,7 @@ function normalizeApprovalPayload(payload) {
   const name = boundedText(data.name || data.title, 240);
   if (!name) throw workflowError("Approval request name is required.");
   const reviewType = boundedText(data.reviewType || "publishing", 40).toLowerCase();
-  if (!["creative", "copy", "brand", "compliance", "budget", "publishing"].includes(reviewType)) {
+  if (!["creative", "copy", "brand", "compliance", "budget", "publishing", "paid_campaign_activation"].includes(reviewType)) {
     throw workflowError("Unsupported approval review type.");
   }
   const priority = boundedText(data.priority || "normal", 20).toLowerCase();
