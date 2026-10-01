@@ -217,7 +217,9 @@ test("temporary OAuth refresh failures preserve the authorized connection", asyn
 
     await assert.rejects(
       social.accessTokenForConnection(current),
-      (error) => error.code === "GOODADS_TOKEN_REFRESH_TEMPORARY" && error.statusCode === 503
+      (error) => error.code === "GOODADS_TOKEN_REFRESH_TEMPORARY"
+        && error.statusCode === 503
+        && error.retryable === true
     );
     assert.equal(current.status, "connected");
     assert.equal(queries.some((sql) => /status = 'expired'/.test(sql)), false);

@@ -4879,9 +4879,73 @@ function validateCreateExecution(row) {
   });
 }
 
+function validateActivationExecution(row) {
+  if (row.operation_type !== "activate") return;
+  const availability = providerAvailability(row.provider);
+  if (!availability.available) {
+    throw adsError(
+      `${availability.name} is no longer fully configured in GoodBase.`,
+      503,
+      "GOODADS_AD_PROVIDER_NOT_CONFIGURED"
+    );
+  }
+  if (row.account_status !== "verified") {
+    throw adsError(
+      "The provider ad account is no longer verified for activation.",
+      409,
+      "GOODADS_AD_ACCOUNT_NOT_VERIFIED"
+    );
+  }
+  if (row.connection_status !== "connected") {
+    throw adsError(
+      "The provider authorization is no longer connected.",
+      409,
+      "GOODADS_CONNECTION_EXPIRED"
+    );
+  }
+  if (row.status !== "paused") {
+    throw adsError(
+      "The provider campaign is no longer paused and eligible for activation.",
+      409,
+      "GOODADS_AD_CAMPAIGN_NOT_PAUSED"
+    );
+  }
+  const currentSnapshot = {
+    id: row.campaign_id,
+    version: Number(row.current_version || 1),
+    name: boundedText(row.campaign_name, 240),
+    status: row.campaign_status,
+    data: row.campaign_data || {},
+  };
+  if (snapshotHash(currentSnapshot) !== row.snapshot_hash) {
+    throw adsError(
+      "The campaign changed before activation executed. Create a fresh paused provider campaign and approval.",
+      409,
+      "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
+    );
+  }
+  const approvalId = boundedText(row.operation_payload?.approvalId, 64);
+  const approvalData = row.approval_data || {};
+  if (
+    !UUID_PATTERN.test(approvalId)
+    || row.approval_status !== "approved"
+    || approvalData.reviewType !== "paid_campaign_activation"
+    || approvalData.campaignId !== row.campaign_id
+    || approvalData.providerCampaignId !== row.provider_campaign_record_id
+    || approvalData.snapshotHash !== row.snapshot_hash
+  ) {
+    throw adsError(
+      "The activation approval is no longer valid for this exact campaign and provider account.",
+      409,
+      "GOODADS_AD_ACTIVATION_APPROVAL_MISMATCH"
+    );
+  }
+}
+
 async function executeOperation(row) {
   const executionRow = bindCreateOperationSnapshot(row);
   validateCreateExecution(executionRow);
+  validateActivationExecution(executionRow);
   const adapter = nativeAdapter(executionRow.provider);
   const accessToken = executionRow.provider === "x"
     ? await social.oauth1CredentialsForConnection(executionRow)
@@ -4995,12 +5059,19 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
          account.provider_account_id, account.status AS account_status, account.currency AS account_currency,
          account.timezone AS account_timezone, account.metadata AS account_metadata,
          connection.*,
-         campaign.name AS campaign_name, campaign.data AS campaign_data
+         connection.status AS connection_status, provider_campaign.status AS status,
+         campaign.name AS campaign_name, campaign.status AS campaign_status,
+         campaign.version AS current_version, campaign.data AS campaign_data,
+         approval.status AS approval_status, approval.data AS approval_data
        FROM goodads_ad_operations operation
        JOIN goodads_provider_campaigns provider_campaign ON provider_campaign.id = operation.provider_campaign_id
        JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
        JOIN goodads_social_connections connection ON connection.id = account.connection_id
        JOIN goodads_resources campaign ON campaign.id = provider_campaign.campaign_id
+       LEFT JOIN goodads_resources approval
+         ON approval.id::text = operation.payload->>'approvalId'
+         AND approval.organization_id = provider_campaign.organization_id
+         AND approval.resource_type = 'approvals'
        WHERE operation.id = $1::uuid`,
       [operation.id]
     );
@@ -5138,6 +5209,7 @@ module.exports = {
     validateCampaignForAccount,
     validateProviderObjective,
     validateCreateExecution,
+    validateActivationExecution,
     campaignPreflightReport,
     campaignScheduleBounds,
   },

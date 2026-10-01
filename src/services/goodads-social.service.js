@@ -147,10 +147,11 @@ const PROVIDER_PUBLISH_CAPABILITIES = Object.freeze({
   reddit: { text: true, media: false, video: false, immediate: true, scheduling: false, paidAds: false },
 });
 
-function socialError(message, statusCode = 400, code = "GOODADS_SOCIAL_ERROR") {
+function socialError(message, statusCode = 400, code = "GOODADS_SOCIAL_ERROR", retryable = false) {
   const error = new Error(message);
   error.statusCode = statusCode;
   error.code = code;
+  error.retryable = retryable;
   return error;
 }
 
@@ -1446,7 +1447,12 @@ async function accessTokenForConnection(connection) {
         signal: AbortSignal.timeout(15000),
       });
     } catch {
-      throw socialError(`${config.label} authorization refresh is temporarily unavailable.`, 503, "GOODADS_TOKEN_REFRESH_TEMPORARY");
+      throw socialError(
+        `${config.label} authorization refresh is temporarily unavailable.`,
+        503,
+        "GOODADS_TOKEN_REFRESH_TEMPORARY",
+        true
+      );
     }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.access_token) {
@@ -1469,7 +1475,8 @@ async function accessTokenForConnection(connection) {
       throw socialError(
         `${config.label} authorization refresh is temporarily unavailable.`,
         response.status === 429 ? 429 : 503,
-        "GOODADS_TOKEN_REFRESH_TEMPORARY"
+        "GOODADS_TOKEN_REFRESH_TEMPORARY",
+        true
       );
     }
 

@@ -87,6 +87,66 @@ test("provider objective contracts fail closed before an unsupported bidding pat
   );
 });
 
+test("queued paid activation revalidates the live snapshot, approval, account, and connection", () => {
+  const names = ["GOODADS_FACEBOOK_CLIENT_ID", "GOODADS_FACEBOOK_CLIENT_SECRET"];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      GOODADS_FACEBOOK_CLIENT_ID: "test-client",
+      GOODADS_FACEBOOK_CLIENT_SECRET: "test-secret",
+    });
+    const snapshot = {
+      id: "60fa3a7d-b4d5-4ff1-91f4-a5b4eaa72902",
+      version: 3,
+      name: "GoodOS launch",
+      status: "ready",
+      data: { objective: "traffic", dailyBudget: 25 },
+    };
+    const snapshotHash = ads._test.snapshotHash(snapshot);
+    const row = {
+      operation_type: "activate",
+      operation_payload: { approvalId: "2ef6b324-78c5-46a2-a598-00920b1eb8a6" },
+      provider: "meta",
+      provider_campaign_record_id: "50f11ad4-5897-47b3-ab07-c1359989f379",
+      campaign_id: snapshot.id,
+      campaign_name: snapshot.name,
+      campaign_status: snapshot.status,
+      campaign_data: snapshot.data,
+      current_version: snapshot.version,
+      snapshot_hash: snapshotHash,
+      status: "paused",
+      account_status: "verified",
+      connection_status: "connected",
+      approval_status: "approved",
+      approval_data: {
+        reviewType: "paid_campaign_activation",
+        campaignId: snapshot.id,
+        providerCampaignId: "50f11ad4-5897-47b3-ab07-c1359989f379",
+        snapshotHash,
+      },
+    };
+
+    assert.doesNotThrow(() => ads._test.validateActivationExecution(row));
+    assert.throws(
+      () => ads._test.validateActivationExecution({ ...row, current_version: 4 }),
+      (error) => error.code === "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
+    );
+    assert.throws(
+      () => ads._test.validateActivationExecution({ ...row, approval_status: "rejected" }),
+      (error) => error.code === "GOODADS_AD_ACTIVATION_APPROVAL_MISMATCH"
+    );
+    assert.throws(
+      () => ads._test.validateActivationExecution({ ...row, connection_status: "expired" }),
+      (error) => error.code === "GOODADS_CONNECTION_EXPIRED"
+    );
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
 test("X Ads delivery requires its own approved OAuth 1.0a app", () => {
   const names = ["GOODADS_X_ADS_CONSUMER_KEY", "GOODADS_X_ADS_CONSUMER_SECRET"];
   const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
