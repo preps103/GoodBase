@@ -348,10 +348,54 @@ test("GoodBase self-deployment recovery is lock-protected and owner-controlled",
   assert.match(page, /isTemporaryGoodBaseRecoverySite\(site\)/);
   assert.match(
     restart,
-    /PROCESSES = \["goodbase-worker", "goodbase-api-ha", "goodbase-api"\]/
+    /control\("restart", "goodbase-worker"\)/
   );
+  assert.match(restart, /127\.0\.0\.1:8001\/api\/health\/ready/);
+  assert.match(restart, /127\.0\.0\.1:8002\/api\/health\/ready/);
+  assert.match(restart, /await wait\("goodbase-api-ha"/);
+  assert.match(restart, /await wait\("goodbase-api"/);
   assert.match(control, /GOODBASE_REPOSITORY="\/var\/www\/GoodBase"/);
   assert.match(control, /git -c safe\.directory="\$\{GOODBASE_REPOSITORY\}"/);
   assert.match(control, /GOODBASE_RELEASE_COMMIT="\$\{goodbase_release_commit\}"/);
   assert.match(control, /\^\[0-9a-f\]\{40\}\$/);
+});
+
+test("GoodBase restarts APIs in a readiness-gated rolling sequence", async () => {
+  const { READY_ENDPOINTS, restartGoodBaseServices } = require(
+    path.join(__dirname, "..", "scripts", "restart-goodbase-services.js")
+  );
+  const events = [];
+
+  await restartGoodBaseServices({
+    control: async (...args) => events.push(["control", ...args]),
+    sleep: async () => events.push(["sleep"]),
+    wait: async (...args) => events.push(["wait", ...args]),
+  });
+
+  assert.deepEqual(events, [
+    ["sleep"],
+    ["control", "restart", "goodbase-worker"],
+    ["sleep"],
+    ["wait", "goodbase-api", READY_ENDPOINTS["goodbase-api"]],
+    ["control", "restart", "goodbase-api-ha"],
+    ["wait", "goodbase-api-ha", READY_ENDPOINTS["goodbase-api-ha"]],
+    ["control", "restart", "goodbase-api"],
+    ["wait", "goodbase-api", READY_ENDPOINTS["goodbase-api"]],
+    ["control", "save"],
+  ]);
+});
+
+test("GoodBase restart readiness fails closed on timeout", async () => {
+  const { waitForReadiness } = require(
+    path.join(__dirname, "..", "scripts", "restart-goodbase-services.js")
+  );
+
+  await assert.rejects(
+    waitForReadiness("goodbase-api-ha", "http://127.0.0.1:8002/api/health/ready", {
+      probe: async () => false,
+      sleep: async () => {},
+      timeoutMs: 0,
+    }),
+    /did not become ready/
+  );
 });
