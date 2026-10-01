@@ -1535,6 +1535,42 @@ test("workspace emergency pause blocks activation and durably queues provider pa
   assert.equal(ads.capabilities().paidAdvertising.emergencyPauseAll, true);
 });
 
+test("automatic provider reconciliation pauses unexpected activation drift", () => {
+  assert.equal(ads._test.shouldPauseUnexpectedActivation({
+    operationType: "sync",
+    providerStatus: "active",
+    storedStatus: "paused",
+  }), true);
+  assert.equal(ads._test.shouldPauseUnexpectedActivation({
+    operationType: "sync",
+    providerStatus: "active",
+    storedStatus: "active",
+  }), false);
+  assert.equal(ads._test.shouldPauseUnexpectedActivation({
+    operationType: "sync",
+    providerStatus: "active",
+    storedStatus: "paused",
+    activationPending: true,
+  }), false);
+  assert.equal(ads._test.shouldPauseUnexpectedActivation({
+    operationType: "pause",
+    providerStatus: "active",
+    storedStatus: "paused",
+  }), false);
+
+  const source = fs.readFileSync(
+    path.join(__dirname, "../src/services/goodads-ads.service.js"),
+    "utf8"
+  );
+  assert.match(source, /automatic-reconcile:/);
+  assert.match(source, /unexpected_provider_activation/);
+  assert.match(source, /automatic-drift-pause:/);
+  assert.match(source, /row\.operation_type === "sync" \|\| retry \? row\.status : "failed"/);
+  assert.equal(ads.capabilities().paidAdvertising.automaticStateReconciliation, true);
+  assert.equal(ads.capabilities().paidAdvertising.unexpectedActivationAutoPause, true);
+  assert.equal(ads.capabilities().paidAdvertising.providerReconciliationMinutes, 5);
+});
+
 test("paid campaign migration installs verified accounts, durable operations, and worker dispatch", () => {
   const migration = fs.readFileSync(
     path.join(__dirname, "../migrations/20260729_goodads_paid_campaigns.sql"),

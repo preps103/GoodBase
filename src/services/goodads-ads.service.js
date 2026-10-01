@@ -22,6 +22,7 @@ const MAX_ACCOUNTS_PER_LAUNCH = 10;
 const DEFAULT_MAX_CAMPAIGN_ACCOUNTS = 10;
 const DEFAULT_MAX_COMBINED_DAILY_BUDGET = 1000;
 const DEFAULT_MAX_PLANNING_BUDGET = 30000;
+const DEFAULT_PROVIDER_RECONCILIATION_MINUTES = 5;
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -5346,38 +5347,183 @@ async function executeOperation(row) {
   return adapter.sync(executionRow, accessToken);
 }
 
+function providerReconciliationMinutes() {
+  return Math.min(
+    Math.max(Math.round(positiveEnvironmentNumber(
+      "GOODADS_PROVIDER_RECONCILIATION_MINUTES",
+      DEFAULT_PROVIDER_RECONCILIATION_MINUTES
+    )), 1),
+    60
+  );
+}
+
+function shouldPauseUnexpectedActivation({ operationType, providerStatus, storedStatus, activationPending = false }) {
+  return operationType === "sync"
+    && providerStatus === "active"
+    && storedStatus !== "active"
+    && storedStatus !== "activating"
+    && activationPending !== true;
+}
+
+async function queueStaleProviderReconciliations(limit = 25) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const intervalMinutes = providerReconciliationMinutes();
+  const queued = await query(
+    `WITH candidates AS (
+       SELECT provider_campaign.id, provider_campaign.organization_id
+       FROM goodads_provider_campaigns provider_campaign
+       JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
+       JOIN goodads_social_connections connection ON connection.id = account.connection_id
+       WHERE provider_campaign.provider_campaign_id IS NOT NULL
+         AND provider_campaign.status <> 'archived'
+         AND account.status = 'verified'
+         AND connection.status = 'connected'
+         AND (
+           provider_campaign.last_synced_at IS NULL
+           OR provider_campaign.last_synced_at < NOW() - ($2::text || ' minutes')::interval
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM goodads_ad_operations open_operation
+           WHERE open_operation.provider_campaign_id = provider_campaign.id
+             AND open_operation.status IN ('queued','processing','retrying')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM goodads_ad_operations recent_failed_sync
+           WHERE recent_failed_sync.provider_campaign_id = provider_campaign.id
+             AND recent_failed_sync.operation_type = 'sync'
+             AND recent_failed_sync.status IN ('failed','dead_letter')
+             AND recent_failed_sync.updated_at > NOW() - INTERVAL '1 hour'
+         )
+       ORDER BY provider_campaign.last_synced_at ASC NULLS FIRST, provider_campaign.created_at ASC
+       FOR UPDATE OF provider_campaign SKIP LOCKED
+       LIMIT $1
+     )
+     INSERT INTO goodads_ad_operations (
+       organization_id, provider_campaign_id, requested_by_user_id,
+       operation_type, idempotency_key, payload
+     )
+     SELECT candidates.organization_id, candidates.id, NULL, 'sync',
+       'automatic-reconcile:' || candidates.id::text || ':'
+         || FLOOR(EXTRACT(EPOCH FROM NOW()) / ($2 * 60))::bigint::text,
+       jsonb_build_object('automaticReconciliation', TRUE, 'intervalMinutes', $2)
+     FROM candidates
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
+    [safeLimit, intervalMinutes]
+  );
+  return queued.rows.length;
+}
+
 async function processOperation(row) {
   try {
     const result = await executeOperation(row);
-    const status = result.status || "paused";
-    await query(
-      `UPDATE goodads_provider_campaigns
-       SET provider_campaign_id = COALESCE($2, provider_campaign_id),
-           provider_resource_name = COALESCE($3, provider_resource_name),
-           provider_budget_id = COALESCE($4, provider_budget_id),
-           status = $5,
-           receipt = COALESCE($6::jsonb, receipt),
-           last_error = NULL,
-           last_synced_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1::uuid`,
-      [
-        row.provider_campaign_record_id,
-        result.providerCampaignId || null,
-        result.providerResourceName || null,
-        result.providerBudgetId || null,
-        status,
-        JSON.stringify(result.receipt || {}),
-      ]
-    );
-    await query(
-      `UPDATE goodads_ad_operations
-       SET status = 'completed', receipt = $2::jsonb, last_error = NULL,
-           completed_at = NOW(), locked_by = NULL, locked_until = NULL, updated_at = NOW()
-       WHERE id = $1::uuid`,
-      [row.operation_id, JSON.stringify(result.receipt || result)]
-    );
-    return { id: row.operation_id, status: "completed" };
+    const providerStatus = result.status || "paused";
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const currentResult = await client.query(
+        `SELECT status
+         FROM goodads_provider_campaigns
+         WHERE id = $1::uuid
+         FOR UPDATE`,
+        [row.provider_campaign_record_id]
+      );
+      const currentStatus = currentResult.rows[0]?.status || row.status;
+      const mutationResult = await client.query(
+        `SELECT operation_type
+         FROM goodads_ad_operations
+         WHERE provider_campaign_id = $1::uuid
+           AND id <> $2::uuid
+           AND operation_type IN ('create','pause','activate','archive')
+           AND status IN ('queued','processing','retrying')
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [row.provider_campaign_record_id, row.operation_id]
+      );
+      const pendingMutation = mutationResult.rows[0]?.operation_type || null;
+      const unexpectedActivation = shouldPauseUnexpectedActivation({
+        operationType: row.operation_type,
+        providerStatus,
+        storedStatus: currentStatus,
+        activationPending: pendingMutation === "activate",
+      });
+      let automaticPauseQueued = false;
+      let pauseSecured = false;
+      let receipt = result.receipt || {};
+      let status = providerStatus;
+      if (unexpectedActivation) {
+        const detectedAt = new Date().toISOString();
+        pauseSecured = pendingMutation === "pause";
+        if (!pendingMutation) {
+          const pause = await client.query(
+            `INSERT INTO goodads_ad_operations (
+               organization_id, provider_campaign_id, requested_by_user_id,
+               operation_type, idempotency_key, payload
+             ) VALUES ($1, $2::uuid, NULL, 'pause', $3, $4::jsonb)
+             ON CONFLICT DO NOTHING
+             RETURNING id`,
+            [
+              row.organization_id,
+              row.provider_campaign_record_id,
+              `automatic-drift-pause:${row.provider_campaign_record_id}:${Math.floor(Date.now() / 60000)}`,
+              JSON.stringify({
+                automaticSafetyPause: true,
+                reason: "unexpected_provider_activation",
+                detectedAt,
+                priorStatus: currentStatus,
+              }),
+            ]
+          );
+          automaticPauseQueued = pause.rows.length > 0;
+          pauseSecured = automaticPauseQueued;
+        }
+        receipt = {
+          ...receipt,
+          safetyDrift: {
+            type: "unexpected_provider_activation",
+            detectedAt,
+            priorStatus: currentStatus,
+            automaticPauseQueued,
+            pauseSecured,
+          },
+        };
+        if (pauseSecured) status = "pausing";
+      }
+      await client.query(
+        `UPDATE goodads_provider_campaigns
+         SET provider_campaign_id = COALESCE($2, provider_campaign_id),
+             provider_resource_name = COALESCE($3, provider_resource_name),
+             provider_budget_id = COALESCE($4, provider_budget_id),
+             status = $5,
+             receipt = COALESCE($6::jsonb, receipt),
+             last_error = NULL,
+             last_synced_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1::uuid`,
+        [
+          row.provider_campaign_record_id,
+          result.providerCampaignId || null,
+          result.providerResourceName || null,
+          result.providerBudgetId || null,
+          status,
+          JSON.stringify(receipt),
+        ]
+      );
+      await client.query(
+        `UPDATE goodads_ad_operations
+         SET status = 'completed', receipt = $2::jsonb, last_error = NULL,
+             completed_at = NOW(), locked_by = NULL, locked_until = NULL, updated_at = NOW()
+         WHERE id = $1::uuid`,
+        [row.operation_id, JSON.stringify(receipt || result)]
+      );
+      await client.query("COMMIT");
+      return { id: row.operation_id, status: "completed", automaticPauseQueued };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     const attempts = Number(row.attempts || 1);
     const emergencyPause = row.operation_type === "activate"
@@ -5401,7 +5547,7 @@ async function processOperation(row) {
        WHERE id = $1::uuid`,
       [
         row.provider_campaign_record_id,
-        emergencyPause ? "pausing" : retry ? row.status : "failed",
+        emergencyPause ? "pausing" : row.operation_type === "sync" || retry ? row.status : "failed",
         boundedText(error.message, 2000),
       ]
     );
@@ -5434,6 +5580,7 @@ async function processOperation(row) {
 
 async function processDueOperations(limit = 10, workerId = `goodads-ads-${process.pid}`) {
   const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 25);
+  const reconciliationsQueued = await queueStaleProviderReconciliations(Math.max(safeLimit, 25));
   const claimed = await query(
     `WITH due AS (
        SELECT operation.id
@@ -5484,7 +5631,7 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
     );
     if (selected.rows[0]) results.push(await processOperation(selected.rows[0]));
   }
-  return { claimed: claimed.rows.length, results };
+  return { reconciliationsQueued, claimed: claimed.rows.length, results };
 }
 
 async function retryOperation({ id, context }) {
@@ -5551,6 +5698,9 @@ function capabilities() {
       objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
       emergencyPauseAll: true,
+      automaticStateReconciliation: true,
+      unexpectedActivationAutoPause: true,
+      providerReconciliationMinutes: providerReconciliationMinutes(),
       campaignWideExposureLimits: true,
       maximumAccountsPerLaunch: MAX_ACCOUNTS_PER_LAUNCH,
       exposureLimits: campaignExposurePolicy(),
@@ -5622,6 +5772,8 @@ module.exports = {
     validateProviderObjective,
     validateCreateExecution,
     validateActivationExecution,
+    providerReconciliationMinutes,
+    shouldPauseUnexpectedActivation,
     campaignExposure,
     campaignExposureIssues,
     campaignExposurePolicy,
