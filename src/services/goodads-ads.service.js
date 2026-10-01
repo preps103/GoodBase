@@ -1045,8 +1045,34 @@ async function discoverXAccounts(credentials) {
   return { accounts, pages: [] };
 }
 
+function providerConnectionScopes(adProvider, connectionProvider) {
+  const provider = canonicalProvider(adProvider);
+  const connection = boundedText(connectionProvider, 40).toLowerCase();
+  if (!PROVIDERS[provider].connectionProviders.includes(connection)) {
+    throw adsError(
+      "The provider authorization does not match this paid-ad network.",
+      409,
+      "GOODADS_AD_CONNECTION_PROVIDER_MISMATCH"
+    );
+  }
+  let configuredScopes = [];
+  try {
+    configuredScopes = social.providerConfig(connection).scopes;
+  } catch {
+    throw adsError(
+      "The provider authorization type is not supported for this paid-ad network.",
+      409,
+      "GOODADS_AD_CONNECTION_PROVIDER_MISMATCH"
+    );
+  }
+  return [...new Set([
+    ...configuredScopes,
+    ...(PROVIDERS[provider].requiredOAuthScopes || []),
+  ])];
+}
+
 function requireConnectionScopes(connection, requiredScopes = []) {
-  if (requiredScopes.length && !connection.metadata?.scopeVerification?.verifiedAt) {
+  if (!connection.metadata?.scopeVerification?.verifiedAt) {
     throw adsError(
       "Reconnect this account so GoodAds can verify provider-granted advertising permissions.",
       409,
@@ -1081,7 +1107,7 @@ async function discoverAccounts({ provider, connectionId, context, userId }) {
     connectionId,
     allowedProviders: PROVIDERS[id].connectionProviders,
   });
-  requireConnectionScopes(connection, PROVIDERS[id].requiredOAuthScopes || []);
+  requireConnectionScopes(connection, providerConnectionScopes(id, connection.provider));
   const accessToken = id === "x"
     ? await social.oauth1CredentialsForConnection(connection)
     : await social.accessTokenForConnection(connection);
@@ -5379,9 +5405,32 @@ function bindCreateOperationSnapshot(row) {
   };
 }
 
+function operationProviderBindings(row) {
+  const adProvider = canonicalProvider(row.ad_provider || row.provider);
+  const connectionProvider = boundedText(
+    row.connection_provider || (row.ad_provider ? row.provider : ""),
+    40
+  ).toLowerCase();
+  const requiredScopes = providerConnectionScopes(adProvider, connectionProvider);
+  return { adProvider, connectionProvider, requiredScopes };
+}
+
+function validateOperationConnection(row, bindings = operationProviderBindings(row)) {
+  if (row.connection_status !== "connected") {
+    throw adsError(
+      "The provider authorization is no longer connected.",
+      409,
+      "GOODADS_CONNECTION_EXPIRED"
+    );
+  }
+  requireConnectionScopes(row, bindings.requiredScopes);
+  return bindings;
+}
+
 function validateCreateExecution(row) {
   if (row.operation_type !== "create") return;
-  const availability = providerAvailability(row.provider);
+  const bindings = validateOperationConnection(row);
+  const availability = providerAvailability(bindings.adProvider);
   if (!availability.available) {
     throw adsError(
       `${availability.name} is no longer fully configured in GoodBase.`,
@@ -5396,7 +5445,7 @@ function validateCreateExecution(row) {
     status: row.campaign_status,
     data: row.campaign_data,
   }, {
-    provider: row.provider,
+    provider: bindings.adProvider,
     status: row.account_status,
     currency: row.account_currency,
     timezone: row.account_timezone,
@@ -5413,7 +5462,8 @@ function validateActivationExecution(row) {
       "GOODADS_EMERGENCY_PAUSE_ACTIVE"
     );
   }
-  const availability = providerAvailability(row.provider);
+  const bindings = operationProviderBindings(row);
+  const availability = providerAvailability(bindings.adProvider);
   if (!availability.available) {
     throw adsError(
       `${availability.name} is no longer fully configured in GoodBase.`,
@@ -5428,13 +5478,7 @@ function validateActivationExecution(row) {
       "GOODADS_AD_ACCOUNT_NOT_VERIFIED"
     );
   }
-  if (row.connection_status !== "connected") {
-    throw adsError(
-      "The provider authorization is no longer connected.",
-      409,
-      "GOODADS_CONNECTION_EXPIRED"
-    );
-  }
+  validateOperationConnection(row, bindings);
   if (row.status !== "paused") {
     throw adsError(
       "The provider campaign is no longer paused and eligible for activation.",
@@ -5456,7 +5500,7 @@ function validateActivationExecution(row) {
       "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
     );
   }
-  if (row.provider === "linkedin") linkedInPolicyCompliance(currentSnapshot.data);
+  if (bindings.adProvider === "linkedin") linkedInPolicyCompliance(currentSnapshot.data);
   const approvalId = boundedText(row.operation_payload?.approvalId, 64);
   const approvalData = row.approval_data || {};
   if (
@@ -5500,10 +5544,12 @@ async function executeOperation(row) {
       campaignData: executionRow.campaign_data,
     });
   }
-  const adapter = nativeAdapter(executionRow.provider);
-  const accessToken = executionRow.provider === "x"
-    ? await social.oauth1CredentialsForConnection(executionRow)
-    : await social.accessTokenForConnection(executionRow);
+  const bindings = operationProviderBindings(executionRow);
+  const adapter = nativeAdapter(bindings.adProvider);
+  const connection = { ...executionRow, provider: bindings.connectionProvider };
+  const accessToken = bindings.connectionProvider === "x_ads"
+    ? await social.oauth1CredentialsForConnection(connection)
+    : await social.accessTokenForConnection(connection);
   if (executionRow.operation_type === "create") {
     return adapter.create(executionRow, accessToken);
   }
@@ -5803,11 +5849,12 @@ async function processDueOperations(limit = 10, workerId = `goodads-ads-${proces
          provider_campaign.id AS provider_campaign_record_id, provider_campaign.campaign_id,
          provider_campaign.provider_campaign_id, provider_campaign.provider_resource_name,
          provider_campaign.provider_budget_id, provider_campaign.status,
-         provider_campaign.receipt, provider_campaign.provider, provider_campaign.snapshot_hash,
+         provider_campaign.receipt, provider_campaign.provider AS ad_provider, provider_campaign.snapshot_hash,
          account.provider_account_id, account.status AS account_status, account.currency AS account_currency,
          account.timezone AS account_timezone, account.metadata AS account_metadata,
          connection.*,
-         connection.status AS connection_status, provider_campaign.status AS status,
+         connection.provider AS connection_provider, connection.status AS connection_status,
+         provider_campaign.status AS status,
          campaign.name AS campaign_name, campaign.status AS campaign_status,
          campaign.version AS current_version, campaign.data AS campaign_data,
          approval.status AS approval_status, approval.data AS approval_data
@@ -5895,6 +5942,8 @@ function capabilities() {
       boundedRetries: true,
       immutableLaunchSnapshots: true,
       executionTimeRevalidation: true,
+      providerIdentityRoutingValidated: true,
+      providerGrantedScopesRevalidatedAtExecution: true,
       objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
       emergencyPauseAll: true,
@@ -5971,6 +6020,9 @@ module.exports = {
     xTweetParameters,
     nativeAdapter,
     bindCreateOperationSnapshot,
+    providerConnectionScopes,
+    operationProviderBindings,
+    validateOperationConnection,
     snapshotHash,
     validateCampaignForAccount,
     validateProviderObjective,
