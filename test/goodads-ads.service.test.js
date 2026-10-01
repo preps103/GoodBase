@@ -128,6 +128,8 @@ test("queued paid activation revalidates the live snapshot, approval, account, a
         campaignId: snapshot.id,
         providerCampaignId: "50f11ad4-5897-47b3-ab07-c1359989f379",
         snapshotHash,
+        requestedByUserId: "31b71666-f376-4233-be5e-8282a61c0d40",
+        decidedByUserId: "41b71666-f376-4233-be5e-8282a61c0d40",
         expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       },
     };
@@ -152,6 +154,16 @@ test("queued paid activation revalidates the live snapshot, approval, account, a
       }),
       (error) => error.code === "GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED"
     );
+    assert.throws(
+      () => ads._test.validateActivationExecution({
+        ...row,
+        approval_data: {
+          ...row.approval_data,
+          decidedByUserId: row.approval_data.requestedByUserId,
+        },
+      }),
+      (error) => error.code === "GOODADS_AD_ACTIVATION_APPROVER_INVALID"
+    );
   } finally {
     for (const name of names) {
       if (saved[name] === undefined) delete process.env[name];
@@ -175,6 +187,11 @@ test("paid activation approvals are system-generated and expire after a bounded 
     assert.equal(ads.capabilities().paidAdvertising.activationApprovalExpires, true);
     assert.equal(ads.capabilities().paidAdvertising.activationApprovalValidityMinutes, 1440);
     assert.equal(ads.capabilities().paidAdvertising.paidActivationApprovalsSystemGenerated, true);
+    assert.equal(ads.capabilities().paidAdvertising.paidActivationApprovalsRequireIndependentReviewer, true);
+    assert.match(
+      fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8"),
+      /requestedByUserId: userId/
+    );
     const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
     assert.match(source, /allowPaidCampaignActivation: true/);
     assert.equal((source.match(/GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED/g) || []).length, 2);

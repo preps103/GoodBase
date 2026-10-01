@@ -1568,6 +1568,14 @@ function activationApprovalIsFresh(approvalData, now = new Date()) {
   return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
 }
 
+function activationApprovalHasIndependentDecision(approvalData) {
+  const requesterUserId = boundedText(approvalData?.requestedByUserId, 80).toLowerCase();
+  const decidedByUserId = boundedText(approvalData?.decidedByUserId, 80).toLowerCase();
+  return UUID_PATTERN.test(requesterUserId)
+    && UUID_PATTERN.test(decidedByUserId)
+    && requesterUserId !== decidedByUserId;
+}
+
 function campaignExposureIssues(exposure, policy = campaignExposurePolicy()) {
   const issues = [];
   if (exposure.accountCount > policy.maximumAccountsPerCampaign) {
@@ -2465,6 +2473,13 @@ async function queueLifecycleOperation({
         "GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED"
       );
     }
+    if (!activationApprovalHasIndependentDecision(approvalData)) {
+      throw adsError(
+        "Paid campaign activation requires approval from a different manager than the requester.",
+        409,
+        "GOODADS_AD_ACTIVATION_APPROVER_INVALID"
+      );
+    }
   }
   const client = await pool.connect();
   try {
@@ -2712,6 +2727,7 @@ async function requestActivationApproval({
       startDate: campaign.campaign_data?.startDate,
       endDate: campaign.campaign_data?.endDate,
       requestedAt: approvalTiming.requestedAt,
+      requestedByUserId: userId,
       expiresAt: approvalTiming.expiresAt,
       dueAt: approvalTiming.expiresAt,
     },
@@ -5452,6 +5468,13 @@ function validateActivationExecution(row) {
       "GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED"
     );
   }
+  if (!activationApprovalHasIndependentDecision(approvalData)) {
+    throw adsError(
+      "The activation approval was not issued by an independent manager.",
+      409,
+      "GOODADS_AD_ACTIVATION_APPROVER_INVALID"
+    );
+  }
 }
 
 async function executeOperation(row) {
@@ -5853,6 +5876,7 @@ function capabilities() {
       activationApprovalExpires: true,
       activationApprovalValidityMinutes: activationApprovalValidityMinutes(),
       paidActivationApprovalsSystemGenerated: true,
+      paidActivationApprovalsRequireIndependentReviewer: true,
       durableOperations: true,
       boundedRetries: true,
       immutableLaunchSnapshots: true,
@@ -5952,5 +5976,6 @@ module.exports = {
     activationApprovalValidityMinutes,
     activationApprovalTiming,
     activationApprovalIsFresh,
+    activationApprovalHasIndependentDecision,
   },
 };

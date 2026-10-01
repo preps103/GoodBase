@@ -451,6 +451,14 @@ function paidActivationApprovalIsFresh(approval, now = new Date()) {
   return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
 }
 
+function paidActivationApprovalCanBeApprovedBy(approval, userId) {
+  const requesterUserId = boundedText(approval?.requestedByUserId, 80).toLowerCase();
+  const approverUserId = boundedText(userId, 80).toLowerCase();
+  return UUID_PATTERN.test(requesterUserId)
+    && UUID_PATTERN.test(approverUserId)
+    && requesterUserId !== approverUserId;
+}
+
 async function saveApproval({
   id = null,
   payload,
@@ -554,6 +562,17 @@ async function decideApproval({ id, decision, note, context, userId }) {
       "This paid campaign activation review expired. Request a fresh review from the paused provider campaign.",
       409,
       "GOODADS_APPROVAL_EXPIRED"
+    );
+  }
+  if (
+    current.reviewType === "paid_campaign_activation"
+    && normalizedDecision === "approved"
+    && !paidActivationApprovalCanBeApprovedBy(current, userId)
+  ) {
+    throw workflowError(
+      "Paid campaign activation must be approved by a different owner, admin, or manager than the requester.",
+      409,
+      "GOODADS_APPROVAL_SEPARATION_REQUIRED"
     );
   }
   return resources.upsertResource({
@@ -1234,5 +1253,6 @@ module.exports = {
     normalizeAutomationPayload,
     spendGuardDecision,
     paidActivationApprovalIsFresh,
+    paidActivationApprovalCanBeApprovedBy,
   },
 };
