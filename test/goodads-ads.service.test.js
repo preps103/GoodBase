@@ -188,6 +188,7 @@ test("paid activation approvals are system-generated and expire after a bounded 
     assert.equal(ads.capabilities().paidAdvertising.activationApprovalValidityMinutes, 1440);
     assert.equal(ads.capabilities().paidAdvertising.paidActivationApprovalsSystemGenerated, true);
     assert.equal(ads.capabilities().paidAdvertising.paidActivationApprovalsRequireIndependentReviewer, true);
+    assert.equal(ads.capabilities().paidAdvertising.archivedActivationApprovalsRevoked, true);
     assert.match(
       fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8"),
       /requestedByUserId: userId/
@@ -195,6 +196,7 @@ test("paid activation approvals are system-generated and expire after a bounded 
     const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
     assert.match(source, /allowPaidCampaignActivation: true/);
     assert.equal((source.match(/GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED/g) || []).length, 2);
+    assert.equal((source.match(/approval\.archived_at IS NULL/g) || []).length, 3);
   } finally {
     if (previous === undefined) delete process.env.GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES;
     else process.env.GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES = previous;
