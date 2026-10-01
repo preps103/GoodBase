@@ -445,13 +445,48 @@ function normalizeApprovalPayload(payload) {
   };
 }
 
-async function saveApproval({ id = null, payload, context, userId, idempotencyKey = null }) {
+function paidActivationApprovalIsFresh(approval, now = new Date()) {
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const expiresAtMs = new Date(approval?.expiresAt || "").getTime();
+  return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+}
+
+async function saveApproval({
+  id = null,
+  payload,
+  context,
+  userId,
+  idempotencyKey = null,
+  allowPaidCampaignActivation = false,
+}) {
   requireWrite(context);
   if (id) {
     const current = await resources.getResource({ type: "approvals", id, context });
+    if (current.reviewType === "paid_campaign_activation") {
+      throw workflowError(
+        "Paid campaign activation reviews are generated from the paused provider campaign and cannot be edited.",
+        409,
+        "GOODADS_PAID_ACTIVATION_APPROVAL_PROTECTED"
+      );
+    }
     if (current.status !== "pending") {
       throw workflowError("A decided approval cannot be edited.", 409, "GOODADS_APPROVAL_ALREADY_DECIDED");
     }
+  }
+  const normalized = normalizeApprovalPayload(payload);
+  if (normalized.reviewType === "paid_campaign_activation" && !allowPaidCampaignActivation) {
+    throw workflowError(
+      "Request paid campaign activation review from the paused provider campaign.",
+      409,
+      "GOODADS_PAID_ACTIVATION_APPROVAL_REQUIRED"
+    );
+  }
+  if (normalized.reviewType === "paid_campaign_activation" && !paidActivationApprovalIsFresh(normalized)) {
+    throw workflowError(
+      "Paid campaign activation review requires a future expiration time.",
+      409,
+      "GOODADS_PAID_ACTIVATION_APPROVAL_EXPIRY_INVALID"
+    );
   }
   const requestKey = id
     ? null
@@ -480,7 +515,7 @@ async function saveApproval({ id = null, payload, context, userId, idempotencyKe
       type: "approvals",
       id,
       payload: {
-        ...normalizeApprovalPayload(payload),
+        ...normalized,
         ...(requestKey ? { requestKey } : {}),
       },
       context,
@@ -513,6 +548,13 @@ async function decideApproval({ id, decision, note, context, userId }) {
   if (current.status === normalizedDecision) return current;
   if (current.status !== "pending") {
     throw workflowError("This review already has a final decision.", 409, "GOODADS_APPROVAL_ALREADY_DECIDED");
+  }
+  if (current.reviewType === "paid_campaign_activation" && !paidActivationApprovalIsFresh(current)) {
+    throw workflowError(
+      "This paid campaign activation review expired. Request a fresh review from the paused provider campaign.",
+      409,
+      "GOODADS_APPROVAL_EXPIRED"
+    );
   }
   return resources.upsertResource({
     type: "approvals",
@@ -1191,5 +1233,6 @@ module.exports = {
     normalizeApprovalPayload,
     normalizeAutomationPayload,
     spendGuardDecision,
+    paidActivationApprovalIsFresh,
   },
 };

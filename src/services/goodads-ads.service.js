@@ -27,6 +27,7 @@ const AUTOMATIC_SPEND_GUARD_INTERVAL_MINUTES = 15;
 const AUTOMATIC_SPEND_GUARD_FIRST_RUN_MINUTES = 20;
 const AUTOMATIC_SPEND_GUARD_STALE_MINUTES = 45;
 const AUTOMATIC_SPEND_GUARD_WINDOW_DAYS = 30;
+const DEFAULT_ACTIVATION_APPROVAL_VALID_MINUTES = 1440;
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -1542,6 +1543,31 @@ function automaticSpendGuardSpec({ campaign, exposure, now = new Date() }) {
   };
 }
 
+function activationApprovalValidityMinutes() {
+  return Math.min(
+    Math.max(15, Math.floor(positiveEnvironmentNumber(
+      "GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES",
+      DEFAULT_ACTIVATION_APPROVAL_VALID_MINUTES
+    ))),
+    10080
+  );
+}
+
+function activationApprovalTiming(now = new Date()) {
+  const requestedAt = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+  if (Number.isNaN(requestedAt.getTime())) throw adsError("Activation approval timing is invalid.");
+  return {
+    requestedAt: requestedAt.toISOString(),
+    expiresAt: new Date(requestedAt.getTime() + activationApprovalValidityMinutes() * 60000).toISOString(),
+  };
+}
+
+function activationApprovalIsFresh(approvalData, now = new Date()) {
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const expiresAtMs = new Date(approvalData?.expiresAt || "").getTime();
+  return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+}
+
 function campaignExposureIssues(exposure, policy = campaignExposurePolicy()) {
   const issues = [];
   if (exposure.accountCount > policy.maximumAccountsPerCampaign) {
@@ -2432,6 +2458,13 @@ async function queueLifecycleOperation({
         "GOODADS_AD_ACTIVATION_APPROVAL_MISMATCH"
       );
     }
+    if (!activationApprovalIsFresh(approvalData)) {
+      throw adsError(
+        "This activation approval expired. Request and approve a fresh campaign review.",
+        409,
+        "GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED"
+      );
+    }
   }
   const client = await pool.connect();
   try {
@@ -2662,6 +2695,7 @@ async function requestActivationApproval({
   if (campaign.status !== "paused") {
     throw adsError("The provider campaign must be created and paused before activation review.", 409, "GOODADS_AD_CAMPAIGN_NOT_PAUSED");
   }
+  const approvalTiming = activationApprovalTiming();
   const approval = await require("./goodads-workflows.service").saveApproval({
     payload: {
       name: `Activate ${campaign.campaign_name} on ${PROVIDERS[campaign.provider].name}`,
@@ -2677,10 +2711,14 @@ async function requestActivationApproval({
       dailyBudget: campaign.campaign_data?.dailyBudget,
       startDate: campaign.campaign_data?.startDate,
       endDate: campaign.campaign_data?.endDate,
+      requestedAt: approvalTiming.requestedAt,
+      expiresAt: approvalTiming.expiresAt,
+      dueAt: approvalTiming.expiresAt,
     },
     context,
     userId,
     idempotencyKey: `${requestKey}:${campaign.id}:activation-approval`,
+    allowPaidCampaignActivation: true,
   });
   await query(
     `UPDATE goodads_provider_campaigns SET activation_approval_id = $2::uuid, updated_at = NOW()
@@ -5407,6 +5445,13 @@ function validateActivationExecution(row) {
       "GOODADS_AD_ACTIVATION_APPROVAL_MISMATCH"
     );
   }
+  if (!activationApprovalIsFresh(approvalData)) {
+    throw adsError(
+      "The activation approval expired before provider delivery could start.",
+      409,
+      "GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED"
+    );
+  }
 }
 
 async function executeOperation(row) {
@@ -5805,6 +5850,9 @@ function capabilities() {
       verifiedAccountsRequired: true,
       safePausedCreation: true,
       activationApprovalRequired: true,
+      activationApprovalExpires: true,
+      activationApprovalValidityMinutes: activationApprovalValidityMinutes(),
+      paidActivationApprovalsSystemGenerated: true,
       durableOperations: true,
       boundedRetries: true,
       immutableLaunchSnapshots: true,
@@ -5901,5 +5949,8 @@ module.exports = {
     campaignScheduleBounds,
     automaticSpendGuardId,
     automaticSpendGuardSpec,
+    activationApprovalValidityMinutes,
+    activationApprovalTiming,
+    activationApprovalIsFresh,
   },
 };

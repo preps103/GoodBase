@@ -81,6 +81,12 @@ test("GoodAds bounds engagement, approval, and automation inputs", () => {
   });
   assert.equal(paidActivationApproval.reviewType, "paid_campaign_activation");
   assert.equal(paidActivationApproval.status, "pending");
+  assert.equal(workflows._test.paidActivationApprovalIsFresh({
+    expiresAt: "2026-10-02T00:00:00.000Z",
+  }, new Date("2026-10-01T00:00:00.000Z")), true);
+  assert.equal(workflows._test.paidActivationApprovalIsFresh({
+    expiresAt: "2026-10-01T00:00:00.000Z",
+  }, new Date("2026-10-01T00:00:00.000Z")), false);
 
   const automation = workflows._test.normalizeAutomationPayload({
     name: "Weekly draft",
@@ -195,6 +201,9 @@ test("GoodAds workflow migration installs durable governed operations", () => {
   assert.match(workflows, /GOODADS_SYSTEM_AUTOMATION_PROTECTED/);
   assert.match(workflows, /automaticCampaignBudgetGuard: true/);
   assert.match(workflows, /systemManagedGuardsProtected: true/);
+  assert.match(workflows, /GOODADS_PAID_ACTIVATION_APPROVAL_PROTECTED/);
+  assert.match(workflows, /GOODADS_PAID_ACTIVATION_APPROVAL_REQUIRED/);
+  assert.match(workflows, /GOODADS_APPROVAL_EXPIRED/);
   const resources = read("src/services/goodads.service.js");
   assert.match(resources, /type === "automations" && current\.systemManaged === true/);
   assert.match(resources, /GOODADS_SYSTEM_AUTOMATION_PROTECTED/);

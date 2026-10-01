@@ -128,6 +128,7 @@ test("queued paid activation revalidates the live snapshot, approval, account, a
         campaignId: snapshot.id,
         providerCampaignId: "50f11ad4-5897-47b3-ab07-c1359989f379",
         snapshotHash,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       },
     };
 
@@ -144,11 +145,42 @@ test("queued paid activation revalidates the live snapshot, approval, account, a
       () => ads._test.validateActivationExecution({ ...row, connection_status: "expired" }),
       (error) => error.code === "GOODADS_CONNECTION_EXPIRED"
     );
+    assert.throws(
+      () => ads._test.validateActivationExecution({
+        ...row,
+        approval_data: { ...row.approval_data, expiresAt: "2020-01-01T00:00:00.000Z" },
+      }),
+      (error) => error.code === "GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED"
+    );
   } finally {
     for (const name of names) {
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];
     }
+  }
+});
+
+test("paid activation approvals are system-generated and expire after a bounded window", () => {
+  const previous = process.env.GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES;
+  process.env.GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES = "1440";
+  try {
+    const timing = ads._test.activationApprovalTiming(new Date("2026-09-30T20:00:00.000Z"));
+    assert.deepEqual(timing, {
+      requestedAt: "2026-09-30T20:00:00.000Z",
+      expiresAt: "2026-10-01T20:00:00.000Z",
+    });
+    assert.equal(ads._test.activationApprovalIsFresh(timing, new Date("2026-10-01T19:59:59.999Z")), true);
+    assert.equal(ads._test.activationApprovalIsFresh(timing, new Date("2026-10-01T20:00:00.000Z")), false);
+    assert.equal(ads._test.activationApprovalIsFresh({}, new Date("2026-09-30T20:00:00.000Z")), false);
+    assert.equal(ads.capabilities().paidAdvertising.activationApprovalExpires, true);
+    assert.equal(ads.capabilities().paidAdvertising.activationApprovalValidityMinutes, 1440);
+    assert.equal(ads.capabilities().paidAdvertising.paidActivationApprovalsSystemGenerated, true);
+    const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
+    assert.match(source, /allowPaidCampaignActivation: true/);
+    assert.equal((source.match(/GOODADS_AD_ACTIVATION_APPROVAL_EXPIRED/g) || []).length, 2);
+  } finally {
+    if (previous === undefined) delete process.env.GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES;
+    else process.env.GOODADS_ACTIVATION_APPROVAL_VALID_MINUTES = previous;
   }
 });
 
