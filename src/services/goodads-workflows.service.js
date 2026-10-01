@@ -411,9 +411,16 @@ function normalizeApprovalPayload(payload) {
     if (!text || !connectionIds.length) {
       throw workflowError("Publishing approvals require post text and at least one account.");
     }
+    if (reviewType !== "publishing") {
+      throw workflowError("Only publishing reviews can authorize a social publishing release.");
+    }
     publication.connectionIds = connectionIds;
-    publication.content = { ...(publication.content || {}), text };
+    publication.content = require("./goodads-social.service").normalizePublishContent({
+      ...(publication.content || {}),
+      text,
+    });
     publication.timezone = boundedText(publication.timezone || "UTC", 100);
+    publication.autoQueue = publication.autoQueue === true;
     if (publication.scheduledFor) {
       const scheduled = new Date(publication.scheduledFor);
       if (Number.isNaN(scheduled.getTime())) throw workflowError("Approval publishing date is invalid.");
@@ -451,6 +458,35 @@ function paidActivationApprovalIsFresh(approval, now = new Date()) {
   return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
 }
 
+function publishingApprovalValidityMinutes() {
+  const configured = Number(process.env.GOODADS_PUBLISH_APPROVAL_VALIDITY_MINUTES);
+  const minutes = Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 10080;
+  return Math.min(Math.max(minutes, 60), 43200);
+}
+
+function publishingApprovalTiming(now = new Date()) {
+  const requestedAt = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(requestedAt.getTime())) throw workflowError("Publishing approval timing is invalid.");
+  return {
+    requestedAt: requestedAt.toISOString(),
+    expiresAt: new Date(requestedAt.getTime() + publishingApprovalValidityMinutes() * 60000).toISOString(),
+  };
+}
+
+function publishingApprovalIsFresh(approval, now = new Date()) {
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const expiresAtMs = new Date(approval?.expiresAt || "").getTime();
+  return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+}
+
+function publishingApprovalCanBeApprovedBy(approval, userId) {
+  const requesterUserId = boundedText(approval?.requestedByUserId, 80).toLowerCase();
+  const approverUserId = boundedText(userId, 80).toLowerCase();
+  return UUID_PATTERN.test(requesterUserId)
+    && UUID_PATTERN.test(approverUserId)
+    && requesterUserId !== approverUserId;
+}
+
 function paidActivationApprovalCanBeApprovedBy(approval, userId) {
   const requesterUserId = boundedText(approval?.requestedByUserId, 80).toLowerCase();
   const approverUserId = boundedText(userId, 80).toLowerCase();
@@ -468,8 +504,9 @@ async function saveApproval({
   allowPaidCampaignActivation = false,
 }) {
   requireWrite(context);
+  let current = null;
   if (id) {
-    const current = await resources.getResource({ type: "approvals", id, context });
+    current = await resources.getResource({ type: "approvals", id, context });
     if (current.reviewType === "paid_campaign_activation") {
       throw workflowError(
         "Paid campaign activation reviews are generated from the paused provider campaign and cannot be edited.",
@@ -495,6 +532,15 @@ async function saveApproval({
       409,
       "GOODADS_PAID_ACTIVATION_APPROVAL_EXPIRY_INVALID"
     );
+  }
+  if (normalized.reviewType === "publishing" && normalized.publication) {
+    const timing = publishingApprovalTiming();
+    normalized.requestedByUserId = requireUuid(
+      current?.requestedByUserId || current?.ownerUserId || userId,
+      "publishing approval requester"
+    );
+    normalized.requestedAt = timing.requestedAt;
+    normalized.expiresAt = timing.expiresAt;
   }
   const requestKey = id
     ? null
@@ -565,6 +611,17 @@ async function decideApproval({ id, decision, note, context, userId }) {
     );
   }
   if (
+    current.reviewType === "publishing"
+    && current.publication
+    && !publishingApprovalIsFresh(current)
+  ) {
+    throw workflowError(
+      "This social publishing review expired. Submit a fresh review from Social publishing.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_EXPIRED"
+    );
+  }
+  if (
     current.reviewType === "paid_campaign_activation"
     && normalizedDecision === "approved"
     && !paidActivationApprovalCanBeApprovedBy(current, userId)
@@ -573,6 +630,18 @@ async function decideApproval({ id, decision, note, context, userId }) {
       "Paid campaign activation must be approved by a different owner, admin, or manager than the requester.",
       409,
       "GOODADS_APPROVAL_SEPARATION_REQUIRED"
+    );
+  }
+  if (
+    current.reviewType === "publishing"
+    && current.publication
+    && normalizedDecision === "approved"
+    && !publishingApprovalCanBeApprovedBy(current, userId)
+  ) {
+    throw workflowError(
+      "Social publishing must be approved by a different owner, admin, or manager than the requester.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_SEPARATION_REQUIRED"
     );
   }
   return resources.upsertResource({
@@ -1214,6 +1283,10 @@ function workflowCapabilities() {
       available: true,
       decisionsRestrictedToManagement: true,
       approvedPublishingRelease: true,
+      publishingApprovalsExpire: true,
+      publishingApprovalValidityMinutes: publishingApprovalValidityMinutes(),
+      publishingApprovalsRequireIndependentReviewer: true,
+      revokedPublishingApprovalsStopQueuedDelivery: true,
       requiredForRoles: ["editor", "member"],
     },
     automations: {
@@ -1254,5 +1327,9 @@ module.exports = {
     spendGuardDecision,
     paidActivationApprovalIsFresh,
     paidActivationApprovalCanBeApprovedBy,
+    publishingApprovalValidityMinutes,
+    publishingApprovalTiming,
+    publishingApprovalIsFresh,
+    publishingApprovalCanBeApprovedBy,
   },
 };
