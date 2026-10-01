@@ -182,6 +182,12 @@ test("GoodAds workflow migration installs durable governed operations", () => {
   assert.match(workflows, /operation_type, idempotency_key, payload/);
   assert.match(workflows, /providerPauseDelivery: true/);
   assert.match(workflows, /failClosedOnStaleMetrics: true/);
+  assert.match(workflows, /GOODADS_SYSTEM_AUTOMATION_PROTECTED/);
+  assert.match(workflows, /automaticCampaignBudgetGuard: true/);
+  assert.match(workflows, /systemManagedGuardsProtected: true/);
+  const resources = read("src/services/goodads.service.js");
+  assert.match(resources, /type === "automations" && current\.systemManaged === true/);
+  assert.match(resources, /GOODADS_SYSTEM_AUTOMATION_PROTECTED/);
 });
 
 test("GoodAds routes separate public signed ingestion from protected workflow operations", () => {

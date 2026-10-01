@@ -593,6 +593,20 @@ function normalizeAutomationPayload(payload) {
 
 async function saveAutomation({ id = null, payload, context, userId }) {
   requireWrite(context);
+  if (id) {
+    const existing = await resources.getResource({
+      type: "automations",
+      id: requireUuid(id, "automation ID"),
+      context,
+    });
+    if (existing.systemManaged === true) {
+      throw workflowError(
+        "This automatic campaign safety guard is managed by GoodAds and cannot be edited.",
+        409,
+        "GOODADS_SYSTEM_AUTOMATION_PROTECTED"
+      );
+    }
+  }
   const normalized = normalizeAutomationPayload(payload);
   if (PAID_CAMPAIGN_AUTOMATION_ACTIONS.has(normalized.actionType)) requireManagement(context);
   return resources.upsertResource({
@@ -1152,6 +1166,8 @@ function workflowCapabilities() {
         available: true,
         verifiedProviderMetrics: true,
         failClosedOnStaleMetrics: true,
+        automaticCampaignBudgetGuard: true,
+        systemManagedGuardsProtected: true,
       },
     },
   };

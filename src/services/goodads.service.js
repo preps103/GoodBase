@@ -1075,6 +1075,13 @@ async function archiveResource({ type, id, context, userId }) {
   requireDestructiveRole(context);
   requireResourceType(type);
   const current = await getResource({ type, id, context });
+  if (type === "automations" && current.systemManaged === true) {
+    throw serviceError(
+      "This automatic campaign safety guard is managed by GoodAds and cannot be archived.",
+      409,
+      "GOODADS_SYSTEM_AUTOMATION_PROTECTED"
+    );
+  }
   if (type === "funnels") {
     const linkedForms = await query(
       `SELECT COUNT(*)::integer AS count FROM goodads_resources

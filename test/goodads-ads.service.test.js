@@ -538,6 +538,46 @@ test("campaign-wide exposure limits block multiplied spend across accounts and t
   assert.equal(secondBatch.blockers.some((issue) => issue.code === "GOODADS_CAMPAIGN_ACCOUNT_LIMIT_EXCEEDED"), true);
 });
 
+test("approved activation provisions one deterministic protected campaign spend stop", () => {
+  const campaignId = "89e0e5e1-ee43-4c9a-a41b-6b07bb920430";
+  const otherCampaignId = "89e0e5e1-ee43-4c9a-a41b-6b07bb920431";
+  const guardId = ads._test.automaticSpendGuardId(campaignId);
+  assert.equal(guardId, ads._test.automaticSpendGuardId(campaignId));
+  assert.notEqual(guardId, ads._test.automaticSpendGuardId(otherCampaignId));
+  assert.match(guardId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  const shortGuard = ads._test.automaticSpendGuardSpec({
+    campaign: { campaign_id: campaignId, campaign_name: "Protected launch" },
+    exposure: { combinedDailyBudget: 50, deliveryDays: 7, currency: "USD" },
+    now: new Date("2026-09-30T20:00:00.000Z"),
+  });
+  assert.equal(shortGuard.data.maximumTrackedSpend, 350);
+  assert.equal(shortGuard.data.intervalMinutes, 15);
+  assert.equal(shortGuard.data.nextRunAt, "2026-09-30T20:20:00.000Z");
+  assert.equal(shortGuard.data.pauseOnStaleMetrics, true);
+  assert.equal(shortGuard.data.systemManaged, true);
+  assert.equal(shortGuard.data.guardType, "automatic_campaign_budget");
+
+  const boundedGuard = ads._test.automaticSpendGuardSpec({
+    campaign: { campaign_id: campaignId, campaign_name: "Long launch" },
+    exposure: { combinedDailyBudget: 25, deliveryDays: 90, currency: "EUR" },
+    now: new Date("2026-09-30T20:00:00.000Z"),
+  });
+  assert.equal(boundedGuard.data.maximumTrackedSpend, 750);
+  assert.equal(boundedGuard.data.maximumWindowDays, 30);
+
+  const source = fs.readFileSync(path.join(__dirname, "../src/services/goodads-ads.service.js"), "utf8");
+  assert.match(source, /INSERT INTO goodads_resources \(/);
+  assert.match(source, /'automations'/);
+  assert.match(source, /systemManaged: true/);
+  assert.match(source, /actionType: "enforce_spend_guard"/);
+  assert.match(source, /await client\.query\("BEGIN"\)/);
+  assert.equal(ads.capabilities().paidAdvertising.automaticSpendGuards, true);
+  assert.equal(ads.capabilities().paidAdvertising.spendGuardIntervalMinutes, 15);
+  assert.equal(ads.capabilities().paidAdvertising.spendGuardReportingWindowDays, 30);
+  assert.equal(ads.capabilities().paidAdvertising.spendGuardFailsClosedOnStaleMetrics, true);
+});
+
 test("campaign preflight and launch fail closed when account locale is incomplete", () => {
   const accountId = "a73b7d9f-292f-48b1-9557-3c02b185683c";
   const report = ads._test.campaignPreflightReport({
