@@ -18,6 +18,10 @@ const GOOGLE_LOGO_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const MAX_GOOGLE_LOGO_BYTES = 5 * 1024 * 1024;
 const OAUTH_ENCRYPTION_ENVIRONMENT = "GOODADS_OAUTH_ENCRYPTION_KEY";
 const EMERGENCY_PAUSE_CONFIRMATION = "PAUSE ALL CAMPAIGNS";
+const MAX_ACCOUNTS_PER_LAUNCH = 10;
+const DEFAULT_MAX_CAMPAIGN_ACCOUNTS = 10;
+const DEFAULT_MAX_COMBINED_DAILY_BUDGET = 1000;
+const DEFAULT_MAX_PLANNING_BUDGET = 30000;
 const PINTEREST_CAMPAIGN_ROLES = new Set(["OWNER", "ADMIN", "CAMPAIGN_MANAGER"]);
 const SNAPCHAT_WRITE_ROLES = new Set(["admin", "general"]);
 const SNAPCHAT_MEDIA_TYPES = Object.freeze({
@@ -1437,6 +1441,97 @@ function campaignScheduleBounds(data = {}, timezone) {
   };
 }
 
+function positiveEnvironmentNumber(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function campaignExposurePolicy() {
+  return {
+    maximumAccountsPerCampaign: Math.min(
+      Math.max(1, Math.floor(positiveEnvironmentNumber("GOODADS_MAX_ACCOUNTS_PER_CAMPAIGN", DEFAULT_MAX_CAMPAIGN_ACCOUNTS))),
+      50
+    ),
+    maximumCombinedDailyBudget: positiveEnvironmentNumber(
+      "GOODADS_MAX_COMBINED_DAILY_BUDGET",
+      DEFAULT_MAX_COMBINED_DAILY_BUDGET
+    ),
+    maximumPlanningBudget: positiveEnvironmentNumber(
+      "GOODADS_MAX_PLANNING_BUDGET",
+      DEFAULT_MAX_PLANNING_BUDGET
+    ),
+    unit: "account_currency",
+  };
+}
+
+function campaignExposure(data, accountCount, timezone) {
+  const schedule = campaignScheduleBounds(data, timezone);
+  const dailyBudgetPerAccount = Math.max(Number(data?.dailyBudget) || 0, 0);
+  const safeAccountCount = Math.max(Math.floor(Number(accountCount) || 0), 0);
+  const combinedDailyBudget = dailyBudgetPerAccount * safeAccountCount;
+  return {
+    accountCount: safeAccountCount,
+    deliveryDays: schedule.deliveryDays,
+    dailyBudgetPerAccount,
+    combinedDailyBudget,
+    planningMaximum: combinedDailyBudget * schedule.deliveryDays,
+    schedule,
+  };
+}
+
+function campaignExposureIssues(exposure, policy = campaignExposurePolicy()) {
+  const issues = [];
+  if (exposure.accountCount > policy.maximumAccountsPerCampaign) {
+    issues.push({
+      code: "GOODADS_CAMPAIGN_ACCOUNT_LIMIT_EXCEEDED",
+      detail: `This campaign would span ${exposure.accountCount} accounts; the campaign-wide limit is ${policy.maximumAccountsPerCampaign}.`,
+    });
+  }
+  if (exposure.combinedDailyBudget > policy.maximumCombinedDailyBudget) {
+    issues.push({
+      code: "GOODADS_COMBINED_DAILY_BUDGET_EXCEEDED",
+      detail: `Combined daily exposure is ${exposure.combinedDailyBudget}; the campaign-wide limit is ${policy.maximumCombinedDailyBudget} account-currency units.`,
+    });
+  }
+  if (exposure.planningMaximum > policy.maximumPlanningBudget) {
+    issues.push({
+      code: "GOODADS_PLANNING_BUDGET_EXCEEDED",
+      detail: `Planned campaign exposure is ${exposure.planningMaximum}; the campaign-wide limit is ${policy.maximumPlanningBudget} account-currency units.`,
+    });
+  }
+  return issues;
+}
+
+function validateCampaignExposure(data, accountCount, timezone) {
+  const exposure = campaignExposure(data, accountCount, timezone);
+  const issue = campaignExposureIssues(exposure)[0];
+  if (issue) throw adsError(issue.detail, 409, issue.code);
+  return exposure;
+}
+
+async function validateStoredCampaignExposure({ organizationId, campaignId, campaignData }) {
+  const result = await query(
+    `SELECT account.currency, account.timezone
+     FROM goodads_provider_campaigns provider_campaign
+     JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
+     WHERE provider_campaign.organization_id = $1
+       AND provider_campaign.campaign_id = $2::uuid
+       AND provider_campaign.status <> 'archived'`,
+    [organizationId, campaignId]
+  );
+  const locales = new Set(result.rows.map((account) => (
+    `${boundedText(account.currency, 12).toUpperCase()}|${boundedText(account.timezone, 120)}`
+  )));
+  if (!result.rows.length || locales.size !== 1) {
+    throw adsError(
+      "Campaign-wide activation requires one verified currency and time zone across every provider account.",
+      409,
+      "GOODADS_AD_ACCOUNT_LOCALE_MISMATCH"
+    );
+  }
+  return validateCampaignExposure(campaignData, result.rows.length, result.rows[0].timezone);
+}
+
 function validateProviderObjective(provider, value) {
   const definition = PROVIDERS[provider];
   const objective = boundedText(value || "traffic", 40).toLowerCase();
@@ -1829,13 +1924,27 @@ function campaignPreflightReport({
       detail: `${missingAccountIds.length} selected ad account${missingAccountIds.length === 1 ? " is" : "s are"} unavailable to this organization.`,
     });
   }
-  const accountLocales = new Set(selectedAccounts.map((account) => (
+  const activeDeliveryByAccount = new Map((providerCampaigns || [])
+    .filter((delivery) => delivery.status !== "archived")
+    .map((delivery) => [String(delivery.ad_account_id || delivery.adAccountId), delivery]));
+  const plannedAccounts = new Map(selectedAccounts.map((account) => [String(account.id), account]));
+  for (const [accountId, delivery] of activeDeliveryByAccount) {
+    if (!plannedAccounts.has(accountId)) {
+      plannedAccounts.set(accountId, {
+        id: accountId,
+        currency: delivery.account_currency || delivery.accountCurrency,
+        timezone: delivery.account_timezone || delivery.accountTimezone,
+      });
+    }
+  }
+  const accountLocales = new Set([...plannedAccounts.values()].map((account) => (
     `${boundedText(account.currency, 12).toUpperCase()}|${boundedText(account.timezone, 120)}`
   )));
-  const accountLocaleIncomplete = selectedAccounts.some((account) => (
+  const accountLocaleIncomplete = [...plannedAccounts.values()].some((account) => (
     !boundedText(account.currency, 12) || !boundedText(account.timezone, 120)
   ));
   const accountLocaleVerified = selectedAccounts.length === requestedAccountIds.length
+    && plannedAccounts.size > 0
     && !accountLocaleIncomplete
     && accountLocales.size === 1;
   if (!accountLocaleVerified) {
@@ -1844,9 +1953,6 @@ function campaignPreflightReport({
       detail: "Every selected ad account must use the same verified currency and time zone.",
     });
   }
-  const activeDeliveryByAccount = new Map((providerCampaigns || [])
-    .filter((delivery) => delivery.status !== "archived")
-    .map((delivery) => [String(delivery.ad_account_id || delivery.adAccountId), delivery]));
   const accountChecks = selectedAccounts.map((account) => {
     const issues = [];
     if (account.status !== "verified") {
@@ -1898,8 +2004,14 @@ function campaignPreflightReport({
   }
   const deliveryDays = schedule?.deliveryDays || 0;
   const dailyBudgetPerAccount = Math.max(Number(campaign.data?.dailyBudget) || 0, 0);
-  const combinedDailyBudget = dailyBudgetPerAccount * selectedAccounts.length;
+  const combinedDailyBudget = dailyBudgetPerAccount * plannedAccounts.size;
   const planningMaximum = combinedDailyBudget * deliveryDays;
+  const exposurePolicy = campaignExposurePolicy();
+  blockers.push(...campaignExposureIssues({
+    accountCount: plannedAccounts.size,
+    combinedDailyBudget,
+    planningMaximum,
+  }, exposurePolicy));
   return {
     campaignId: campaign.id,
     campaignVersion: Number(campaign.version || 1),
@@ -1914,11 +2026,12 @@ function campaignPreflightReport({
     blockers,
     accountChecks,
     exposure: {
-      accountCount: selectedAccounts.length,
+      accountCount: plannedAccounts.size,
       deliveryDays,
       dailyBudgetPerAccount,
       combinedDailyBudget,
       planningMaximum,
+      limits: exposurePolicy,
       schedule,
       currency: accountLocaleVerified
         ? boundedText(selectedAccounts[0]?.currency, 12).toUpperCase()
@@ -1927,7 +2040,7 @@ function campaignPreflightReport({
         ? boundedText(selectedAccounts[0]?.timezone, 120)
         : null,
     },
-    existingDeliveries: accountChecks.filter((check) => check.existingDelivery).length,
+    existingDeliveries: activeDeliveryByAccount.size,
     missingPausedDeliveries: accountChecks.filter((check) => check.willCreatePausedDelivery).length,
   };
 }
@@ -1935,7 +2048,7 @@ function campaignPreflightReport({
 async function preflightCampaign({ campaignId, adAccountIds, context }) {
   const safeCampaignId = requireUuid(campaignId, "campaign ID");
   const accountIds = [...new Set(Array.isArray(adAccountIds) ? adAccountIds.map((id) => requireUuid(id, "ad account ID")) : [])];
-  if (!accountIds.length || accountIds.length > 10) {
+  if (!accountIds.length || accountIds.length > MAX_ACCOUNTS_PER_LAUNCH) {
     throw adsError("Select between one and ten ad accounts for preflight.");
   }
   const [campaignResult, accountResult, deliveryResult] = await Promise.all([
@@ -1951,10 +2064,13 @@ async function preflightCampaign({ campaignId, adAccountIds, context }) {
       [context.organizationId, accountIds]
     ),
     query(
-      `SELECT * FROM goodads_provider_campaigns
-       WHERE organization_id = $1 AND campaign_id = $2::uuid
-         AND ad_account_id = ANY($3::uuid[])`,
-      [context.organizationId, safeCampaignId, accountIds]
+      `SELECT provider_campaign.*, account.currency AS account_currency,
+         account.timezone AS account_timezone
+       FROM goodads_provider_campaigns provider_campaign
+       JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
+       WHERE provider_campaign.organization_id = $1
+         AND provider_campaign.campaign_id = $2::uuid`,
+      [context.organizationId, safeCampaignId]
     ),
   ]);
   const campaign = campaignResult.rows[0];
@@ -1977,7 +2093,7 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   const requestKey = requireIdempotencyKey(idempotencyKey);
   const safeCampaignId = requireUuid(campaignId, "campaign ID");
   const accountIds = [...new Set(Array.isArray(adAccountIds) ? adAccountIds.map((id) => requireUuid(id, "ad account ID")) : [])];
-  if (!accountIds.length || accountIds.length > 10) {
+  if (!accountIds.length || accountIds.length > MAX_ACCOUNTS_PER_LAUNCH) {
     throw adsError("Select between one and ten verified ad accounts.");
   }
   const campaignResult = await query(
@@ -2022,6 +2138,33 @@ async function launchCampaign({ campaignId, adAccountIds, context, userId, idemp
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+      [`goodads:campaign-exposure:${context.organizationId}:${campaign.id}`]
+    );
+    const existingAccounts = await client.query(
+      `SELECT provider_campaign.ad_account_id, account.currency, account.timezone
+       FROM goodads_provider_campaigns provider_campaign
+       JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
+       WHERE provider_campaign.organization_id = $1
+         AND provider_campaign.campaign_id = $2::uuid
+         AND provider_campaign.status <> 'archived'
+       FOR UPDATE OF provider_campaign`,
+      [context.organizationId, campaign.id]
+    );
+    const plannedAccounts = new Map(existingAccounts.rows.map((account) => [String(account.ad_account_id), account]));
+    for (const account of accounts) plannedAccounts.set(String(account.id), account);
+    const plannedLocales = new Set([...plannedAccounts.values()].map((account) => (
+      `${boundedText(account.currency, 12).toUpperCase()}|${boundedText(account.timezone, 120)}`
+    )));
+    if (plannedLocales.size !== 1) {
+      throw adsError(
+        "Campaign-wide setup requires one verified currency and time zone across every provider account.",
+        409,
+        "GOODADS_AD_ACCOUNT_LOCALE_MISMATCH"
+      );
+    }
+    validateCampaignExposure(campaign.data, plannedAccounts.size, [...plannedAccounts.values()][0].timezone);
     for (const account of accounts) {
       const existingResult = await client.query(
         `SELECT provider_campaign.*,
@@ -2194,6 +2337,11 @@ async function queueLifecycleOperation({
         "GOODADS_AD_CAMPAIGN_VERSION_CHANGED"
       );
     }
+    await validateStoredCampaignExposure({
+      organizationId: context.organizationId,
+      campaignId: campaign.campaign_id,
+      campaignData: currentSnapshot.data,
+    });
     if (!approvalId || campaign.approval_status !== "approved") {
       throw adsError(
         "An approved paid-campaign activation review is required.",
@@ -5150,6 +5298,13 @@ async function executeOperation(row) {
   const executionRow = bindCreateOperationSnapshot(row);
   validateCreateExecution(executionRow);
   validateActivationExecution(executionRow);
+  if (executionRow.operation_type === "activate") {
+    await validateStoredCampaignExposure({
+      organizationId: executionRow.organization_id,
+      campaignId: executionRow.campaign_id,
+      campaignData: executionRow.campaign_data,
+    });
+  }
   const adapter = nativeAdapter(executionRow.provider);
   const accessToken = executionRow.provider === "x"
     ? await social.oauth1CredentialsForConnection(executionRow)
@@ -5396,7 +5551,9 @@ function capabilities() {
       objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
       emergencyPauseAll: true,
-      maximumAccountsPerLaunch: 10,
+      campaignWideExposureLimits: true,
+      maximumAccountsPerLaunch: MAX_ACCOUNTS_PER_LAUNCH,
+      exposureLimits: campaignExposurePolicy(),
     },
   };
 }
@@ -5465,6 +5622,10 @@ module.exports = {
     validateProviderObjective,
     validateCreateExecution,
     validateActivationExecution,
+    campaignExposure,
+    campaignExposureIssues,
+    campaignExposurePolicy,
+    validateCampaignExposure,
     emergencyPauseMarker,
     campaignPreflightReport,
     campaignScheduleBounds,

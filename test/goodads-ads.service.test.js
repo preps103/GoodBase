@@ -437,6 +437,7 @@ test("campaign preflight proves read-only paused exposure for the exact saved ve
     dailyBudgetPerAccount: 25,
     combinedDailyBudget: 50,
     planningMaximum: 400,
+    limits: ads._test.campaignExposurePolicy(),
     schedule: {
       timezone: "America/Los_Angeles",
       startDate: "2026-10-05",
@@ -453,6 +454,88 @@ test("campaign preflight proves read-only paused exposure for the exact saved ve
   assert.equal(report.missingPausedDeliveries, 1);
   assert.equal(report.accountChecks[0].willCreatePausedDelivery, false);
   assert.equal(report.accountChecks[1].willCreatePausedDelivery, true);
+});
+
+test("campaign-wide exposure limits block multiplied spend across accounts and time", () => {
+  const dailyExposure = ads._test.campaignExposure({
+    dailyBudget: 400,
+    startDate: "2026-10-05",
+    endDate: "2026-10-12",
+  }, 3, "America/Los_Angeles");
+  assert.equal(dailyExposure.combinedDailyBudget, 1200);
+  assert.equal(
+    ads._test.campaignExposureIssues(dailyExposure).some((issue) => issue.code === "GOODADS_COMBINED_DAILY_BUDGET_EXCEEDED"),
+    true
+  );
+
+  const planningExposure = ads._test.campaignExposure({
+    dailyBudget: 100,
+    startDate: "2026-10-01",
+    endDate: "2026-11-09",
+  }, 10, "America/Los_Angeles");
+  assert.equal(planningExposure.combinedDailyBudget, 1000);
+  assert.equal(planningExposure.planningMaximum, 40000);
+  assert.equal(
+    ads._test.campaignExposureIssues(planningExposure).some((issue) => issue.code === "GOODADS_PLANNING_BUDGET_EXCEEDED"),
+    true
+  );
+
+  assert.throws(
+    () => ads._test.validateCampaignExposure({
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+    }, 11, "America/Los_Angeles"),
+    (error) => error.code === "GOODADS_CAMPAIGN_ACCOUNT_LIMIT_EXCEEDED"
+  );
+  assert.equal(ads.capabilities().paidAdvertising.campaignWideExposureLimits, true);
+  assert.deepEqual(ads.capabilities().paidAdvertising.exposureLimits, ads._test.campaignExposurePolicy());
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "services", "goodads-ads.service.js"), "utf8");
+  assert.match(source, /goodads:campaign-exposure:/);
+  assert.match(source, /validateCampaignExposure\(campaign\.data, plannedAccounts\.size/);
+  assert.equal((source.match(/await validateStoredCampaignExposure\(/g) || []).length, 2);
+
+  const secondBatch = ads._test.campaignPreflightReport({
+    campaign: {
+      id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+      version: 1,
+      status: "ready",
+      data: {
+        platforms: ["facebook"],
+        objective: "traffic",
+        dailyBudget: 25,
+        startDate: "2026-10-05",
+        endDate: "2026-10-12",
+        targetCountries: ["US"],
+        creative: {
+          destinationUrl: "https://goodos.app/",
+          imageUrl: "https://cdn.goodos.app/goodads/meta.png",
+        },
+      },
+    },
+    requestedAccountIds: ["new-account"],
+    accounts: [{
+      id: "new-account",
+      provider: "meta",
+      name: "New account",
+      status: "verified",
+      currency: "USD",
+      timezone: "America/Los_Angeles",
+      metadata: { pageId: "12345" },
+    }],
+    providerCampaigns: Array.from({ length: 10 }, (_, index) => ({
+      id: `delivery-${index}`,
+      ad_account_id: `existing-account-${index}`,
+      status: "paused",
+      provider_campaign_id: `provider-${index}`,
+      account_currency: "USD",
+      account_timezone: "America/Los_Angeles",
+    })),
+    availabilityByProvider: { meta: { available: true, name: "Meta Ads" } },
+  });
+  assert.equal(secondBatch.exposure.accountCount, 11);
+  assert.equal(secondBatch.ready, false);
+  assert.equal(secondBatch.blockers.some((issue) => issue.code === "GOODADS_CAMPAIGN_ACCOUNT_LIMIT_EXCEEDED"), true);
 });
 
 test("campaign preflight and launch fail closed when account locale is incomplete", () => {
@@ -1505,7 +1588,9 @@ test("provider deliveries are created paused and activation is approval-gated", 
   assert.match(source, /GOODADS_ADAPTER_NOT_INSTALLED/);
   assert.match(source, /GOODADS_AD_ACTIVATION_NOT_SUPPORTED/);
   assert.match(source, /account\.status AS account_status/);
-  assert.match(source, /validateCreateExecution\(executionRow\);[\s\S]{0,260}social\.accessTokenForConnection/);
+  const createValidationIndex = source.indexOf("validateCreateExecution(executionRow);");
+  const providerTokenIndex = source.indexOf("social.accessTokenForConnection(executionRow)", createValidationIndex);
+  assert.ok(createValidationIndex >= 0 && providerTokenIndex > createValidationIndex);
   assert.match(source, /GOODADS_PROVIDER_EVENT_SOURCE_REQUIRED/);
   assert.match(source, /ON CONFLICT DO NOTHING/);
   assert.match(source, /active_operation\.operation_type IN \('create','pause','activate','archive'\)/);
