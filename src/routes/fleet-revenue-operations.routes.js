@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const express = require("express");
 const authRequired = require("../middleware/authRequired");
 const { pool, query } = require("../config/database");
@@ -11,6 +12,16 @@ const {
   approvalBlockers,
   accountingCsv,
 } = require("../services/fleet-revenue-operations.service");
+const {
+  CASE_TYPES,
+  CASE_PRIORITIES,
+  CASE_STATUSES,
+  FINAL_STATUSES,
+  evidenceItems: financialCaseEvidence,
+  canTransition: canTransitionFinancialCase,
+  allowedTransitions,
+  transitionBlockers,
+} = require("../services/fleet-financial-cases.service");
 
 const router = express.Router();
 const ORGANIZATION_ID = process.env.GOODFLEET_PUBLIC_ORGANIZATION_ID || "org_goodos";
@@ -75,6 +86,10 @@ function numberOrNull(value, min, max) {
 function validDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function validUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value, 80));
 }
 
 function incidentalPayload(row) {
@@ -606,6 +621,392 @@ router.patch("/incidentals/:incidentalId/status", async (request, response, next
     const after = await loadIncidental(client, before.id);
     await client.query("COMMIT");
     return response.json({ success: true, data: incidentalPayload(after) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+const FINANCIAL_CASE_SELECT = `
+  SELECT financial_case.*,
+         booking.reservation_number,
+         customer.full_name AS customer_name,
+         payment.provider AS payment_provider,
+         payment.provider_reference AS payment_provider_reference,
+         COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+             'id',event.id,
+             'eventType',event.event_type,
+             'fromStatus',event.from_status,
+             'toStatus',event.to_status,
+             'details',event.details_json,
+             'createdAt',event.created_at
+           ) ORDER BY event.created_at)
+             FROM fleet_financial_case_events event
+            WHERE event.organization_id=financial_case.organization_id
+              AND event.case_id=financial_case.id
+         ),'[]'::jsonb) AS events
+    FROM fleet_financial_cases financial_case
+    LEFT JOIN fleet_bookings booking
+      ON booking.organization_id=financial_case.organization_id
+     AND booking.id=financial_case.booking_id
+    LEFT JOIN fleet_customers customer
+      ON customer.organization_id=financial_case.organization_id
+     AND customer.id=financial_case.customer_id
+    LEFT JOIN fleet_payment_operations payment
+      ON payment.id=financial_case.payment_operation_id`;
+
+function financialCasePayload(row) {
+  return {
+    id: row.id,
+    caseNumber: row.case_number,
+    caseType: row.case_type,
+    title: row.title,
+    description: row.description || null,
+    amount: Number(row.amount || 0),
+    currency: row.currency,
+    status: row.status,
+    priority: row.priority,
+    bookingId: row.booking_id || null,
+    reservationNumber: row.reservation_number || null,
+    customerId: row.customer_id || null,
+    customerName: row.customer_name || null,
+    paymentOperationId: row.payment_operation_id || null,
+    paymentProvider: row.payment_provider || null,
+    paymentProviderReference: row.payment_provider_reference || null,
+    externalReference: row.external_reference || null,
+    externalDeadline: row.external_deadline || null,
+    evidence: Array.isArray(row.evidence_json) ? row.evidence_json : [],
+    notes: row.notes || null,
+    assignedTo: row.assigned_to || null,
+    resolvedAt: row.resolved_at || null,
+    allowedTransitions: allowedTransitions(row.case_type, row.status),
+    events: Array.isArray(row.events) ? row.events : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function loadFinancialCase(client, id, lock = false) {
+  const result = await client.query(
+    `${FINANCIAL_CASE_SELECT}
+      WHERE financial_case.organization_id=$1 AND financial_case.id=$2
+      ${lock ? "FOR UPDATE OF financial_case" : ""}`,
+    [ORGANIZATION_ID, id],
+  );
+  return result.rows[0] || null;
+}
+
+async function recordFinancialCaseEvent(client, request, caseId, eventType, fromStatus, toStatus, details) {
+  await client.query(
+    `INSERT INTO fleet_financial_case_events
+      (organization_id,case_id,event_type,from_status,to_status,details_json,actor_id)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+    [ORGANIZATION_ID, caseId, eventType, fromStatus || null, toStatus || null, JSON.stringify(details || {}), request.user.id],
+  );
+}
+
+async function auditFinancialCase(client, request, action, entityId, before, after) {
+  await client.query(
+    `INSERT INTO fleet_audit_events
+      (organization_id,actor_id,action,entity_type,entity_id,before_json,after_json,request_id,ip_address)
+     VALUES ($1,$2,$3,'financial_case',$4,$5::jsonb,$6::jsonb,$7,$8)`,
+    [
+      ORGANIZATION_ID,
+      request.user.id,
+      action,
+      entityId,
+      before ? JSON.stringify(before) : null,
+      after ? JSON.stringify(after) : null,
+      request.id || request.get("X-Request-ID") || null,
+      request.ip || null,
+    ],
+  );
+}
+
+router.get("/financial-cases", async (request, response, next) => {
+  const caseType = clean(request.query.type, 40).toLowerCase();
+  const status = clean(request.query.status, 40).toLowerCase();
+  const limit = numberOrNull(request.query.limit, 1, 250) || 100;
+  if (caseType && !CASE_TYPES.has(caseType)) {
+    return fail(response, 400, "INVALID_CASE_TYPE", "The financial case type is invalid.");
+  }
+  if (status && !CASE_STATUSES.has(status)) {
+    return fail(response, 400, "INVALID_CASE_STATUS", "The financial case status is invalid.");
+  }
+  try {
+    const result = await query(
+      `${FINANCIAL_CASE_SELECT}
+        WHERE financial_case.organization_id=$1
+          AND ($2::text='' OR financial_case.case_type=$2)
+          AND ($3::text='' OR financial_case.status=$3)
+        ORDER BY
+          CASE financial_case.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+          financial_case.external_deadline ASC NULLS LAST,
+          financial_case.created_at DESC
+        LIMIT $4`,
+      [ORGANIZATION_ID, caseType, status, limit],
+    );
+    return response.json({ success: true, data: result.rows.map(financialCasePayload) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/financial-cases/summary", async (_request, response, next) => {
+  try {
+    const result = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status NOT IN ('resolved_won','resolved_lost','collected','written_off'))::integer AS open_count,
+         COUNT(*) FILTER (WHERE priority='urgent' AND status NOT IN ('resolved_won','resolved_lost','collected','written_off'))::integer AS urgent_count,
+         COUNT(*) FILTER (WHERE external_deadline < NOW() AND status NOT IN ('resolved_won','resolved_lost','collected','written_off'))::integer AS overdue_count,
+         COUNT(*) FILTER (WHERE case_type='chargeback' AND status NOT IN ('resolved_won','resolved_lost','written_off'))::integer AS open_chargebacks,
+         COALESCE(SUM(amount) FILTER (WHERE status NOT IN ('resolved_won','resolved_lost','collected','written_off')),0)::numeric(12,2) AS at_risk_amount,
+         COALESCE(SUM(amount) FILTER (WHERE case_type='collection' AND status NOT IN ('collected','written_off')),0)::numeric(12,2) AS collection_amount
+       FROM fleet_financial_cases
+       WHERE organization_id=$1`,
+      [ORGANIZATION_ID],
+    );
+    const row = result.rows[0] || {};
+    return response.json({
+      success: true,
+      data: {
+        openCount: Number(row.open_count || 0),
+        urgentCount: Number(row.urgent_count || 0),
+        overdueCount: Number(row.overdue_count || 0),
+        openChargebacks: Number(row.open_chargebacks || 0),
+        atRiskAmount: Number(row.at_risk_amount || 0),
+        collectionAmount: Number(row.collection_amount || 0),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/financial-cases/readiness", async (_request, response) => response.json({
+  success: true,
+  data: {
+    internalWorkflow: "ready",
+    automatedProviderActions: "external_activation_required",
+    message: "Case intake, evidence, deadlines, assignments, transitions, and audit history are live. Processor submissions and automated collections remain disabled until the payment gateway is activated.",
+  },
+}));
+
+router.post("/financial-cases", async (request, response, next) => {
+  const caseType = clean(request.body?.caseType, 40).toLowerCase();
+  const priority = clean(request.body?.priority || "normal", 40).toLowerCase();
+  const title = clean(request.body?.title, 200);
+  const description = clean(request.body?.description, 4000) || null;
+  const amount = numberOrNull(request.body?.amount ?? 0, 0, 10_000_000);
+  const currency = clean(request.body?.currency || "USD", 3).toUpperCase();
+  const idempotencyKey = clean(request.body?.idempotencyKey || request.get("Idempotency-Key"), 200);
+  const externalDeadline = request.body?.externalDeadline ? validDate(request.body.externalDeadline) : null;
+  const bookingId = clean(request.body?.bookingId, 80) || null;
+  const paymentOperationId = clean(request.body?.paymentOperationId, 80) || null;
+  if (!CASE_TYPES.has(caseType) || !CASE_PRIORITIES.has(priority)) {
+    return fail(response, 400, "INVALID_FINANCIAL_CASE", "Select a supported case type and priority.");
+  }
+  if (!title || amount === null || !/^[A-Z]{3}$/.test(currency) || !idempotencyKey) {
+    return fail(response, 400, "FINANCIAL_CASE_INPUT_REQUIRED", "Title, non-negative amount, currency, and idempotency key are required.");
+  }
+  if (request.body?.externalDeadline && !externalDeadline) {
+    return fail(response, 400, "INVALID_CASE_DEADLINE", "Use a valid external deadline.");
+  }
+  if ((bookingId && !validUuid(bookingId)) || (paymentOperationId && !validUuid(paymentOperationId))) {
+    return fail(response, 400, "INVALID_CASE_LINK", "The linked reservation or payment is invalid.");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `${FINANCIAL_CASE_SELECT}
+        WHERE financial_case.organization_id=$1 AND financial_case.idempotency_key=$2`,
+      [ORGANIZATION_ID, idempotencyKey],
+    );
+    if (existing.rowCount) {
+      await client.query("COMMIT");
+      return response.json({ success: true, data: financialCasePayload(existing.rows[0]), replayed: true });
+    }
+
+    let customerId = clean(request.body?.customerId, 80) || null;
+    let resolvedBookingId = bookingId;
+    let resolvedPaymentOperationId = paymentOperationId;
+    let inferredExternalReference = null;
+    if (resolvedBookingId) {
+      const bookingResult = await client.query(
+        `SELECT id,customer_id FROM fleet_bookings WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+        [ORGANIZATION_ID, resolvedBookingId],
+      );
+      if (!bookingResult.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(response, 404, "BOOKING_NOT_FOUND", "The linked reservation was not found.");
+      }
+      customerId ||= bookingResult.rows[0].customer_id;
+    }
+    if (resolvedPaymentOperationId) {
+      const paymentResult = await client.query(
+        `SELECT id,booking_id,customer_id,provider_reference
+           FROM fleet_payment_operations WHERE organization_id=$1 AND id=$2`,
+        [ORGANIZATION_ID, resolvedPaymentOperationId],
+      );
+      if (!paymentResult.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(response, 404, "PAYMENT_OPERATION_NOT_FOUND", "The linked payment operation was not found.");
+      }
+      resolvedBookingId ||= paymentResult.rows[0].booking_id;
+      customerId ||= paymentResult.rows[0].customer_id;
+      inferredExternalReference = paymentResult.rows[0].provider_reference;
+    }
+    if (customerId && !validUuid(customerId)) {
+      await client.query("ROLLBACK");
+      return fail(response, 400, "INVALID_CUSTOMER_LINK", "The linked customer is invalid.");
+    }
+    if (customerId) {
+      const customerResult = await client.query(
+        `SELECT id FROM fleet_customers WHERE organization_id=$1 AND id=$2`,
+        [ORGANIZATION_ID, customerId],
+      );
+      if (!customerResult.rowCount) {
+        await client.query("ROLLBACK");
+        return fail(response, 404, "CUSTOMER_NOT_FOUND", "The linked customer was not found.");
+      }
+    }
+
+    const caseNumber = `GFC-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+    const evidence = financialCaseEvidence(request.body?.evidence);
+    const inserted = await client.query(
+      `INSERT INTO fleet_financial_cases
+        (organization_id,idempotency_key,case_number,case_type,title,description,amount,currency,
+         status,priority,booking_id,customer_id,payment_operation_id,external_reference,
+         external_deadline,evidence_json,notes,assigned_to,created_by,updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$18)
+       RETURNING id`,
+      [
+        ORGANIZATION_ID, idempotencyKey, caseNumber, caseType, title, description, amount, currency,
+        priority, resolvedBookingId, customerId, resolvedPaymentOperationId,
+        clean(request.body?.externalReference, 300) || inferredExternalReference || null,
+        externalDeadline, JSON.stringify(evidence), clean(request.body?.notes, 2000) || null,
+        request.body?.assignedTo && validUuid(request.body.assignedTo) ? request.body.assignedTo : null,
+        request.user.id,
+      ],
+    );
+    const id = inserted.rows[0].id;
+    await recordFinancialCaseEvent(client, request, id, "created", null, "open", {
+      caseType, priority, amount, currency, evidenceCount: evidence.length,
+    });
+    await auditFinancialCase(client, request, "financial_case.created", id, null, {
+      caseNumber, caseType, status: "open", priority, amount, currency,
+    });
+    const row = await loadFinancialCase(client, id);
+    await client.query("COMMIT");
+    return response.status(201).json({ success: true, data: financialCasePayload(row) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23505") {
+      return fail(response, 409, "FINANCIAL_CASE_DUPLICATE", "That provider case or request has already been recorded.");
+    }
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch("/financial-cases/:caseId/evidence", async (request, response, next) => {
+  if (!validUuid(request.params.caseId)) {
+    return fail(response, 400, "INVALID_CASE_ID", "The financial case identifier is invalid.");
+  }
+  const evidence = financialCaseEvidence(request.body?.evidence);
+  if (!evidence.length) {
+    return fail(response, 400, "CASE_EVIDENCE_REQUIRED", "Add at least one evidence reference.");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await loadFinancialCase(client, request.params.caseId, true);
+    if (!before) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "FINANCIAL_CASE_NOT_FOUND", "The financial case was not found.");
+    }
+    if (FINAL_STATUSES.has(before.status)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "FINANCIAL_CASE_FINAL", "A resolved financial case cannot be changed.");
+    }
+    await client.query(
+      `UPDATE fleet_financial_cases SET evidence_json=$3::jsonb,updated_by=$4,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2`,
+      [ORGANIZATION_ID, before.id, JSON.stringify(evidence), request.user.id],
+    );
+    await recordFinancialCaseEvent(client, request, before.id, "evidence_updated", null, null, { evidenceCount: evidence.length });
+    await auditFinancialCase(client, request, "financial_case.evidence_updated", before.id, {
+      evidenceCount: Array.isArray(before.evidence_json) ? before.evidence_json.length : 0,
+    }, { evidenceCount: evidence.length });
+    const after = await loadFinancialCase(client, before.id);
+    await client.query("COMMIT");
+    return response.json({ success: true, data: financialCasePayload(after) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch("/financial-cases/:caseId/status", async (request, response, next) => {
+  if (!validUuid(request.params.caseId)) {
+    return fail(response, 400, "INVALID_CASE_ID", "The financial case identifier is invalid.");
+  }
+  const nextStatus = clean(request.body?.status, 40).toLowerCase();
+  const notes = clean(request.body?.notes, 2000);
+  const externalReference = clean(request.body?.externalReference, 300) || null;
+  if (!CASE_STATUSES.has(nextStatus)) {
+    return fail(response, 400, "INVALID_CASE_STATUS", "The requested financial case status is invalid.");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await loadFinancialCase(client, request.params.caseId, true);
+    if (!before) {
+      await client.query("ROLLBACK");
+      return fail(response, 404, "FINANCIAL_CASE_NOT_FOUND", "The financial case was not found.");
+    }
+    if (!canTransitionFinancialCase(before.case_type, before.status, nextStatus)) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CASE_TRANSITION_BLOCKED", "That financial case transition is not allowed.", {
+        from: before.status,
+        to: nextStatus,
+        allowed: allowedTransitions(before.case_type, before.status),
+      });
+    }
+    const blockers = transitionBlockers({
+      evidence: before.evidence_json,
+      externalReference: externalReference || before.external_reference,
+    }, nextStatus, notes);
+    if (blockers.length) {
+      await client.query("ROLLBACK");
+      return fail(response, 409, "CASE_TRANSITION_REQUIREMENTS", "Complete the case requirements before changing its status.", { blockers });
+    }
+    await client.query(
+      `UPDATE fleet_financial_cases
+          SET status=$3,notes=COALESCE(NULLIF($4,''),notes),
+              external_reference=COALESCE($5,external_reference),
+              resolved_at=CASE WHEN $6 THEN NOW() ELSE NULL END,
+              updated_by=$7,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2`,
+      [ORGANIZATION_ID, before.id, nextStatus, notes, externalReference, FINAL_STATUSES.has(nextStatus), request.user.id],
+    );
+    await recordFinancialCaseEvent(client, request, before.id, "status_changed", before.status, nextStatus, {
+      notes: notes || undefined,
+      externalReference: externalReference || undefined,
+    });
+    await auditFinancialCase(client, request, "financial_case.status_changed", before.id, {
+      status: before.status,
+    }, { status: nextStatus, notes: notes || undefined });
+    const after = await loadFinancialCase(client, before.id);
+    await client.query("COMMIT");
+    return response.json({ success: true, data: financialCasePayload(after) });
   } catch (error) {
     await client.query("ROLLBACK");
     return next(error);
