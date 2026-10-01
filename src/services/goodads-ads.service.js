@@ -5967,6 +5967,10 @@ async function retryOperation({ id, context }) {
        AND provider_campaign.organization_id = $2
        AND operation.status IN ('failed','dead_letter')
        AND (
+         operation.operation_type <> 'create'
+         OR (provider_campaign.status = 'failed' AND provider_campaign.provider_campaign_id IS NULL)
+       )
+       AND (
          operation.operation_type = 'sync'
          OR NOT EXISTS (
            SELECT 1 FROM goodads_ad_operations active_operation
@@ -5996,6 +6000,145 @@ async function retryOperation({ id, context }) {
   return rowToOperation(result.rows[0]);
 }
 
+function selectLatestFailedCreateOperations(rows) {
+  const selected = new Map();
+  for (const row of rows) {
+    if (
+      row.operation_type !== "create"
+      || !["failed", "dead_letter"].includes(row.operation_status)
+      || row.provider_campaign_status !== "failed"
+      || row.provider_campaign_id
+      || !row.provider_campaign_record_id
+    ) continue;
+    const key = String(row.provider_campaign_record_id);
+    const current = selected.get(key);
+    const createdAt = Date.parse(row.operation_created_at || "") || 0;
+    const currentCreatedAt = Date.parse(current?.operation_created_at || "") || 0;
+    if (!current || createdAt > currentCreatedAt) selected.set(key, row);
+  }
+  return [...selected.values()].sort((left, right) => (
+    String(left.provider_campaign_record_id).localeCompare(String(right.provider_campaign_record_id))
+  ));
+}
+
+async function retryFailedCampaignCreates({ campaignId, context }) {
+  requireManagement(context);
+  const safeCampaignId = requireUuid(campaignId, "campaign ID");
+  const client = await pool.connect();
+  let retriedCount = 0;
+  const blocked = [];
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+      [`goodads:campaign-recovery:${context.organizationId}:${safeCampaignId}`]
+    );
+    const selected = await client.query(
+      `SELECT connection.*,
+         operation.id AS operation_record_id,
+         operation.organization_id,
+         operation.operation_type,
+         operation.status AS operation_status,
+         operation.payload AS operation_payload,
+         operation.created_at AS operation_created_at,
+         provider_campaign.id AS provider_campaign_record_id,
+         provider_campaign.campaign_id,
+         provider_campaign.status AS provider_campaign_status,
+         provider_campaign.provider_campaign_id,
+         provider_campaign.snapshot_hash,
+         provider_campaign.provider AS ad_provider,
+         account.name AS account_name,
+         account.provider_account_id,
+         account.status AS account_status,
+         account.currency AS account_currency,
+         account.timezone AS account_timezone,
+         account.metadata AS account_metadata,
+         connection.provider AS connection_provider,
+         connection.status AS connection_status,
+         campaign.name AS campaign_name,
+         campaign.status AS campaign_status,
+         campaign.version AS current_version,
+         campaign.data AS campaign_data
+       FROM goodads_ad_operations operation
+       JOIN goodads_provider_campaigns provider_campaign ON provider_campaign.id = operation.provider_campaign_id
+       JOIN goodads_ad_accounts account ON account.id = provider_campaign.ad_account_id
+       JOIN goodads_social_connections connection ON connection.id = account.connection_id
+       JOIN goodads_resources campaign ON campaign.id = provider_campaign.campaign_id
+       WHERE operation.organization_id = $1
+         AND provider_campaign.organization_id = $1
+         AND provider_campaign.campaign_id = $2::uuid
+         AND operation.operation_type = 'create'
+         AND operation.status IN ('failed','dead_letter')
+         AND provider_campaign.status = 'failed'
+         AND provider_campaign.provider_campaign_id IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM goodads_ad_operations active_operation
+           WHERE active_operation.provider_campaign_id = operation.provider_campaign_id
+             AND active_operation.id <> operation.id
+             AND active_operation.operation_type IN ('create','pause','activate','archive')
+             AND active_operation.status IN ('queued','processing','retrying')
+         )
+       ORDER BY operation.provider_campaign_id, operation.created_at DESC
+       FOR UPDATE OF operation, provider_campaign`,
+      [context.organizationId, safeCampaignId]
+    );
+    const candidates = selectLatestFailedCreateOperations(selected.rows);
+    const eligible = [];
+    for (const candidate of candidates) {
+      try {
+        validateCreateExecution(bindCreateOperationSnapshot(candidate));
+        eligible.push(candidate);
+      } catch (error) {
+        blocked.push({
+          operationId: candidate.operation_record_id,
+          providerCampaignId: candidate.provider_campaign_record_id,
+          provider: canonicalProvider(candidate.ad_provider),
+          accountName: boundedText(candidate.account_name, 240),
+          code: boundedText(error?.code, 100) || "GOODADS_AD_RECOVERY_BLOCKED",
+          detail: boundedText(error?.message, 1000) || "Provider setup recovery is blocked.",
+        });
+      }
+    }
+    if (eligible.length) {
+      const operationIds = eligible.map((row) => row.operation_record_id);
+      const updated = await client.query(
+        `UPDATE goodads_ad_operations
+         SET status = 'queued', attempts = 0, available_at = NOW(),
+             locked_by = NULL, locked_until = NULL, last_error = NULL,
+             completed_at = NULL, updated_at = NOW()
+         WHERE organization_id = $1
+           AND id = ANY($2::uuid[])
+           AND operation_type = 'create'
+           AND status IN ('failed','dead_letter')
+         RETURNING provider_campaign_id`,
+        [context.organizationId, operationIds]
+      );
+      const providerCampaignIds = updated.rows.map((row) => row.provider_campaign_id);
+      retriedCount = providerCampaignIds.length;
+      if (providerCampaignIds.length) {
+        await client.query(
+          `UPDATE goodads_provider_campaigns
+           SET status = 'queued', last_error = NULL, updated_at = NOW()
+           WHERE organization_id = $1 AND id = ANY($2::uuid[])`,
+          [context.organizationId, providerCampaignIds]
+        );
+      }
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  return {
+    retriedCount,
+    blockedCount: blocked.length,
+    blocked,
+    state: await getCampaignState({ campaignId: safeCampaignId, context }),
+  };
+}
+
 function capabilities() {
   const providers = publicProviders();
   const supportedProviders = providers.filter((provider) => provider.available).map((provider) => provider.id);
@@ -6022,6 +6165,7 @@ function capabilities() {
       providerIdentityRoutingValidated: true,
       providerGrantedScopesRevalidatedAtExecution: true,
       launchPreflightConnectionRevalidation: true,
+      campaignRecoveryBatchRetry: true,
       objectiveContracts: true,
       oneOpenMutationPerProviderCampaign: true,
       emergencyPauseAll: true,
@@ -6054,6 +6198,7 @@ module.exports = {
   requestActivationApproval,
   processDueOperations,
   retryOperation,
+  retryFailedCampaignCreates,
   _test: {
     providerAvailability,
     normalizeMetaAccount,
@@ -6107,6 +6252,7 @@ module.exports = {
     validateProviderObjective,
     validateCreateExecution,
     validateActivationExecution,
+    selectLatestFailedCreateOperations,
     providerReconciliationMinutes,
     shouldPauseUnexpectedActivation,
     campaignExposure,

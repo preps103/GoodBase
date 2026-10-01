@@ -915,6 +915,14 @@ router.post("/ads/operations/:id/retry", publishingLimiter, (req, res) => handle
     context: req.tenantContext,
   })
 ));
+router.post("/campaigns/:id/retry-failed-setup", publishingLimiter, (req, res) => handle(
+  res,
+  "campaign.retry-failed-setup",
+  ads.retryFailedCampaignCreates({
+    campaignId: req.params.id,
+    context: req.tenantContext,
+  })
+));
 router.get("/campaigns/:id/provider-state", (req, res) => handle(
   res,
   "campaign.provider-state",
