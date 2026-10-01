@@ -304,6 +304,45 @@ test("publishing targets require opaque UUID account identifiers", () => {
   assert.throws(() => social.normalizeConnectionIds(["facebook"]), /identifier is invalid/);
 });
 
+test("publishing approvals bind all content, accounts, schedule, freshness, and an independent decision", () => {
+  const approvalData = {
+    reviewType: "publishing",
+    requestedByUserId: "11111111-1111-4111-8111-111111111111",
+    decidedByUserId: "22222222-2222-4222-8222-222222222222",
+    expiresAt: "2026-10-08T00:00:00.000Z",
+    publication: {
+      content: { text: "Approved copy", title: "Launch", subreddit: "goodads" },
+      connectionIds: ["33333333-3333-4333-8333-333333333333"],
+      scheduledFor: "2026-10-02T18:00:00.000Z",
+    },
+  };
+  assert.equal(social._test.publishingApprovalIsFresh(
+    approvalData,
+    new Date("2026-10-07T23:59:59.000Z")
+  ), true);
+  assert.equal(social._test.publishingApprovalIsFresh(
+    approvalData,
+    new Date("2026-10-08T00:00:00.000Z")
+  ), false);
+  assert.equal(social._test.publishingApprovalHasIndependentDecision(approvalData), true);
+  assert.equal(social._test.publishingApprovalHasIndependentDecision({
+    ...approvalData,
+    decidedByUserId: approvalData.requestedByUserId,
+  }), false);
+  assert.equal(social._test.publishingApprovalMatchesRequest({
+    approvalData,
+    content: { subreddit: "goodads", title: "Launch", text: "Approved copy" },
+    connectionIds: ["33333333-3333-4333-8333-333333333333"],
+    scheduledFor: "2026-10-02T18:00:00.000Z",
+  }), true);
+  assert.equal(social._test.publishingApprovalMatchesRequest({
+    approvalData,
+    content: { text: "Approved copy", title: "Changed title", subreddit: "goodads" },
+    connectionIds: ["33333333-3333-4333-8333-333333333333"],
+    scheduledFor: "2026-10-02T18:00:00.000Z",
+  }), false);
+});
+
 test("publishing migration installs account targets, scheduling, retries, and worker dispatch", () => {
   const migration = fs.readFileSync(path.join(__dirname, "../migrations/20260729_goodads_publishing_queue.sql"), "utf8");
   const jobs = fs.readFileSync(path.join(__dirname, "../src/services/job.service.js"), "utf8");

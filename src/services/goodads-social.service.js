@@ -6,6 +6,7 @@ const database = require("../config/database");
 const { query } = database;
 
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const PROVIDERS = {
   google: {
@@ -1165,10 +1166,57 @@ function normalizeSchedule(scheduledFor, timezone) {
 
 function normalizeConnectionIds(connectionIds) {
   const ids = [...new Set((Array.isArray(connectionIds) ? connectionIds : []).map((value) => String(value).toLowerCase()))];
-  if (ids.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))) {
+  if (ids.some((id) => !UUID_PATTERN.test(id))) {
     throw socialError("A selected social account identifier is invalid.");
   }
   return ids;
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function publishingApprovalIsFresh(approvalData, now = new Date()) {
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const expiresAtMs = new Date(approvalData?.expiresAt || "").getTime();
+  return Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+}
+
+function publishingApprovalHasIndependentDecision(approvalData) {
+  const requestedByUserId = String(approvalData?.requestedByUserId || "").trim().toLowerCase();
+  const decidedByUserId = String(approvalData?.decidedByUserId || "").trim().toLowerCase();
+  return UUID_PATTERN.test(requestedByUserId)
+    && UUID_PATTERN.test(decidedByUserId)
+    && requestedByUserId !== decidedByUserId;
+}
+
+function publishingApprovalMatchesRequest({ approvalData, connectionIds, content, scheduledFor }) {
+  const publication = approvalData?.publication;
+  if (approvalData?.reviewType !== "publishing" || !publication || typeof publication !== "object") return false;
+  let approvedContent;
+  let requestedContent;
+  try {
+    approvedContent = normalizePublishContent(publication.content || {});
+    requestedContent = normalizePublishContent(content || {});
+  } catch {
+    return false;
+  }
+  const approvedConnections = normalizeConnectionIds(publication.connectionIds).sort();
+  const requestedConnections = normalizeConnectionIds(connectionIds).sort();
+  if (
+    canonicalJson(approvedContent) !== canonicalJson(requestedContent)
+    || canonicalJson(approvedConnections) !== canonicalJson(requestedConnections)
+  ) return false;
+  if (publication.scheduledFor) {
+    const approvedSchedule = new Date(publication.scheduledFor).getTime();
+    const requestedSchedule = new Date(scheduledFor || "").getTime();
+    if (!Number.isFinite(approvedSchedule) || approvedSchedule !== requestedSchedule) return false;
+  }
+  return true;
 }
 
 async function resolvePublishConnections({ context, userId, connectionIds, providers }) {
@@ -1249,42 +1297,84 @@ async function validatePublishingApproval({
     );
   }
   const publication = approval.data?.publication;
-  if (!publication || typeof publication !== "object") {
+  if (approval.data?.reviewType !== "publishing" || !publication || typeof publication !== "object") {
     throw socialError(
       "This approval does not authorize a publishing request.",
       409,
       "GOODADS_PUBLISH_APPROVAL_INVALID"
     );
   }
-  const approvedText = String(publication.content?.text || "").trim();
-  const requestedText = String(content?.text || content?.message || "").trim();
-  const approvedConnections = [...new Set(
-    (Array.isArray(publication.connectionIds) ? publication.connectionIds : [])
-      .map((value) => String(value).toLowerCase())
-  )].sort();
-  const requestedConnections = normalizeConnectionIds(connectionIds).sort();
-  if (
-    approvedText !== requestedText
-    || JSON.stringify(approvedConnections) !== JSON.stringify(requestedConnections)
-  ) {
+  if (!publishingApprovalIsFresh(approval.data)) {
     throw socialError(
-      "The publishing request does not match the approved copy and accounts.",
+      "This publishing review expired. Submit and approve a fresh review.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_EXPIRED"
+    );
+  }
+  if (!publishingApprovalHasIndependentDecision(approval.data)) {
+    throw socialError(
+      "This publishing review was not approved by an independent manager.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_SEPARATION_REQUIRED"
+    );
+  }
+  if (!publishingApprovalMatchesRequest({
+    approvalData: approval.data,
+    connectionIds,
+    content,
+    scheduledFor,
+  })) {
+    throw socialError(
+      "The publishing request does not match the approved content, accounts, or schedule.",
       409,
       "GOODADS_PUBLISH_APPROVAL_MISMATCH"
     );
   }
-  if (publication.scheduledFor) {
-    const approvedSchedule = new Date(publication.scheduledFor).toISOString();
-    const requestedSchedule = new Date(scheduledFor || publication.scheduledFor).toISOString();
-    if (approvedSchedule !== requestedSchedule) {
-      throw socialError(
-        "The publishing time does not match the approved request.",
-        409,
-        "GOODADS_PUBLISH_APPROVAL_MISMATCH"
-      );
-    }
-  }
   return normalizedApprovalId;
+}
+
+async function validateQueuedPublishingApproval(job) {
+  if (!job.approval_id) return;
+  const result = await query(
+    `SELECT data
+     FROM goodads_resources
+     WHERE id = $1::uuid
+       AND organization_id = $2
+       AND resource_type = 'approvals'
+       AND status = 'approved'
+       AND archived_at IS NULL`,
+    [job.approval_id, job.organization_id]
+  );
+  const approvalData = result.rows[0]?.data;
+  if (!approvalData) {
+    throw socialError(
+      "The publishing approval was revoked before provider delivery.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_REVOKED"
+    );
+  }
+  const targets = await query(
+    `SELECT connection_id::text AS connection_id
+     FROM goodads_publish_targets
+     WHERE job_id = $1::uuid
+     ORDER BY connection_id::text`,
+    [job.id]
+  );
+  if (
+    !publishingApprovalHasIndependentDecision(approvalData)
+    || !publishingApprovalMatchesRequest({
+      approvalData,
+      connectionIds: targets.rows.map((row) => row.connection_id),
+      content: job.content,
+      scheduledFor: job.scheduled_for,
+    })
+  ) {
+    throw socialError(
+      "The queued publishing approval no longer matches this exact provider delivery.",
+      409,
+      "GOODADS_PUBLISH_APPROVAL_INVALID"
+    );
+  }
 }
 
 async function publish({
@@ -1578,6 +1668,7 @@ async function claimPublishJob(workerId) {
 }
 
 async function processPublishJob(job, workerId) {
+  await validateQueuedPublishingApproval(job);
   await query(
     `UPDATE goodads_publish_targets SET status = 'retrying', available_at = NOW(),
        locked_by = NULL, locked_until = NULL,
@@ -1696,15 +1787,28 @@ async function processDuePublishJobs(limit = 10, workerId = `goodads-publisher-$
     try {
       results.push(await processPublishJob(job, workerId));
     } catch (error) {
+      const approvalInvalid = [
+        "GOODADS_PUBLISH_APPROVAL_REVOKED",
+        "GOODADS_PUBLISH_APPROVAL_INVALID",
+      ].includes(error.code);
+      if (approvalInvalid) {
+        await query(
+          `UPDATE goodads_publish_targets SET status = 'cancelled', locked_by = NULL,
+             locked_until = NULL, last_error = $2, updated_at = NOW()
+           WHERE job_id = $1::uuid AND status IN ('queued','retrying','processing')`,
+          [job.id, String(error.message).slice(0, 2000)]
+        );
+      }
       await query(
         `UPDATE goodads_publish_jobs SET
-           status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'retrying' END,
+           status = CASE WHEN $3::boolean THEN 'cancelled'
+             WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'retrying' END,
            available_at = NOW() + (LEAST(3600, 15 * POWER(2, attempts))::text || ' seconds')::interval,
            locked_by = NULL, locked_until = NULL, last_error = $2
          WHERE id = $1::uuid`,
-        [job.id, String(error.message || "Publishing worker failed.").slice(0, 2000)]
+        [job.id, String(error.message || "Publishing worker failed.").slice(0, 2000), approvalInvalid]
       );
-      results.push({ id: job.id, status: "retrying", error: error.message });
+      results.push({ id: job.id, status: approvalInvalid ? "cancelled" : "retrying", error: error.message });
     }
   }
   return { processed: results.length, results };
@@ -1783,6 +1887,10 @@ module.exports = {
     publicConnection,
     refreshFailureDetails,
     tokenExpiryTime,
+    canonicalJson,
+    publishingApprovalIsFresh,
+    publishingApprovalHasIndependentDecision,
+    publishingApprovalMatchesRequest,
   },
   validatePublishingApproval,
   rejectPaidCampaignLaunch,

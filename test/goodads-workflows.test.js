@@ -65,12 +65,25 @@ test("GoodAds bounds engagement, approval, and automation inputs", () => {
     name: "Spring launch review",
     reviewType: "publishing",
     publication: {
-      content: { text: "Approved copy" },
+      content: { text: "Approved copy", title: " Launch title ", subreddit: "r/GoodAds" },
       connectionIds: ["11111111-1111-4111-8111-111111111111"],
     },
   });
   assert.equal(approval.status, "pending");
   assert.equal(approval.publication.content.text, "Approved copy");
+  assert.equal(approval.publication.content.title, "Launch title");
+  assert.equal(approval.publication.content.subreddit, "GoodAds");
+  assert.throws(
+    () => workflows._test.normalizeApprovalPayload({
+      name: "Wrong review type",
+      reviewType: "creative",
+      publication: {
+        content: { text: "Do not publish" },
+        connectionIds: ["11111111-1111-4111-8111-111111111111"],
+      },
+    }),
+    /Only publishing reviews/
+  );
 
   const paidActivationApproval = workflows._test.normalizeApprovalPayload({
     name: "Activate protected campaign",
@@ -95,6 +108,24 @@ test("GoodAds bounds engagement, approval, and automation inputs", () => {
   }, "11111111-1111-4111-8111-111111111111"), false);
   assert.equal(workflows._test.paidActivationApprovalCanBeApprovedBy({},
     "22222222-2222-4222-8222-222222222222"), false);
+
+  const publishingTiming = workflows._test.publishingApprovalTiming(new Date("2026-10-01T00:00:00.000Z"));
+  assert.equal(publishingTiming.requestedAt, "2026-10-01T00:00:00.000Z");
+  assert.equal(publishingTiming.expiresAt, "2026-10-08T00:00:00.000Z");
+  assert.equal(workflows._test.publishingApprovalIsFresh(
+    publishingTiming,
+    new Date("2026-10-07T23:59:59.000Z")
+  ), true);
+  assert.equal(workflows._test.publishingApprovalIsFresh(
+    publishingTiming,
+    new Date("2026-10-08T00:00:00.000Z")
+  ), false);
+  assert.equal(workflows._test.publishingApprovalCanBeApprovedBy({
+    requestedByUserId: "11111111-1111-4111-8111-111111111111",
+  }, "22222222-2222-4222-8222-222222222222"), true);
+  assert.equal(workflows._test.publishingApprovalCanBeApprovedBy({
+    requestedByUserId: "11111111-1111-4111-8111-111111111111",
+  }, "11111111-1111-4111-8111-111111111111"), false);
 
   const automation = workflows._test.normalizeAutomationPayload({
     name: "Weekly draft",
@@ -213,6 +244,9 @@ test("GoodAds workflow migration installs durable governed operations", () => {
   assert.match(workflows, /GOODADS_PAID_ACTIVATION_APPROVAL_REQUIRED/);
   assert.match(workflows, /GOODADS_APPROVAL_EXPIRED/);
   assert.match(workflows, /GOODADS_APPROVAL_SEPARATION_REQUIRED/);
+  assert.match(workflows, /GOODADS_PUBLISH_APPROVAL_EXPIRED/);
+  assert.match(workflows, /GOODADS_PUBLISH_APPROVAL_SEPARATION_REQUIRED/);
+  assert.match(workflows, /revokedPublishingApprovalsStopQueuedDelivery: true/);
   const resources = read("src/services/goodads.service.js");
   assert.match(resources, /type === "automations" && current\.systemManaged === true/);
   assert.match(resources, /GOODADS_SYSTEM_AUTOMATION_PROTECTED/);
@@ -232,6 +266,10 @@ test("GoodAds production publishing enforces approved copy for non-management ro
   const social = read("src/services/goodads-social.service.js");
   assert.match(social, /GOODADS_PUBLISH_APPROVAL_REQUIRED/);
   assert.match(social, /GOODADS_PUBLISH_APPROVAL_MISMATCH/);
+  assert.match(social, /GOODADS_PUBLISH_APPROVAL_EXPIRED/);
+  assert.match(social, /GOODADS_PUBLISH_APPROVAL_SEPARATION_REQUIRED/);
+  assert.match(social, /GOODADS_PUBLISH_APPROVAL_REVOKED/);
+  assert.match(social, /validateQueuedPublishingApproval\(job\)/);
   assert.match(social, /resource_type = 'approvals'/);
   assert.match(social, /approval_id/);
 });
