@@ -16,6 +16,13 @@ const {
   loyaltyTierDiscount,
   rentalPoints,
 } = require("../services/fleet-customer-programs.service");
+const {
+  cancellationOutcome,
+  noShowOutcome,
+  policyActionPayload,
+  recordPolicyAction,
+  syncInventoryTransfer,
+} = require("../services/fleet-booking-policies.service");
 
 const router = express.Router();
 const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
@@ -62,6 +69,8 @@ const BOOKING_EDITOR_ROLES = new Set(["owner", "admin", "manager", "staff"]);
 const BOOKING_DELETE_ROLES = new Set(["owner", "admin", "manager"]);
 const CUSTOMER_DELETE_ROLES = new Set(["owner", "admin", "manager"]);
 const MANAGEMENT_RETURN_OVERRIDE_ROLES = new Set(["owner", "admin", "manager"]);
+const CANCELLABLE_BOOKING_STATUSES = new Set(["quote", "pending_payment", "confirmed", "assigned", "checked_in"]);
+const NO_SHOW_BOOKING_STATUSES = new Set(["pending_payment", "confirmed", "assigned", "checked_in"]);
 const VEHICLE_STATUSES = new Set([
   "available", "reserved", "checked_out", "in_transit", "cleaning", "turnaround",
   "inspection", "maintenance", "out_of_service", "retired", "blocked", "recalled"
@@ -429,6 +438,241 @@ async function calculateBookingPrice(client, org, input, pickupAt, returnAt) {
     input: { ...input, customerProgram },
     pickupAt,
     returnAt
+  });
+}
+
+async function bookingPolicyState(client, org) {
+  const result = await client.query(
+    `SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`,
+    [org],
+  );
+  return result.rows[0]?.state_json || {};
+}
+
+function requiredIdempotencyKey(request) {
+  const key = text(request.get("Idempotency-Key"), 255);
+  if (!key) {
+    const error = new Error("An Idempotency-Key header is required.");
+    error.statusCode = 400;
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  return key;
+}
+
+function transferPayload(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    reservationNumber: row.reservation_number,
+    vehicleId: row.vehicle_id,
+    vehicleName: [row.model_year, row.make, row.model].filter(Boolean).join(" "),
+    originBranchId: row.origin_branch_id,
+    destinationBranchId: row.destination_branch_id,
+    expectedAt: row.expected_at,
+    status: row.status,
+    completedAt: row.completed_at || null,
+    cancelledAt: row.cancelled_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function applyBookingPolicyAction(client, request, actionType) {
+  const org = organization(request);
+  const key = requiredIdempotencyKey(request);
+  const duplicate = await client.query(
+    `SELECT action.*,booking.*,
+            action.id AS policy_action_id,action.status AS policy_action_status,
+            action.created_at AS policy_action_created_at
+       FROM fleet_booking_policy_actions action
+       JOIN fleet_bookings booking
+         ON booking.organization_id=action.organization_id
+        AND booking.id=action.booking_id
+      WHERE action.organization_id=$1 AND action.idempotency_key=$2`,
+    [org, key],
+  );
+  if (duplicate.rowCount) {
+    const row = duplicate.rows[0];
+    return {
+      booking: bookingPayload(row),
+      policyAction: {
+        id: row.policy_action_id,
+        bookingId: row.booking_id,
+        actionType: row.action_type,
+        source: row.source,
+        reason: row.reason,
+        status: row.policy_action_status,
+        feeAmount: Number(row.fee_amount || 0),
+        refundDue: Number(row.refund_due || 0),
+        balanceDue: Number(row.balance_due || 0),
+        policy: row.policy_json || {},
+        outcome: row.outcome_json || {},
+        createdAt: row.policy_action_created_at,
+      },
+      duplicate: true,
+    };
+  }
+
+  const existing = await client.query(
+    `SELECT * FROM fleet_bookings
+      WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL
+      FOR UPDATE`,
+    [org, request.params.bookingId],
+  );
+  if (!existing.rowCount) {
+    const error = new Error("Reservation not found.");
+    error.statusCode = 404;
+    error.code = "BOOKING_NOT_FOUND";
+    throw error;
+  }
+  const row = existing.rows[0];
+  const before = bookingPayload(row);
+  const allowed = actionType === "cancellation" ? CANCELLABLE_BOOKING_STATUSES : NO_SHOW_BOOKING_STATUSES;
+  if (!allowed.has(before.status)) {
+    const error = new Error(actionType === "cancellation"
+      ? "Only pre-departure reservations can be cancelled."
+      : "Only pre-departure reservations can be marked as a no-show.");
+    error.statusCode = 409;
+    error.code = actionType === "cancellation" ? "BOOKING_NOT_CANCELLABLE" : "BOOKING_NOT_NO_SHOW_ELIGIBLE";
+    throw error;
+  }
+  const reason = text(request.body?.reason, 1000);
+  if (reason.length < 5) {
+    const error = new Error("Enter a reason of at least 5 characters.");
+    error.statusCode = 400;
+    error.code = "BOOKING_POLICY_REASON_REQUIRED";
+    throw error;
+  }
+  const waiveFee = request.body?.waiveFee === true;
+  if (waiveFee && !MANAGEMENT_RETURN_OVERRIDE_ROLES.has(goodFleetAccessRole(request))) {
+    const error = new Error("Only an owner, administrator, or manager can waive a cancellation or no-show fee.");
+    error.statusCode = 403;
+    error.code = "MANAGEMENT_FEE_WAIVER_REQUIRED";
+    throw error;
+  }
+  const state = await bookingPolicyState(client, org);
+  const outcome = actionType === "cancellation"
+    ? cancellationOutcome({
+      pickupAt: row.pickup_at,
+      totalAmount: row.total_amount,
+      paidAmount: row.paid_amount,
+      state,
+      waiveFee,
+    })
+    : noShowOutcome({
+      pickupAt: row.pickup_at,
+      totalAmount: row.total_amount,
+      paidAmount: row.paid_amount,
+      state,
+      waiveFee,
+    });
+  const nextStatus = actionType === "cancellation" ? "cancelled" : "no_show";
+  const policyKey = actionType === "cancellation" ? "cancellationPolicy" : "noShowPolicy";
+  const actionAt = new Date().toISOString();
+  const storedPayload = cleanPayload({
+    ...before,
+    status: nextStatus,
+    [policyKey]: { ...outcome, reason, recordedAt: actionAt, recordedBy: actor(request) },
+  });
+  const updated = await client.query(
+    `UPDATE fleet_bookings
+        SET status=$3,
+            cancellation_reason=CASE WHEN $3='cancelled' THEN $4 ELSE cancellation_reason END,
+            cancelled_at=CASE WHEN $3='cancelled' THEN NOW() ELSE cancelled_at END,
+            cancelled_by=CASE WHEN $3='cancelled' THEN $5 ELSE cancelled_by END,
+            payload=$6::jsonb,version=version+1,updated_by=$5,updated_at=NOW()
+      WHERE organization_id=$1 AND id=$2
+      RETURNING *`,
+    [org, row.id, nextStatus, reason, actor(request), JSON.stringify(storedPayload)],
+  );
+  const booking = bookingPayload(updated.rows[0]);
+  const policyAction = await recordPolicyAction(client, {
+    organizationId: org,
+    bookingId: row.id,
+    actionType,
+    source: "employee",
+    reason,
+    outcome,
+    idempotencyKey: key,
+    actorId: actor(request),
+  });
+  await syncInventoryTransfer(client, {
+    organizationId: org,
+    bookingId: booking.id,
+    vehicleId: booking.carId,
+    pickupBranchId: booking.pickupLocationId,
+    returnBranchId: booking.returnLocationId,
+    expectedAt: row.return_at,
+    bookingStatus: booking.status,
+    actorId: actor(request),
+  });
+  if (actionType === "no_show") {
+    await client.query(
+      `UPDATE fleet_customers
+          SET payload=jsonb_set(
+                jsonb_set(payload,'{noShowCount}',to_jsonb(COALESCE((payload->>'noShowCount')::integer,0)+1),true),
+                '{lastNoShowAt}',to_jsonb($3::text),true
+              ),
+              version=version+1,updated_by=$4,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2`,
+      [org, row.customer_id, actionAt, actor(request)],
+    );
+  }
+  if (booking.carId) {
+    await client.query(
+      `UPDATE fleet_vehicles
+          SET status='available',version=version+1,updated_by=$3,updated_at=NOW()
+        WHERE organization_id=$1 AND id=$2
+          AND status IN ('reserved','in_transit')`,
+      [org, booking.carId, actor(request)],
+    );
+  }
+  await audit(
+    client,
+    request,
+    actionType === "cancellation" ? "booking.cancelled" : "booking.no_show_recorded",
+    "booking",
+    booking.id,
+    before,
+    {
+      ...booking,
+      feeAmount: outcome.feeAmount,
+      refundDue: outcome.refundDue,
+      balanceDue: outcome.balanceDue,
+      disposition: outcome.disposition,
+      feeWaived: outcome.feeWaived,
+    },
+  );
+  return { booking, policyAction, duplicate: false };
+}
+
+async function notifyCustomerBookingPolicy(organizationId, booking, policyAction) {
+  const customer = await query(
+    `SELECT user_id,email FROM fleet_customers
+      WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+    [organizationId, booking.customerId],
+  );
+  if (!customer.rowCount || (!customer.rows[0].user_id && !customer.rows[0].email)) return;
+  const cancelled = policyAction.actionType === "cancellation";
+  await notificationService.createNotification({
+    appId: "goodfleet",
+    organizationId,
+    projectId: "proj_goodos_platform",
+    environmentId: "env_goodos_production",
+    source: "goodfleet-booking-policy",
+    sourceId: policyAction.id,
+    recipientUserId: customer.rows[0].user_id || null,
+    recipientEmail: customer.rows[0].email || null,
+    title: `${booking.reservationNumber} ${cancelled ? "cancelled" : "marked as no-show"}`,
+    message: policyAction.status === "review_required"
+      ? `Your reservation was ${cancelled ? "cancelled" : "marked as a no-show"}. A financial review has been recorded and will remain pending until payment processing confirms the outcome.`
+      : `Your reservation was ${cancelled ? "cancelled" : "marked as a no-show"}. No financial review is required.`,
+    category: "reservation",
+    channel: "in_app",
+    actionUrl: "/account/trips",
+    notificationKey: `fleet.booking.${policyAction.actionType}`,
+    payload: { bookingId: booking.id, policyActionId: policyAction.id },
   });
 }
 
@@ -976,6 +1220,8 @@ router.get("/health", async (request, response, next) => {
           AND to_regclass('public.fleet_negotiated_rates') IS NOT NULL
           AND to_regclass('public.fleet_loyalty_accounts') IS NOT NULL
           AND to_regclass('public.fleet_loyalty_events') IS NOT NULL) AS customer_programs_ready,
+        (to_regclass('public.fleet_booking_policy_actions') IS NOT NULL
+          AND to_regclass('public.fleet_inventory_transfer_plans') IS NOT NULL) AS booking_policies_ready,
         to_regclass('public.fleet_workspace_revisions') IS NOT NULL AS workspace_recovery_ready`
     );
     const readiness = result.rows[0];
@@ -1840,6 +2086,16 @@ router.post("/bookings", requireBookingEditor, async (request, response, next) =
         "0.00", JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
+    await syncInventoryTransfer(client, {
+      organizationId: org,
+      bookingId: booking.id,
+      vehicleId: booking.carId,
+      pickupBranchId: booking.pickupLocationId,
+      returnBranchId: booking.returnLocationId,
+      expectedAt: result.rows[0].return_at,
+      bookingStatus: booking.status,
+      actorId: actor(request),
+    });
     await audit(client, request, "booking.created", "booking", booking.id, null, booking);
     await client.query("COMMIT");
     response.status(201).json({ success: true, data: booking });
@@ -2571,6 +2827,142 @@ router.post("/bookings/:bookingId/return-link", requireBookingEditor, async (req
   }
 });
 
+router.get("/bookings/:bookingId/cancellation-quote", requireBookingEditor, async (request, response, next) => {
+  try {
+    const org = organization(request);
+    const [booking, state] = await Promise.all([
+      query(
+        `SELECT * FROM fleet_bookings
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+        [org, request.params.bookingId],
+      ),
+      query(`SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`, [org]),
+    ]);
+    if (!booking.rowCount) return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    if (!CANCELLABLE_BOOKING_STATUSES.has(booking.rows[0].status)) {
+      return fail(response, 409, "BOOKING_NOT_CANCELLABLE", "Only pre-departure reservations can be cancelled.");
+    }
+    const outcome = cancellationOutcome({
+      pickupAt: booking.rows[0].pickup_at,
+      totalAmount: booking.rows[0].total_amount,
+      paidAmount: booking.rows[0].paid_amount,
+      state: state.rows[0]?.state_json || {},
+      waiveFee: request.query.waiveFee === "true" && MANAGEMENT_RETURN_OVERRIDE_ROLES.has(goodFleetAccessRole(request)),
+    });
+    response.json({ success: true, data: outcome });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/bookings/:bookingId/no-show-quote", requireBookingEditor, async (request, response, next) => {
+  try {
+    const org = organization(request);
+    const [booking, state] = await Promise.all([
+      query(
+        `SELECT * FROM fleet_bookings
+          WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
+        [org, request.params.bookingId],
+      ),
+      query(`SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`, [org]),
+    ]);
+    if (!booking.rowCount) return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+    if (!NO_SHOW_BOOKING_STATUSES.has(booking.rows[0].status)) {
+      return fail(response, 409, "BOOKING_NOT_NO_SHOW_ELIGIBLE", "Only pre-departure reservations can be marked as a no-show.");
+    }
+    const outcome = noShowOutcome({
+      pickupAt: booking.rows[0].pickup_at,
+      totalAmount: booking.rows[0].total_amount,
+      paidAmount: booking.rows[0].paid_amount,
+      state: state.rows[0]?.state_json || {},
+      waiveFee: request.query.waiveFee === "true" && MANAGEMENT_RETURN_OVERRIDE_ROLES.has(goodFleetAccessRole(request)),
+    });
+    response.json({ success: true, data: outcome });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/bookings/:bookingId/cancel", requireBookingEditor, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await applyBookingPolicyAction(client, request, "cancellation");
+    await client.query("COMMIT");
+    if (!result.duplicate) {
+      await notifyCustomerBookingPolicy(organization(request), result.booking, result.policyAction).catch(error => {
+        console.error("GoodFleet cancellation customer notification failed", { bookingId: result.booking.id, message: error.message });
+      });
+    }
+    response.json({ success: true, data: result });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/bookings/:bookingId/no-show", requireBookingEditor, async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await applyBookingPolicyAction(client, request, "no_show");
+    await client.query("COMMIT");
+    if (!result.duplicate) {
+      await notifyCustomerBookingPolicy(organization(request), result.booking, result.policyAction).catch(error => {
+        console.error("GoodFleet no-show customer notification failed", { bookingId: result.booking.id, message: error.message });
+      });
+    }
+    response.json({ success: true, data: result });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/booking-policy-actions", requireBookingEditor, async (request, response, next) => {
+  try {
+    const status = text(request.query.status, 40).toLowerCase();
+    const result = await query(
+      `SELECT action.*
+         FROM fleet_booking_policy_actions action
+        WHERE action.organization_id=$1
+          AND ($2='' OR action.status=$2)
+        ORDER BY action.created_at DESC
+        LIMIT 250`,
+      [organization(request), status],
+    );
+    response.json({ success: true, data: result.rows.map(policyActionPayload) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/inventory-transfers", requireBookingEditor, async (request, response, next) => {
+  try {
+    const status = text(request.query.status, 40).toLowerCase();
+    const result = await query(
+      `SELECT plan.*,booking.reservation_number,vehicle.make,vehicle.model,vehicle.model_year
+         FROM fleet_inventory_transfer_plans plan
+         JOIN fleet_bookings booking
+           ON booking.organization_id=plan.organization_id AND booking.id=plan.booking_id
+         LEFT JOIN fleet_vehicles vehicle
+           ON vehicle.organization_id=plan.organization_id AND vehicle.id=plan.vehicle_id
+        WHERE plan.organization_id=$1
+          AND ($2='' OR plan.status=$2)
+        ORDER BY CASE WHEN plan.status='planned' THEN 0 ELSE 1 END,plan.expected_at,plan.updated_at DESC
+        LIMIT 250`,
+      [organization(request), status],
+    );
+    response.json({ success: true, data: result.rows.map(transferPayload) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.patch("/bookings/:bookingId", requireBookingEditor, async (request, response, next) => {
   const client = await pool.connect();
   try {
@@ -2597,6 +2989,17 @@ router.patch("/bookings/:bookingId", requireBookingEditor, async (request, respo
       return fail(response, 409, "BOOKING_NOT_EDITABLE", "Completed, cancelled, and refunded reservations cannot have trip details changed.");
     }
     const merged = cleanPayload({ ...before, ...(request.body || {}) });
+    if (merged.status !== before.status && ["cancelled", "no_show"].includes(merged.status)) {
+      await client.query("ROLLBACK");
+      return fail(
+        response,
+        409,
+        "BOOKING_POLICY_ENDPOINT_REQUIRED",
+        merged.status === "cancelled"
+          ? "Use the controlled cancellation action so fees, refund review, vehicle release, and audit records are handled together."
+          : "Use the controlled no-show action so the grace period, fees, vehicle release, and customer history are handled together.",
+      );
+    }
     if (before.status === "completed" && merged.status !== "completed") {
       await client.query("ROLLBACK");
       return fail(
@@ -2816,6 +3219,16 @@ router.patch("/bookings/:bookingId", requireBookingEditor, async (request, respo
         money(paidAmount, "paidAmount"), JSON.stringify(storedPayload), actor(request)]
     );
     const booking = bookingPayload(result.rows[0]);
+    await syncInventoryTransfer(client, {
+      organizationId: org,
+      bookingId: booking.id,
+      vehicleId: booking.carId,
+      pickupBranchId: booking.pickupLocationId,
+      returnBranchId: booking.returnLocationId,
+      expectedAt: result.rows[0].return_at,
+      bookingStatus: booking.status,
+      actorId: actor(request),
+    });
     if (returnPhotoOverride) {
       await audit(
         client,
@@ -2948,11 +3361,11 @@ router.patch("/bookings/:bookingId", requireBookingEditor, async (request, respo
         };
         const updatedVehicle = await client.query(
           `UPDATE fleet_vehicles
-           SET status='inspection',payload=$3::jsonb,version=version+1,
-               updated_by=$4,updated_at=NOW()
+           SET status='inspection',payload=$3::jsonb,assigned_branch_id=$5,
+               version=version+1,updated_by=$4,updated_at=NOW()
            WHERE organization_id=$1 AND id=$2
            RETURNING *`,
-          [org, booking.carId, JSON.stringify(vehicleState), actor(request)]
+          [org, booking.carId, JSON.stringify(vehicleState), actor(request), booking.returnLocationId]
         );
         returnedVehicle = vehiclePayload(updatedVehicle.rows[0]);
         await audit(

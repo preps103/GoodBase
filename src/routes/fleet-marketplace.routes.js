@@ -13,6 +13,11 @@ const {
   loadCustomerProgram,
   programDiscount,
 } = require("../services/fleet-customer-programs.service");
+const {
+  cancellationOutcome,
+  recordPolicyAction,
+  syncInventoryTransfer,
+} = require("../services/fleet-booking-policies.service");
 const { publicBackendUrl } = require("../utils/managedAssetUrl");
 
 const router = express.Router();
@@ -107,6 +112,17 @@ router.use(authRequired);
 
 function clean(value, max = 4000) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+function requiredIdempotencyKey(request) {
+  const key = clean(request.get("Idempotency-Key"), 255);
+  if (!key) {
+    const error = new Error("An Idempotency-Key header is required.");
+    error.statusCode = 400;
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  return key;
 }
 
 function receiveClaimEvidence(request, response, next) {
@@ -412,6 +428,7 @@ function bookingPayload(row) {
     paidAmount: Number(row.paid_amount),
     cancellationReason: row.cancellation_reason || null,
     cancelledAt: row.cancelled_at || null,
+    cancellationPolicy: row.payload?.cancellationPolicy || null,
     vehicle: row.vehicle_id
       ? {
           id: row.vehicle_id,
@@ -1488,6 +1505,16 @@ router.post("/reservations", async (request, response, next) => {
         hostUserId,
       ],
     );
+    await syncInventoryTransfer(client, {
+      organizationId: PUBLIC_ORGANIZATION_ID,
+      bookingId: inserted.rows[0].id,
+      vehicleId: listing.vehicle_id,
+      pickupBranchId: branchId,
+      returnBranchId: clean(request.body?.returnLocationId, 200) || branchId,
+      expectedAt: returnAt,
+      bookingStatus: inserted.rows[0].status,
+      actorId: request.user.id,
+    });
     await audit(
       client,
       request,
@@ -1573,12 +1600,61 @@ router.get("/reservations", async (request, response, next) => {
   }
 });
 
+router.get(
+  "/reservations/:bookingId/cancellation-quote",
+  async (request, response, next) => {
+    try {
+      const [booking, workspace] = await Promise.all([
+        query(
+          `SELECT * FROM fleet_bookings
+            WHERE organization_id=$1 AND id=$2 AND guest_user_id=$3
+              AND archived_at IS NULL`,
+          [PUBLIC_ORGANIZATION_ID, request.params.bookingId, request.user.id],
+        ),
+        query(
+          `SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`,
+          [PUBLIC_ORGANIZATION_ID],
+        ),
+      ]);
+      if (!booking.rowCount) return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
+      if (!CANCELLABLE_STATUSES.has(booking.rows[0].status)) {
+        return fail(response, 409, "BOOKING_NOT_CANCELLABLE", "This reservation can no longer be cancelled online.");
+      }
+      response.json({
+        success: true,
+        data: cancellationOutcome({
+          pickupAt: booking.rows[0].pickup_at,
+          totalAmount: booking.rows[0].total_amount,
+          paidAmount: booking.rows[0].paid_amount,
+          state: workspace.rows[0]?.state_json || {},
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
 router.post(
   "/reservations/:bookingId/cancel",
   async (request, response, next) => {
     const client = await pool.connect();
     try {
+      const key = requiredIdempotencyKey(request);
       await client.query("BEGIN");
+      const duplicate = await client.query(
+        `SELECT booking.*
+           FROM fleet_booking_policy_actions action
+           JOIN fleet_bookings booking
+             ON booking.organization_id=action.organization_id AND booking.id=action.booking_id
+          WHERE action.organization_id=$1 AND action.idempotency_key=$2
+            AND booking.guest_user_id=$3`,
+        [PUBLIC_ORGANIZATION_ID, key, request.user.id],
+      );
+      if (duplicate.rowCount) {
+        await client.query("COMMIT");
+        return response.json({ success: true, data: bookingPayload(duplicate.rows[0]) });
+      }
       const booking = await client.query(
         `SELECT *
            FROM fleet_bookings
@@ -1591,47 +1667,64 @@ router.post(
       );
       if (!booking.rowCount) {
         await client.query("ROLLBACK");
-        return fail(
-          response,
-          404,
-          "BOOKING_NOT_FOUND",
-          "Reservation not found.",
-        );
+        return fail(response, 404, "BOOKING_NOT_FOUND", "Reservation not found.");
       }
       const record = booking.rows[0];
       if (!CANCELLABLE_STATUSES.has(record.status)) {
         await client.query("ROLLBACK");
-        return fail(
-          response,
-          409,
-          "BOOKING_NOT_CANCELLABLE",
-          "This reservation can no longer be cancelled online.",
-        );
+        return fail(response, 409, "BOOKING_NOT_CANCELLABLE", "This reservation can no longer be cancelled online.");
       }
-      if (Number(record.paid_amount) > 0 || record.payment_status !== "unpaid") {
+      const reason = clean(request.body?.reason, 1000);
+      if (reason.length < 5) {
         await client.query("ROLLBACK");
-        return fail(
-          response,
-          409,
-          "CANCELLATION_REVIEW_REQUIRED",
-          "This paid reservation requires a cancellation and refund review.",
-        );
+        return fail(response, 400, "CANCELLATION_REASON_REQUIRED", "Enter a cancellation reason of at least 5 characters.");
       }
-      const reason =
-        clean(request.body?.reason, 1000) || "Cancelled by guest";
+      const workspace = await client.query(
+        `SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`,
+        [PUBLIC_ORGANIZATION_ID],
+      );
+      const outcome = cancellationOutcome({
+        pickupAt: record.pickup_at,
+        totalAmount: record.total_amount,
+        paidAmount: record.paid_amount,
+        state: workspace.rows[0]?.state_json || {},
+      });
+      const cancellationPolicy = {
+        ...outcome,
+        reason,
+        recordedAt: new Date().toISOString(),
+        recordedBy: request.user.id,
+      };
       const updated = await client.query(
         `UPDATE fleet_bookings
             SET status='cancelled',cancellation_reason=$4,cancelled_at=NOW(),
-                cancelled_by=$3,version=version+1,updated_by=$3,updated_at=NOW()
+                cancelled_by=$3,
+                payload=jsonb_set(payload,'{cancellationPolicy}',$5::jsonb,true),
+                version=version+1,updated_by=$3,updated_at=NOW()
           WHERE organization_id=$1 AND id=$2
           RETURNING *`,
-        [
-          PUBLIC_ORGANIZATION_ID,
-          record.id,
-          request.user.id,
-          reason,
-        ],
+        [PUBLIC_ORGANIZATION_ID, record.id, request.user.id, reason, JSON.stringify(cancellationPolicy)],
       );
+      const policyAction = await recordPolicyAction(client, {
+        organizationId: PUBLIC_ORGANIZATION_ID,
+        bookingId: record.id,
+        actionType: "cancellation",
+        source: "customer",
+        reason,
+        outcome,
+        idempotencyKey: key,
+        actorId: request.user.id,
+      });
+      await syncInventoryTransfer(client, {
+        organizationId: PUBLIC_ORGANIZATION_ID,
+        bookingId: record.id,
+        vehicleId: record.vehicle_id,
+        pickupBranchId: record.pickup_branch_id,
+        returnBranchId: record.return_branch_id,
+        expectedAt: record.return_at,
+        bookingStatus: "cancelled",
+        actorId: request.user.id,
+      });
       await audit(
         client,
         request,
@@ -1639,13 +1732,38 @@ router.post(
         "marketplace.booking.cancelled",
         "booking",
         record.id,
-        { reason },
+        { reason, feeAmount: outcome.feeAmount, refundDue: outcome.refundDue,
+          balanceDue: outcome.balanceDue, disposition: outcome.disposition,
+          policyActionId: policyAction.id },
       );
       await client.query("COMMIT");
-      response.json({
-        success: true,
-        data: bookingPayload(updated.rows[0]),
-      });
+      try {
+        const host = await query(
+          `SELECT profile.user_id
+             FROM fleet_vehicle_listings listing
+             LEFT JOIN fleet_host_profiles profile
+               ON profile.organization_id=listing.organization_id
+              AND profile.id=listing.host_profile_id
+            WHERE listing.organization_id=$1 AND listing.id=$2`,
+          [PUBLIC_ORGANIZATION_ID, record.listing_id],
+        );
+        await notifyBookingParty({
+          organizationId: PUBLIC_ORGANIZATION_ID,
+          recipientUserId: host.rows[0]?.user_id || null,
+          title: `Reservation ${record.reservation_number} cancelled`,
+          message: outcome.disposition === "no_action"
+            ? "The guest cancelled this reservation. No financial review is required."
+            : "The guest cancelled this reservation. Review the recorded refund or balance consequence.",
+          bookingId: record.id,
+          actionUrl: `/bookings?id=${encodeURIComponent(record.id)}`,
+        });
+      } catch (notificationError) {
+        console.error("GoodFleet cancellation notification failed", {
+          bookingId: record.id,
+          message: notificationError.message,
+        });
+      }
+      response.json({ success: true, data: bookingPayload(updated.rows[0]) });
     } catch (error) {
       await client.query("ROLLBACK");
       next(error);
