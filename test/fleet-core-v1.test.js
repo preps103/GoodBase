@@ -94,6 +94,7 @@ test("Fleet schema enforces tenant uniqueness, compliance, and buffered booking 
 
 test("Fleet v2 persists operational workspace state and supports durable core edits", () => {
   const routes = read("src/routes/fleet.routes.js");
+  const pricing = read("src/services/fleet-pricing.service.js");
   const migration = read("migrations/20260726_goodfleet_readiness_v2.sql");
   assert.match(routes, /router\.put\("\/workspace"/);
   assert.match(routes, /WORKSPACE_VERSION_CONFLICT/);
@@ -111,7 +112,7 @@ test("Fleet v2 persists operational workspace state and supports durable core ed
   assert.match(routes, /router\.post\("\/bookings\/:bookingId\/extensions"/);
   assert.match(routes, /calculateBookingPrice/);
   assert.match(routes, /BOOKING_NOT_EDITABLE/);
-  assert.match(routes, /additionalCharges/);
+  assert.match(pricing, /additionalCharges/);
   assert.match(routes, /router\.delete\("\/vehicles\/:vehicleId"/);
   assert.match(routes, /router\.delete\("\/branches\/:branchId", requireFleetEditor/);
   assert.match(routes, /LAST_BRANCH_REQUIRED/);

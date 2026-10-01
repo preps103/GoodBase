@@ -8,10 +8,11 @@ const { pool, query } = require("../config/database");
 const notificationService = require("../services/notification.service");
 const teamsService = require("../services/teams.service");
 const { encryptValue } = require("../services/secret.service");
+const fleetPricing = require("../services/fleet-pricing.service");
 
 const router = express.Router();
 const PUBLIC_APP_URL = String(process.env.GOODFLEET_PUBLIC_URL || "https://fleet.goodos.app").replace(/\/$/, "");
-const GOODFLEET_TESTING_MODE = String(process.env.GOODFLEET_TESTING_MODE || "true").toLowerCase() === "true";
+const GOODFLEET_TESTING_MODE = String(process.env.GOODFLEET_TESTING_MODE || "false").toLowerCase() === "true";
 
 const ACTIVE_BOOKING_STATUSES = [
   "pending_payment", "confirmed", "assigned", "checked_in",
@@ -273,6 +274,17 @@ function timestamp(date, time, field) {
   return parsed.toISOString();
 }
 
+function absoluteTimestamp(value, field) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    const error = new Error(`${field} is invalid.`);
+    error.statusCode = 400;
+    error.code = "INVALID_DATE";
+    throw error;
+  }
+  return parsed.toISOString();
+}
+
 function rentalDays(pickupAt, returnAt) {
   return Math.max(1, Math.ceil(
     (new Date(returnAt).getTime() - new Date(pickupAt).getTime()) / 86_400_000
@@ -289,7 +301,7 @@ async function calculateBookingPrice(client, org, input, pickupAt, returnAt) {
   }
   const [vehicleResult, workspaceResult] = await Promise.all([
     client.query(
-      `SELECT id,daily_rate FROM fleet_vehicles
+      `SELECT id,daily_rate,assigned_branch_id,status,make,model,payload FROM fleet_vehicles
         WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`,
       [org, pricingVehicleId]
     ),
@@ -304,54 +316,13 @@ async function calculateBookingPrice(client, org, input, pickupAt, returnAt) {
     error.code = "VEHICLE_NOT_FOUND";
     throw error;
   }
-  const state = workspaceResult.rows[0]?.state_json || {};
-  const days = rentalDays(pickupAt, returnAt);
-  const dailyRate = Number(vehicleResult.rows[0].daily_rate);
-  const base = dailyRate * days;
-  const suppliedCode = text(input.discountCode || input.promoCode, 80).toLowerCase();
-  const discountRecord = Array.isArray(state.discounts)
-    ? state.discounts.find(item =>
-      String(item?.status || "").toLowerCase() === "active" &&
-      String(item?.code || "").trim().toLowerCase() === suppliedCode
-    )
-    : null;
-  let discount = 0;
-  if (discountRecord) {
-    const value = Math.max(0, Number(discountRecord.value) || 0);
-    discount = discountRecord.type === "percentage"
-      ? base * Math.min(value, 100) / 100
-      : Math.min(value, base);
-  }
-  const discountedBase = Math.max(0, base - discount);
-  const mandatoryFees = (Array.isArray(state.fees) ? state.fees : [])
-    .filter(item =>
-      String(item?.status || "").toLowerCase() === "active" &&
-      String(item?.type || "").toLowerCase() === "mandatory"
-    )
-    .reduce((sum, fee) => {
-      const value = Math.max(0, Number(fee.value) || 0);
-      if (fee.calculationType === "per_day") return sum + value * days;
-      if (fee.calculationType === "percentage") return sum + discountedBase * value / 100;
-      return sum + value;
-    }, 0);
-  const branch = (Array.isArray(state.branches) ? state.branches : [])
-    .find(item => String(item?.id || "") === String(input.pickupLocationId || ""));
-  const configuredTax = Number(branch?.financialConfig?.taxRate ?? state.billingSettings?.taxRate ?? 0);
-  const taxRate = Number.isFinite(configuredTax) ? Math.min(Math.max(configuredTax, 0), 100) : 0;
-  const additionalCharges = (Array.isArray(input.additionalCharges) ? input.additionalCharges : [])
-    .reduce((sum, charge) => sum + Math.max(0, Number(charge?.amount) || 0), 0);
-  const tax = (discountedBase + mandatoryFees + additionalCharges) * taxRate / 100;
-  return {
-    days,
-    dailyRate: Number(dailyRate.toFixed(2)),
-    base: Number(base.toFixed(2)),
-    discount: Number(discount.toFixed(2)),
-    mandatoryFees: Number(mandatoryFees.toFixed(2)),
-    additionalCharges: Number(additionalCharges.toFixed(2)),
-    taxRate: Number(taxRate.toFixed(4)),
-    tax: Number(tax.toFixed(2)),
-    total: Number((discountedBase + mandatoryFees + additionalCharges + tax).toFixed(2))
-  };
+  return fleetPricing.calculateBookingPrice({
+    vehicle: vehicleResult.rows[0],
+    state: workspaceResult.rows[0]?.state_json || {},
+    input,
+    pickupAt,
+    returnAt
+  });
 }
 
 function dateOnly(value) {
@@ -923,6 +894,65 @@ router.get("/bootstrap", async (request, response, next) => {
       }))
     }});
   } catch (error) { next(error); }
+});
+
+router.get("/pricing/insights", async (request, response, next) => {
+  try {
+    const org = organization(request);
+    const requestedHorizon = Number(request.query?.horizonDays || 30);
+    const horizonDays = Number.isFinite(requestedHorizon)
+      ? Math.min(90, Math.max(7, Math.trunc(requestedHorizon)))
+      : 30;
+    const [vehicles, bookings, workspace] = await Promise.all([
+      query(
+        `SELECT id,daily_rate,assigned_branch_id,status,payload
+           FROM fleet_vehicles
+          WHERE organization_id=$1 AND archived_at IS NULL`,
+        [org]
+      ),
+      query(
+        `SELECT vehicle_id,pickup_at,return_at,status,total_amount,payload
+           FROM fleet_bookings
+          WHERE organization_id=$1
+            AND archived_at IS NULL
+            AND return_at>NOW()
+            AND pickup_at<NOW()+($2::int * INTERVAL '1 day')`,
+        [org, horizonDays]
+      ),
+      query(`SELECT state_json FROM fleet_workspace_state WHERE organization_id=$1`, [org])
+    ]);
+    return response.json({
+      success: true,
+      data: fleetPricing.buildPricingInsights({
+        vehicles: vehicles.rows,
+        bookings: bookings.rows,
+        state: workspace.rows[0]?.state_json || {},
+        horizonDays
+      })
+    });
+  } catch (error) { next(error); }
+});
+
+router.post("/pricing/preview", async (request, response, next) => {
+  const client = await pool.connect();
+  try {
+    const body = request.body || {};
+    const pickupAt = body.pickupAt
+      ? absoluteTimestamp(body.pickupAt, "pickupAt")
+      : timestamp(body.startDate, body.pickupTime, "pickupAt");
+    const returnAt = body.returnAt
+      ? absoluteTimestamp(body.returnAt, "returnAt")
+      : timestamp(body.endDate, body.dropoffTime, "returnAt");
+    const pricing = await calculateBookingPrice(
+      client,
+      organization(request),
+      body,
+      pickupAt,
+      returnAt
+    );
+    return response.json({ success: true, data: { ...pricing, available: true } });
+  } catch (error) { next(error); }
+  finally { client.release(); }
 });
 
 router.post("/staff/invitations", requireOwner, async (request, response, next) => {
@@ -1958,7 +1988,7 @@ router.post("/bookings/quote", async (request, response, next) => {
       data: {
         ...price,
         available,
-        currency: "USD"
+        currency: price.currency || "USD"
       }
     });
   } catch (error) {
