@@ -15,6 +15,8 @@ const {
   rowToResource,
   RESOURCE_TYPES,
   RESOURCE_STATUSES,
+  deterministicCampaignImportId,
+  normalizeCampaignImport,
 } = require("../src/services/goodads.service");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -259,4 +261,58 @@ test("GoodAds exposes authenticated durable creative studio operations", () => {
   }
   assert.ok(routes.indexOf("router.use(authRequired") < routes.indexOf('router.post("/creative-assets"'));
   assert.match(routes, /router\.post\("\/creative-assets", creativeUploadLimiter, uploadCreativeAsset/);
+});
+
+test("GoodAds bulk campaign imports are bounded and forced to no-spend drafts", () => {
+  const normalized = normalizeCampaignImport({
+    campaigns: [{
+      id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+      name: " Fall acquisition ",
+      objective: "traffic",
+      audience: "Growing business owners in the United States",
+      locations: "United States",
+      targetCountries: ["us"],
+      platforms: ["facebook", "instagram"],
+      dailyBudget: 25,
+      startDate: "2026-10-05",
+      endDate: "2026-10-12",
+      status: "active",
+      creative: {
+        headline: "Meet GoodOS",
+        primaryText: "Run your business from one governed workspace.",
+        callToAction: "Learn More",
+        destinationUrl: "https://goodos.app/",
+        imageUrl: "https://cdn.goodos.app/goodads/fall.png",
+      },
+    }],
+  });
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].name, "Fall acquisition");
+  assert.equal(normalized[0].status, "draft");
+  assert.equal(normalized[0].id, undefined);
+  assert.deepEqual(normalized[0].targetCountries, ["US"]);
+  assert.equal(normalized[0].creative.destinationUrl, "https://goodos.app/");
+  assert.equal(normalized[0].bulkImport, undefined);
+  assert.throws(() => normalizeCampaignImport({ campaigns: [] }), /between 1 and 50/i);
+  assert.throws(() => normalizeCampaignImport({ campaigns: Array.from({ length: 51 }, () => normalized[0]) }), /between 1 and 50/i);
+  assert.throws(() => normalizeCampaignImport({ campaigns: [{ ...normalized[0], endDate: "2026-10-01" }] }), /end date/i);
+  assert.throws(() => normalizeCampaignImport({ campaigns: [{ ...normalized[0], platforms: ["unknown"] }] }), /platform/i);
+});
+
+test("GoodAds derives stable tenant-scoped import IDs without accepting client identity", () => {
+  const first = deterministicCampaignImportId("org-live", "batch-live", 0);
+  assert.match(first, /^[0-9a-f-]{36}$/);
+  assert.equal(first, deterministicCampaignImportId("org-live", "batch-live", 0));
+  assert.notEqual(first, deterministicCampaignImportId("org-live", "batch-live", 1));
+  assert.notEqual(first, deterministicCampaignImportId("org-other", "batch-live", 0));
+});
+
+test("GoodAds exposes a rate-limited idempotent campaign draft import before generic campaign routes", () => {
+  const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  const bulkImport = routes.indexOf('router.post("/campaigns/bulk-import"');
+  const genericCampaigns = routes.indexOf('[\n  ["campaigns", "campaigns"]');
+  assert.ok(bulkImport >= 0);
+  assert.ok(genericCampaigns > bulkImport);
+  assert.match(routes, /bulkCampaignImport[\s\S]*Idempotency-Key/);
 });
