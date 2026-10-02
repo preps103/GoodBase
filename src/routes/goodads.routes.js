@@ -114,24 +114,65 @@ function uploadCreativeAsset(req, res, next) {
   });
 }
 
-router.get("/oauth/:platform/callback", (req, res) => {
-  if (req.query.error) {
-    return res.status(400).type("html").send("<!doctype html><title>Connection cancelled</title><p>The social account connection was cancelled.</p><script>window.close()</script>");
-  }
-  return social.completeAuthorization({
-    provider: req.params.platform,
-    code: req.query.code || req.query.auth_code,
-    state: req.query.state,
-    oauthToken: req.query.oauth_token,
-  }).then(({ connection, returnOrigin }) => {
-    const targetOrigin = returnOrigin === "https://ads.goodos.app" ? returnOrigin : "https://ads.goodos.app";
-    const payload = JSON.stringify({ type: "goodads-oauth-complete", provider: connection.provider, success: true });
-    res.set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'");
-    return res.type("html").send(`<!doctype html><meta charset="utf-8"><title>Account connected</title><style>body{font-family:system-ui;padding:40px;text-align:center}p{color:#475569}</style><h1>Account connected</h1><p>You can return to GoodAds.</p><script>if(window.opener){window.opener.postMessage(${payload},${JSON.stringify(targetOrigin)})}window.close()</script>`);
-  }).catch((requestError) => {
-    console.error("GoodAds OAuth callback failed:", requestError.message);
-    return res.status(requestError.statusCode || 500).type("html").send("<!doctype html><title>Connection failed</title><p>The social account could not be connected. Return to GoodAds and try again.</p>");
+function sendOAuthCallbackPage(res, {
+  statusCode = 200,
+  title,
+  message,
+  payload = null,
+  targetOrigin = null,
+}) {
+  const safeTitle = String(title).replace(/[&<>"']/g, "");
+  const safeMessage = String(message).replace(/[&<>"']/g, "");
+  const script = payload && targetOrigin
+    ? `<script>if(window.opener){window.opener.postMessage(${JSON.stringify(payload).replace(/</g, "\\u003c")},${JSON.stringify(targetOrigin)})}window.close()</script>`
+    : "";
+  res.set({
+    "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+    "Cache-Control": "no-store, max-age=0",
+    Pragma: "no-cache",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
   });
+  return res.status(statusCode).type("html").send(`<!doctype html><meta charset="utf-8"><title>${safeTitle}</title><style>body{font-family:system-ui;padding:40px;text-align:center}p{color:#475569}</style><h1>${safeTitle}</h1><p>${safeMessage}</p>${script}`);
+}
+
+router.get("/oauth/:platform/callback", async (req, res) => {
+  try {
+    if (req.query.error) {
+      const { provider, returnOrigin } = await social.cancelAuthorization({
+        provider: req.params.platform,
+        state: req.query.state,
+      });
+      const targetOrigin = returnOrigin === "https://ads.goodos.app" ? returnOrigin : "https://ads.goodos.app";
+      return sendOAuthCallbackPage(res, {
+        statusCode: 400,
+        title: "Connection cancelled",
+        message: "The social account connection was cancelled.",
+        payload: { type: "goodads-oauth-complete", provider, success: false, cancelled: true },
+        targetOrigin,
+      });
+    }
+    const { connection, returnOrigin } = await social.completeAuthorization({
+      provider: req.params.platform,
+      code: req.query.code || req.query.auth_code,
+      state: req.query.state,
+      oauthToken: req.query.oauth_token,
+    });
+    const targetOrigin = returnOrigin === "https://ads.goodos.app" ? returnOrigin : "https://ads.goodos.app";
+    return sendOAuthCallbackPage(res, {
+      title: "Account connected",
+      message: "You can return to GoodAds.",
+      payload: { type: "goodads-oauth-complete", provider: connection.provider, success: true },
+      targetOrigin,
+    });
+  } catch (requestError) {
+    console.error("GoodAds OAuth callback failed:", requestError.message);
+    return sendOAuthCallbackPage(res, {
+      statusCode: requestError.statusCode || 500,
+      title: "Connection failed",
+      message: "The social account could not be connected. Return to GoodAds and try again.",
+    });
+  }
 });
 
 function requireGoodAdsAccess(req, res, next) {
