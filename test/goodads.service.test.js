@@ -17,6 +17,7 @@ const {
   RESOURCE_STATUSES,
   deterministicCampaignImportId,
   normalizeCampaignImport,
+  rowToResourceActivity,
 } = require("../src/services/goodads.service");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -315,4 +316,38 @@ test("GoodAds exposes a rate-limited idempotent campaign draft import before gen
   assert.ok(bulkImport >= 0);
   assert.ok(genericCampaigns > bulkImport);
   assert.match(routes, /bulkCampaignImport[\s\S]*Idempotency-Key/);
+});
+
+test("GoodAds returns a bounded campaign activity record without exposing account email", () => {
+  assert.deepEqual(rowToResourceActivity({
+    id: "8c171ea0-3604-460e-a631-7e6a82000819",
+    resource_id: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    actor_user_id: "34a3b013-9032-4b7f-8a21-28fa563d386a",
+    actor_name: "Maurice Goodloe",
+    event_type: "campaigns.updated",
+    previous_status: "draft",
+    next_status: "ready",
+    metadata: { version: 4 },
+    created_at: "2026-10-02T05:00:00.000Z",
+  }), {
+    id: "8c171ea0-3604-460e-a631-7e6a82000819",
+    resourceId: "89e0e5e1-ee43-4c9a-a41b-6b07bb920430",
+    eventType: "campaigns.updated",
+    previousStatus: "draft",
+    nextStatus: "ready",
+    metadata: { version: 4 },
+    actor: { id: "34a3b013-9032-4b7f-8a21-28fa563d386a", name: "Maurice Goodloe" },
+    createdAt: "2026-10-02T05:00:00.000Z",
+  });
+});
+
+test("GoodAds exposes tenant-scoped campaign activity before the generic campaign record route", () => {
+  const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  const activity = routes.indexOf('router.get("/campaigns/:id/activity"');
+  const genericCampaigns = routes.indexOf('[\n  ["campaigns", "campaigns"]');
+  assert.ok(activity >= 0);
+  assert.ok(genericCampaigns > activity);
+  const serviceSource = fs.readFileSync(path.join(__dirname, "../src/services/goodads.service.js"), "utf8");
+  assert.match(serviceSource, /resource_id = \$1::uuid AND event\.organization_id = \$2/);
+  assert.match(serviceSource, /was_inserted \? `\$\{type\}\.created` : `\$\{type\}\.updated`/);
 });

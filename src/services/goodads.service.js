@@ -846,6 +846,22 @@ function rowToResource(row) {
   };
 }
 
+function rowToResourceActivity(row) {
+  return {
+    id: row.id,
+    resourceId: row.resource_id,
+    eventType: row.event_type,
+    previousStatus: row.previous_status,
+    nextStatus: row.next_status,
+    metadata: row.metadata || {},
+    actor: {
+      id: row.actor_user_id || null,
+      name: row.actor_name || "GoodAds system",
+    },
+    createdAt: row.created_at,
+  };
+}
+
 async function listResources({ type, context, limit = 50, offset = 0, status = null }) {
   requireResourceType(type);
   const statusFilter = status ? requireResourceStatus(status) : null;
@@ -879,6 +895,31 @@ async function getResource({ type, id, context }) {
   );
   if (!result.rows[0]) throw serviceError("GoodAds resource not found.", 404, "GOODADS_RECORD_NOT_FOUND");
   return rowToResource(result.rows[0]);
+}
+
+async function listResourceActivity({ type, id, context, limit = 50 }) {
+  requireResourceType(type);
+  const resourceId = requireUuid(id);
+  await getResource({ type, id: resourceId, context });
+  const boundedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const result = await query(
+    `SELECT event.*,
+       CASE
+         WHEN event.actor_user_id IS NULL THEN 'GoodAds system'
+         ELSE COALESCE(
+           NULLIF(actor.display_name, ''),
+           NULLIF(CONCAT_WS(' ', actor.first_name, actor.last_name), ''),
+           'Team member'
+         )
+       END AS actor_name
+     FROM goodads_resource_events event
+     LEFT JOIN users actor ON actor.id = event.actor_user_id
+     WHERE event.resource_id = $1::uuid AND event.organization_id = $2
+     ORDER BY event.created_at DESC, event.id DESC
+     LIMIT $3`,
+    [resourceId, context.organizationId, boundedLimit]
+  );
+  return { items: result.rows.map(rowToResourceActivity), limit: boundedLimit };
 }
 
 async function requireRelatedResource({ id, type, context, label }) {
@@ -943,6 +984,15 @@ async function upsertResource({ type, id, payload, context, userId }) {
     forPublish: requestedStatus === "active",
   });
   const resourceId = id ? requireUuid(id) : (data.id && UUID_PATTERN.test(String(data.id)) ? String(data.id) : null);
+  const existingResource = resourceId
+    ? (await query(
+      `SELECT id, status, version FROM goodads_resources
+       WHERE id = $1::uuid AND organization_id = $2 AND resource_type = $3
+         AND archived_at IS NULL
+       LIMIT 1`,
+      [resourceId, context.organizationId, type]
+    )).rows[0] || null
+    : null;
   const name = String(data.name || data.title || "").trim().slice(0, 240);
   const status = requestedStatus;
   data.status = status;
@@ -1025,7 +1075,7 @@ async function upsertResource({ type, id, payload, context, userId }) {
        WHERE goodads_resources.organization_id = EXCLUDED.organization_id
          AND goodads_resources.resource_type = EXCLUDED.resource_type
          AND goodads_resources.archived_at IS NULL
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS was_inserted`,
       [resourceId, type, context.organizationId, context.projectId, context.environmentId, userId, name, status, JSON.stringify(data)]
     );
   } catch (requestError) {
@@ -1043,8 +1093,10 @@ async function upsertResource({ type, id, payload, context, userId }) {
     resourceId: result.rows[0].id,
     context,
     userId,
-    eventType: resourceId ? `${type}.updated` : `${type}.created`,
+    eventType: result.rows[0].was_inserted ? `${type}.created` : `${type}.updated`,
+    previousStatus: existingResource?.status || null,
     nextStatus: result.rows[0].status,
+    metadata: { version: result.rows[0].version },
   });
   return rowToResource(result.rows[0]);
 }
@@ -1836,6 +1888,7 @@ module.exports = {
   normalizePayload,
   requireResourceStatus,
   rowToResource,
+  rowToResourceActivity,
   requireUuid,
   requirePublicSlug,
   normalizeLeadSubmission,
@@ -1850,6 +1903,7 @@ module.exports = {
   workspace,
   listResources,
   getResource,
+  listResourceActivity,
   upsertResource,
   bulkImportCampaigns,
   normalizeCampaignImport,
