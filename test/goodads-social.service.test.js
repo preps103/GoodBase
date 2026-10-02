@@ -334,6 +334,7 @@ test("cancelled OAuth callbacks consume state and return hardened non-cacheable 
   assert.match(routeSource, /Cache-Control["']:\s*["']no-store, max-age=0["']/);
   assert.match(routeSource, /frame-ancestors 'none'/);
   assert.match(routeSource, /Referrer-Policy["']:\s*["']no-referrer["']/);
+  assert.match(routeSource, /title: "Connection failed"[\s\S]*success: false,[\s\S]*cancelled: false/);
   assert.doesNotMatch(routeSource, /if \(req\.query\.error\) \{\s*return res\.status/);
 });
 
