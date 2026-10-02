@@ -28,6 +28,11 @@ const FUNNEL_STEP_TYPES = new Set([
   "landing", "form", "nurture", "booking", "offer", "thank-you",
 ]);
 const LEAD_STAGES = new Set(["new", "qualified", "nurturing", "won", "lost"]);
+const CAMPAIGN_IMPORT_OBJECTIVES = new Set(["traffic", "conversions", "leads", "awareness", "sales"]);
+const CAMPAIGN_IMPORT_PLATFORMS = new Set([
+  "facebook", "instagram", "google", "youtube", "tiktok",
+  "linkedin", "x", "pinterest", "snapchat",
+]);
 const LEAD_FORM_FIELDS = new Map([
   ["firstName", "text"],
   ["lastName", "text"],
@@ -266,6 +271,176 @@ function requireHttpsUrl(value, label = "URL") {
     throw serviceError(`${label} must use HTTPS without embedded credentials or a custom port.`);
   }
   return url;
+}
+
+function requireCampaignImportText(value, label, minimum, maximum) {
+  const text = boundedText(value, maximum);
+  if (text.length < minimum) {
+    throw serviceError(
+      `${label} must contain at least ${minimum} characters.`,
+      400,
+      "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID"
+    );
+  }
+  return text;
+}
+
+function campaignImportList(value, label, maximumItems, maximumLength) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[;,|\n]+/);
+  const items = [...new Set(rawItems
+    .map((item) => boundedText(item, maximumLength))
+    .filter(Boolean))];
+  if (items.length > maximumItems) {
+    throw serviceError(
+      `${label} may contain at most ${maximumItems} values.`,
+      400,
+      "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID"
+    );
+  }
+  return items;
+}
+
+function campaignImportDate(value, label) {
+  const text = boundedText(value, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    throw serviceError(`${label} must use YYYY-MM-DD.`, 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+  }
+  const date = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+    throw serviceError(`${label} must be a real calendar date.`, 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+  }
+  return text;
+}
+
+function campaignImportBoolean(value, label, nullable = false) {
+  if ((value === null || value === undefined || value === "") && nullable) return null;
+  if (value === true || String(value).trim().toLowerCase() === "true") return true;
+  if (value === false || String(value).trim().toLowerCase() === "false") return false;
+  throw serviceError(`${label} must be true or false.`, 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+}
+
+function optionalCampaignImportUrl(value, label) {
+  if (!boundedText(value, 2048)) return "";
+  return requireHttpsUrl(value, label).toString();
+}
+
+function normalizeCampaignImportRow(value, index) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw serviceError(`Campaign row ${index + 1} must be an object.`, 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+  }
+  try {
+    const objective = boundedText(value.objective, 40).toLowerCase();
+    if (!CAMPAIGN_IMPORT_OBJECTIVES.has(objective)) {
+      throw serviceError("Objective is not supported.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    const platforms = campaignImportList(value.platforms, "Platforms", 9, 40)
+      .map((platform) => platform.toLowerCase());
+    if (!platforms.length || platforms.some((platform) => !CAMPAIGN_IMPORT_PLATFORMS.has(platform))) {
+      throw serviceError("Select at least one supported campaign platform.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    const targetCountries = campaignImportList(value.targetCountries, "Target countries", 50, 2)
+      .map((country) => country.toUpperCase());
+    if (!targetCountries.length || targetCountries.some((country) => !/^[A-Z]{2}$/.test(country))) {
+      throw serviceError("Target countries must use two-letter country codes.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    const dailyBudget = Number(value.dailyBudget);
+    if (!Number.isFinite(dailyBudget) || dailyBudget < 1 || dailyBudget > 30000) {
+      throw serviceError("Daily budget must be between 1 and 30,000.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    const startDate = campaignImportDate(value.startDate, "Start date");
+    const endDate = campaignImportDate(value.endDate, "End date");
+    const deliveryDays = Math.floor((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86400000) + 1;
+    if (deliveryDays < 1) {
+      throw serviceError("End date cannot be before the start date.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    if (deliveryDays > 366) {
+      throw serviceError("Imported campaign schedules may span at most 366 days.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    const creative = value.creative && typeof value.creative === "object" && !Array.isArray(value.creative)
+      ? value.creative
+      : {};
+    const maxCpc = value.maxCpc === "" || value.maxCpc === null || value.maxCpc === undefined
+      ? 1
+      : Number(value.maxCpc);
+    if (!Number.isFinite(maxCpc) || maxCpc < 0.01 || maxCpc > 1000) {
+      throw serviceError("Maximum CPC must be between 0.01 and 1,000.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    const linkedinPoliticalIntent = boundedText(value.linkedinPoliticalIntent, 40) || null;
+    if (linkedinPoliticalIntent !== null && linkedinPoliticalIntent !== "NOT_POLITICAL") {
+      throw serviceError("LinkedIn political intent must be NOT_POLITICAL or blank.", 400, "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID");
+    }
+    return {
+      name: requireCampaignImportText(value.name, "Campaign name", 3, 240),
+      objective,
+      audience: requireCampaignImportText(value.audience, "Audience", 10, 2000),
+      locations: boundedText(value.locations, 500),
+      targetCountries,
+      platforms,
+      dailyBudget: Math.round(dailyBudget * 100) / 100,
+      startDate,
+      endDate,
+      containsEuPoliticalAdvertising: campaignImportBoolean(
+        value.containsEuPoliticalAdvertising,
+        "EU political advertising declaration",
+        true
+      ),
+      linkedinPoliticalIntent,
+      linkedinTargetingNoticeAcknowledged: campaignImportBoolean(
+        value.linkedinTargetingNoticeAcknowledged ?? false,
+        "LinkedIn targeting notice acknowledgement"
+      ),
+      creative: {
+        businessName: boundedText(creative.businessName, 160),
+        headline: requireCampaignImportText(creative.headline, "Headline", 3, 80),
+        primaryText: requireCampaignImportText(creative.primaryText, "Primary text", 10, 2000),
+        callToAction: requireCampaignImportText(creative.callToAction, "Call to action", 2, 80),
+        destinationUrl: requireHttpsUrl(creative.destinationUrl, "Destination URL").toString(),
+        imageUrl: optionalCampaignImportUrl(creative.imageUrl, "Creative image URL"),
+        logoUrl: optionalCampaignImportUrl(creative.logoUrl, "Logo URL"),
+        youtubeVideoUrl: optionalCampaignImportUrl(creative.youtubeVideoUrl, "YouTube video URL"),
+        tiktokVideoUrl: optionalCampaignImportUrl(creative.tiktokVideoUrl, "TikTok video URL"),
+        videoUrl: optionalCampaignImportUrl(creative.videoUrl, "Creative video URL"),
+        mediaFacts: {},
+        backgroundColor: colorValue(creative.backgroundColor, "#0f172a"),
+        accentColor: colorValue(creative.accentColor, "#4f46e5"),
+      },
+      searchKeywords: campaignImportList(value.searchKeywords, "Search keywords", 50, 80),
+      searchHeadlines: campaignImportList(value.searchHeadlines, "Search headlines", 15, 30),
+      searchDescriptions: campaignImportList(value.searchDescriptions, "Search descriptions", 4, 90),
+      maxCpc: Math.round(maxCpc * 100) / 100,
+      status: "draft",
+    };
+  } catch (error) {
+    if (error?.code === "GOODADS_CAMPAIGN_IMPORT_ROW_INVALID") {
+      error.message = `Campaign row ${index + 1}: ${error.message}`;
+    }
+    throw error;
+  }
+}
+
+function normalizeCampaignImport(value) {
+  const payload = normalizePayload(value);
+  if (!Array.isArray(payload.campaigns) || payload.campaigns.length < 1 || payload.campaigns.length > 50) {
+    throw serviceError(
+      "Campaign imports must contain between 1 and 50 rows.",
+      400,
+      "GOODADS_CAMPAIGN_IMPORT_SIZE_INVALID"
+    );
+  }
+  return payload.campaigns.map(normalizeCampaignImportRow);
+}
+
+function deterministicCampaignImportId(organizationId, idempotencyKey, index) {
+  const bytes = crypto.createHash("sha256")
+    .update(`${organizationId}\0${idempotencyKey}\0${index}`)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function blockedIpv4(address) {
@@ -648,6 +823,12 @@ function requireDestructiveRole(context) {
   }
 }
 
+function requireManagementRole(context) {
+  if (!DESTRUCTIVE_ROLES.has(roleFromContext(context))) {
+    throw serviceError("Owner, admin, or manager access is required.", 403, "GOODADS_MANAGEMENT_FORBIDDEN");
+  }
+}
+
 function rowToResource(row) {
   return {
     ...(row.data || {}),
@@ -866,6 +1047,131 @@ async function upsertResource({ type, id, payload, context, userId }) {
     nextStatus: result.rows[0].status,
   });
   return rowToResource(result.rows[0]);
+}
+
+async function bulkImportCampaigns({ payload, context, userId, idempotencyKey }) {
+  requireManagementRole(context);
+  const requestKey = String(idempotencyKey || "").trim();
+  if (requestKey.length < 8 || requestKey.length > 200 || !/^[A-Za-z0-9._:-]+$/.test(requestKey)) {
+    throw serviceError(
+      "A valid Idempotency-Key header is required for campaign imports.",
+      400,
+      "GOODADS_CAMPAIGN_IMPORT_IDEMPOTENCY_REQUIRED"
+    );
+  }
+  const campaigns = normalizeCampaignImport(payload);
+  const payloadHash = crypto.createHash("sha256").update(JSON.stringify(campaigns)).digest("hex");
+  const batchId = crypto.createHash("sha256")
+    .update(`${context.organizationId}\0${requestKey}`)
+    .digest("hex");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `goodads-campaign-import:${context.organizationId}:${requestKey}`,
+    ]);
+    const existing = await client.query(
+      `SELECT * FROM goodads_resources
+       WHERE organization_id = $1 AND resource_type = 'campaigns'
+         AND archived_at IS NULL AND data #>> '{bulkImport,batchId}' = $2
+       ORDER BY (data #>> '{bulkImport,rowNumber}')::integer ASC`,
+      [context.organizationId, batchId]
+    );
+    if (existing.rows.length) {
+      const mismatched = existing.rows.length !== campaigns.length
+        || existing.rows.some((row) => row.data?.bulkImport?.payloadHash !== payloadHash);
+      if (mismatched) {
+        throw serviceError(
+          "This campaign import key was already used with different content.",
+          409,
+          "GOODADS_CAMPAIGN_IMPORT_IDEMPOTENCY_CONFLICT"
+        );
+      }
+      await client.query("COMMIT");
+      return {
+        batchId,
+        importedCount: existing.rows.length,
+        createdCount: 0,
+        replayed: true,
+        items: existing.rows.map(rowToResource),
+        providerWrites: 0,
+        activatesAdvertising: false,
+        startsSpend: false,
+        importedStatus: "draft",
+      };
+    }
+
+    const inserted = [];
+    for (let index = 0; index < campaigns.length; index += 1) {
+      const campaign = campaigns[index];
+      const resourceId = deterministicCampaignImportId(context.organizationId, requestKey, index);
+      const data = {
+        ...campaign,
+        bulkImport: {
+          batchId,
+          payloadHash,
+          rowNumber: index + 1,
+          source: "csv",
+        },
+      };
+      const result = await client.query(
+        `INSERT INTO goodads_resources (
+           id, resource_type, organization_id, project_id, environment_id,
+           owner_user_id, name, status, data
+         ) VALUES ($1::uuid, 'campaigns', $2, $3, $4, $5::uuid, $6, 'draft', $7::jsonb)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING *`,
+        [
+          resourceId,
+          context.organizationId,
+          context.projectId,
+          context.environmentId,
+          userId,
+          campaign.name,
+          JSON.stringify(data),
+        ]
+      );
+      if (!result.rows[0]) {
+        throw serviceError(
+          "The campaign import identity conflicts with an existing record.",
+          409,
+          "GOODADS_CAMPAIGN_IMPORT_IDENTITY_CONFLICT"
+        );
+      }
+      inserted.push(result.rows[0]);
+      await client.query(
+        `INSERT INTO goodads_resource_events (
+           resource_id, organization_id, actor_user_id, event_type,
+           next_status, metadata
+         ) VALUES ($1::uuid, $2, $3::uuid, 'campaigns.bulk_imported', 'draft', $4::jsonb)`,
+        [resourceId, context.organizationId, userId, JSON.stringify({
+          batchId,
+          payloadHash,
+          rowNumber: index + 1,
+          providerWrites: 0,
+          activatesAdvertising: false,
+          startsSpend: false,
+        })]
+      );
+    }
+    await client.query("COMMIT");
+    return {
+      batchId,
+      importedCount: inserted.length,
+      createdCount: inserted.length,
+      replayed: false,
+      items: inserted.map(rowToResource),
+      providerWrites: 0,
+      activatesAdvertising: false,
+      startsSpend: false,
+      importedStatus: "draft",
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function publicLinkHubFromRow(row) {
@@ -1545,6 +1851,9 @@ module.exports = {
   listResources,
   getResource,
   upsertResource,
+  bulkImportCampaigns,
+  normalizeCampaignImport,
+  deterministicCampaignImportId,
   archiveResource,
   transitionResource,
   publicFormFromRow,

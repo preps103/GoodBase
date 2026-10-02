@@ -59,6 +59,12 @@ const bulkPublishingLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 });
+const bulkCampaignImportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 const publicLinkClickLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 600,
@@ -688,6 +694,17 @@ function registerResource(path, type) {
     userId: req.user.id,
   })));
 }
+
+router.post("/campaigns/bulk-import", bulkCampaignImportLimiter, (req, res) => handle(
+  res,
+  "campaigns.bulk-import",
+  service.bulkImportCampaigns({
+    payload: req.body,
+    context: req.tenantContext,
+    userId: req.user.id,
+    idempotencyKey: req.get("Idempotency-Key"),
+  })
+));
 
 [
   ["campaigns", "campaigns"],
