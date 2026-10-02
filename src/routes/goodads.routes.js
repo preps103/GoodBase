@@ -705,6 +705,16 @@ router.post("/campaigns/bulk-import", bulkCampaignImportLimiter, (req, res) => h
     idempotencyKey: req.get("Idempotency-Key"),
   })
 ));
+router.get("/campaigns/:id/activity", (req, res) => handle(
+  res,
+  "campaigns.activity",
+  service.listResourceActivity({
+    type: "campaigns",
+    id: req.params.id,
+    context: req.tenantContext,
+    limit: req.query.limit,
+  })
+));
 
 [
   ["campaigns", "campaigns"],
