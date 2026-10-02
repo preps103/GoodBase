@@ -118,7 +118,7 @@ function destinationOrigin(campaignData) {
 
 function attributionScript(token, publicOrigin = "https://base.goodos.app") {
   const collector = `${publicOrigin}/api/apps/goodads/v1/public/attribution/${encodeURIComponent(token)}/pixel.gif`;
-  return `(()=>{const endpoint=${JSON.stringify(collector)};const send=(event,options={})=>{const id=String(options.eventId||((globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now()+"-"+Math.random())).slice(0,120);const query=new URLSearchParams({event,event_id:id,page_origin:location.origin});if(options.valueMinor!=null)query.set("value_minor",String(options.valueMinor));if(options.currency)query.set("currency",String(options.currency));const pixel=new Image();pixel.referrerPolicy="strict-origin-when-cross-origin";pixel.src=endpoint+"?"+query.toString();return id};globalThis.goodAdsTrack=send;send("page_view")})();`;
+  return `(()=>{const endpoint=${JSON.stringify(collector)};const privacySignal=()=>{const nav=globalThis.navigator||{};const dnt=String(nav.doNotTrack||globalThis.doNotTrack||"").toLowerCase();return nav.globalPrivacyControl===true||dnt==="1"||dnt==="yes"};let consent=globalThis.goodAdsTrackingConsent===true&&!privacySignal();let pageViewSent=false;globalThis.goodAdsTrackingConsent=consent;const send=(event,options={})=>{const id=String(options.eventId||((globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now()+"-"+Math.random())).slice(0,120);const query=new URLSearchParams({event,event_id:id,page_origin:location.origin});if(options.valueMinor!=null)query.set("value_minor",String(options.valueMinor));if(options.currency)query.set("currency",String(options.currency));const pixel=new Image();pixel.referrerPolicy="strict-origin-when-cross-origin";pixel.src=endpoint+"?"+query.toString();return id};const track=(event,options={})=>{const blocked=privacySignal();if(!consent||blocked){if(blocked){consent=false;globalThis.goodAdsTrackingConsent=false}return null}return send(event,options)};const setConsent=(granted)=>{consent=granted===true&&!privacySignal();globalThis.goodAdsTrackingConsent=consent;if(consent&&!pageViewSent){pageViewSent=true;send("page_view")}return consent};globalThis.goodAdsTrack=track;globalThis.goodAdsConsent=setConsent;if(consent)setConsent(true)})();`;
 }
 
 function publicAttributionScript(token) {
@@ -147,6 +147,9 @@ async function attributionInstallation({ campaignId, context }) {
     snippet: `<script async src="${scriptUrl}"></script>`,
     eventTypes: [...ATTRIBUTION_EVENTS],
     conversionEvents: [...ATTRIBUTION_CONVERSIONS],
+    consentRequired: true,
+    automaticPageViewAfterConsent: true,
+    privacySignalsHonored: ["globalPrivacyControl", "doNotTrack"],
     browserObserved: true,
     providerVerified: false,
   };
@@ -1391,6 +1394,8 @@ function capabilities() {
       firstPartyWebsitePixel: true,
       attributionOriginBound: true,
       attributionReplayDeduplication: true,
+      attributionConsentRequired: true,
+      attributionPrivacySignalsHonored: true,
       revenueSeparatedByCurrency: true,
       crossChannelBudgetRecommendations: true,
       budgetRecommendationsAdvisoryOnly: true,

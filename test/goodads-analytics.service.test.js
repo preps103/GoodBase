@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 const analytics = require("../src/services/goodads-analytics.service");
 
 test("GoodAds analytics accepts bounded provider reporting periods", () => {
@@ -37,9 +38,53 @@ test("first-party attribution tokens are signed, origin-bound, and event allowli
   assert.equal(analytics._test.normalizedAttributionEvent("purchase"), "purchase");
   assert.throws(() => analytics._test.normalizedAttributionEvent("arbitrary_event"), /not supported/);
   const script = analytics._test.attributionScript(token);
-  assert.match(script, /globalThis\.goodAdsTrack=send/);
-  assert.match(script, /send\("page_view"\)/);
+  assert.match(script, /globalThis\.goodAdsTrack=track/);
+  assert.match(script, /globalThis\.goodAdsConsent=setConsent/);
   assert.match(script, /page_origin/);
+});
+
+test("first-party attribution is fail-closed until consent and honors browser privacy signals", () => {
+  const script = analytics._test.attributionScript("signed-test-token");
+  const execute = (navigator = {}) => {
+    const requests = [];
+    class TestImage {
+      set src(value) { requests.push(value); }
+    }
+    const sandbox = {
+      URLSearchParams,
+      location: { origin: "https://goodos.app" },
+      navigator,
+      Image: TestImage,
+      crypto: { randomUUID: () => "89e0e5e1-ee43-4c9a-a41b-6b07bb920430" },
+    };
+    vm.runInNewContext(script, sandbox);
+    return { sandbox, requests };
+  };
+
+  const standard = execute();
+  assert.equal(standard.requests.length, 0, "loading the tracker must not record before consent");
+  assert.equal(standard.sandbox.goodAdsTrack("lead"), null);
+  assert.equal(standard.requests.length, 0);
+  assert.equal(standard.sandbox.goodAdsConsent(true), true);
+  assert.equal(standard.requests.length, 1, "granting consent records one page view");
+  assert.match(standard.requests[0], /event=page_view/);
+  assert.equal(standard.sandbox.goodAdsConsent(true), true);
+  assert.equal(standard.requests.length, 1, "repeated consent must not duplicate the page view");
+  assert.match(standard.sandbox.goodAdsTrack("lead"), /^[0-9a-f-]{36}$/);
+  assert.equal(standard.requests.length, 2);
+  assert.equal(standard.sandbox.goodAdsConsent(false), false);
+  assert.equal(standard.sandbox.goodAdsTrack("purchase"), null);
+  assert.equal(standard.requests.length, 2);
+
+  for (const privacyNavigator of [
+    { globalPrivacyControl: true },
+    { doNotTrack: "1" },
+  ]) {
+    const privateSession = execute(privacyNavigator);
+    assert.equal(privateSession.sandbox.goodAdsConsent(true), false);
+    assert.equal(privateSession.sandbox.goodAdsTrack("lead"), null);
+    assert.equal(privateSession.requests.length, 0);
+  }
 });
 
 test("Meta conversion parsing counts only explicit result actions", () => {
@@ -100,6 +145,8 @@ test("analytics capabilities include native X Ads reporting", () => {
   assert.equal(analytics.capabilities().providerAnalytics.budgetPacingAdvisoryOnly, true);
   assert.equal(analytics.capabilities().providerAnalytics.firstPartyWebsitePixel, true);
   assert.equal(analytics.capabilities().providerAnalytics.attributionReplayDeduplication, true);
+  assert.equal(analytics.capabilities().providerAnalytics.attributionConsentRequired, true);
+  assert.equal(analytics.capabilities().providerAnalytics.attributionPrivacySignalsHonored, true);
 });
 
 test("cross-channel budget recommendations preserve the total and never execute automatically", () => {
