@@ -324,6 +324,19 @@ test("OAuth permission truth never substitutes requested scopes for provider gra
   assert.match(source, /provider_permissions_api/);
 });
 
+test("cancelled OAuth callbacks consume state and return hardened non-cacheable pages", () => {
+  const serviceSource = fs.readFileSync(path.join(__dirname, "../src/services/goodads-social.service.js"), "utf8");
+  const routeSource = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+
+  assert.equal(typeof social.cancelAuthorization, "function");
+  assert.match(serviceSource, /async function cancelAuthorization[\s\S]*consumeState\(config\.id, state\)/);
+  assert.match(routeSource, /social\.cancelAuthorization\(/);
+  assert.match(routeSource, /Cache-Control["']:\s*["']no-store, max-age=0["']/);
+  assert.match(routeSource, /frame-ancestors 'none'/);
+  assert.match(routeSource, /Referrer-Policy["']:\s*["']no-referrer["']/);
+  assert.doesNotMatch(routeSource, /if \(req\.query\.error\) \{\s*return res\.status/);
+});
+
 test("publishing targets require opaque UUID account identifiers", () => {
   assert.deepEqual(
     social.normalizeConnectionIds([

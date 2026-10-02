@@ -696,8 +696,8 @@ async function fetchIdentity(config, accessToken, token = {}) {
 
 async function completeAuthorization({ provider, code, state, oauthToken }) {
   const config = providerConfig(provider);
-  if (!code) throw socialError("OAuth authorization code is missing.");
   const stateRow = await consumeState(config.id, state);
+  if (!code) throw socialError("OAuth authorization code is missing.");
   const token = await exchangeCode(config, code, stateRow, oauthToken);
   const scopeGrant = await resolveGrantedScopes(config, token);
   const identity = await fetchIdentity(config, token.access_token, token);
@@ -742,6 +742,12 @@ async function completeAuthorization({ provider, code, state, oauthToken }) {
     ]
   );
   return { connection: result.rows[0], returnOrigin: stateRow.return_origin };
+}
+
+async function cancelAuthorization({ provider, state }) {
+  const config = providerConfig(provider);
+  const stateRow = await consumeState(config.id, state);
+  return { provider: config.id, returnOrigin: stateRow.return_origin };
 }
 
 async function listConnections({ context, userId }) {
@@ -1967,6 +1973,7 @@ module.exports = {
   capabilities,
   beginAuthorization,
   completeAuthorization,
+  cancelAuthorization,
   listConnections,
   verifyConnection,
   disconnect,
