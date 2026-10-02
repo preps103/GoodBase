@@ -171,6 +171,13 @@ router.get("/oauth/:platform/callback", async (req, res) => {
       statusCode: requestError.statusCode || 500,
       title: "Connection failed",
       message: "The social account could not be connected. Return to GoodAds and try again.",
+      payload: {
+        type: "goodads-oauth-complete",
+        provider: String(req.params.platform || "provider"),
+        success: false,
+        cancelled: false,
+      },
+      targetOrigin: "https://ads.goodos.app",
     });
   }
 });
