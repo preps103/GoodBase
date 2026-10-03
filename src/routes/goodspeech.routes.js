@@ -239,6 +239,13 @@ function buildCapabilities(health, videoHealth = {
       status: "ready",
       issue: null,
     },
+    {
+      id: "agents",
+      execution: "goodbase",
+      engine: "goodspeech-grounded-v1",
+      status: "ready",
+      issue: null,
+    },
     ...BROWSER_TOOL_IDS.map((id) => ({
       id,
       execution: "browser",

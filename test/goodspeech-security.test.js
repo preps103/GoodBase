@@ -27,6 +27,7 @@ const avatarService = require("../src/services/goodspeech-avatar.service");
 const collaborationRoutes = require("../src/routes/goodspeech-collaboration.routes");
 const libraryService = require("../src/services/goodspeech-library.service");
 const usageService = require("../src/services/goodspeech-usage.service");
+const agentService = require("../src/services/goodspeech-agent.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -141,7 +142,7 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
     { ready: false, message: "GPU worker unavailable" },
   );
 
-  assert.equal(ready.length, 16);
+  assert.equal(ready.length, 17);
   assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "video").engine, "goodmotion-open");
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
@@ -149,6 +150,8 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "speech-to-text").status, "ready");
   assert.equal(ready.find((item) => item.id === "assets").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "assets").status, "ready");
+  assert.equal(ready.find((item) => item.id === "agents").engine, "goodspeech-grounded-v1");
+  assert.equal(ready.find((item) => item.id === "agents").status, "ready");
   assert.equal(ready.find((item) => item.id === "avatars").status, "limited");
   assert.equal(ready.find((item) => item.id === "voice-changer").status, "limited");
   assert.match(ready.find((item) => item.id === "voice-changer").issue, /voice-conversion model/i);
@@ -159,6 +162,63 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
   assert.match(degraded.find((item) => item.id === "image").issue, /image model/i);
   assert.match(degraded.find((item) => item.id === "avatars").issue, /browser live mode/i);
+});
+
+test("GoodSpeech agents validate configuration and restrict built-in tools", () => {
+  const agent = agentService.validateAgent({
+    name: "Support guide",
+    systemPrompt: "Answer only from approved support information.",
+    greeting: "How can I help?",
+    voice: "Amara",
+    language: "es",
+    tools: ["knowledge_search", "handoff"],
+    retentionDays: 7,
+  });
+  assert.equal(agent.voice, "Amara");
+  assert.equal(agent.language, "es");
+  assert.deepEqual(agent.tools, ["knowledge_search", "handoff"]);
+  assert.throws(() => agentService.validateAgent({
+    name: "Unsafe",
+    systemPrompt: "Prompt",
+    greeting: "Hello",
+    tools: ["shell"],
+  }), /unsupported tool/i);
+});
+
+test("GoodSpeech agents rank knowledge, return citations, and detect audited tools", () => {
+  const matches = agentService.rankKnowledge("What is the refund policy?", [
+    { id: "1", title: "Refund policy", content: "Refunds are available within 30 days of purchase." },
+    { id: "2", title: "Office hours", content: "The office opens at nine." },
+  ]);
+  assert.equal(matches[0].id, "1");
+  const response = agentService.groundedReply({
+    agent: { name: "Support guide" },
+    input: "What is the refund policy?",
+    matches,
+    toolName: "knowledge_search",
+    toolResult: { matches },
+  });
+  assert.match(response, /30 days/i);
+  assert.match(response, /Source: Refund policy/);
+  assert.equal(agentService.selectTool("Please connect me to a human", agentService.ALLOWED_TOOLS), "handoff");
+  assert.equal(agentService.selectTool("How much quota do I have?", agentService.ALLOWED_TOOLS), "usage_summary");
+  assert.equal(agentService.selectTool("What time is it?", agentService.ALLOWED_TOOLS), "current_time");
+});
+
+test("GoodSpeech agents ship durable scoped sessions, analytics, tests, and migration wiring", () => {
+  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "20261003_goodspeech_agents.sql"), "utf8");
+  const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech-agent.routes.js"), "utf8");
+  const index = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "index.js"), "utf8");
+  const runtime = fs.readFileSync(path.join(__dirname, "..", "src", "runtime", "goodspeech-migrations.js"), "utf8");
+  for (const table of ["goodspeech_agents", "goodspeech_agent_knowledge", "goodspeech_agent_sessions", "goodspeech_agent_messages", "goodspeech_agent_tool_calls", "goodspeech_agent_tests"]) {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(migration, /owner_user_id UUID NOT NULL REFERENCES users\(id\)/);
+  assert.match(routes, /authRequired, tenantContext, requireGoodSpeechAccess/);
+  assert.match(routes, /sessions\/:sessionId\/interrupt/);
+  assert.match(routes, /tests\/:testId\/run/);
+  assert.match(index, /\/api\/goodspeech\/v1\/agents/);
+  assert.match(runtime, /apply-goodspeech-agents-migration\.js/);
 });
 
 test("GoodSpeech remains ready when optional accelerators use working browser fallbacks", () => {
