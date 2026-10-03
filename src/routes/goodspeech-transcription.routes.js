@@ -58,6 +58,7 @@ router.post("/", goodspeechAccess("write:goodspeech"), limiter, upload.single("f
     const result = await service.transcribe({
       file: req.file,
       language: req.body?.language,
+      diarization: req.body?.diarization,
       context: req.tenantContext,
       userId: req.user.id,
       request: req,
@@ -71,6 +72,8 @@ router.post("/", goodspeechAccess("write:goodspeech"), limiter, upload.single("f
         model: result.model,
         modelRevision: result.modelRevision,
         language: result.language,
+        diarization: result.diarization,
+        speakers: result.speakers.length,
         durationSeconds: result.durationSeconds,
         latencyMs: result.latencyMs,
         retainedAudio: false,
@@ -95,6 +98,7 @@ router.post("/live", goodspeechAccess("write:goodspeech"), liveLimiter, liveUplo
     const result = await service.transcribe({
       file: req.file,
       language: req.body?.language,
+      diarization: "none",
       context: req.tenantContext,
       userId: req.user.id,
       request: req,

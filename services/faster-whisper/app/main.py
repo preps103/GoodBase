@@ -6,10 +6,13 @@ import asyncio
 import os
 import secrets
 import tempfile
+import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
+import av
+import numpy as np
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from faster_whisper import WhisperModel
 from huggingface_hub import snapshot_download
@@ -116,7 +119,7 @@ async def save_bounded_upload(upload: UploadFile) -> Path:
         await upload.close()
 
 
-def transcribe_file(path: Path, language: str | None) -> dict:
+def transcribe_track(path: Path, language: str | None, speaker: str | None = None) -> dict:
     if model is None:
         raise RuntimeError("Faster-Whisper is not ready")
     segments, info = model.transcribe(
@@ -141,6 +144,7 @@ def transcribe_file(path: Path, language: str | None) -> dict:
                 "start": round(float(word.start or 0), 3),
                 "end": round(float(word.end or 0), 3),
                 "probability": round(float(word.probability or 0), 5),
+                **({"speaker": speaker} if speaker else {}),
             }
             for word in (segment.words or [])
             if str(word.word or "").strip()
@@ -151,6 +155,7 @@ def transcribe_file(path: Path, language: str | None) -> dict:
             "start": round(float(segment.start or 0), 3),
             "end": round(float(segment.end or 0), 3),
             "words": words,
+            **({"speaker": speaker} if speaker else {}),
         })
     return {
         "text": " ".join(transcript_parts).strip(),
@@ -164,20 +169,96 @@ def transcribe_file(path: Path, language: str | None) -> dict:
     }
 
 
+def stereo_channel_wavs(path: Path) -> list[Path]:
+    with av.open(str(path)) as container:
+        stream = next((candidate for candidate in container.streams if candidate.type == "audio"), None)
+        if stream is None or int(getattr(stream.codec_context, "channels", 0) or 0) < 2:
+            return []
+        resampler = av.AudioResampler(format="s16p", layout="stereo", rate=16_000)
+        channel_parts: list[list[np.ndarray]] = [[], []]
+        for frame in container.decode(stream):
+            converted_frames = resampler.resample(frame)
+            for converted in converted_frames:
+                samples = converted.to_ndarray()
+                if samples.ndim == 2 and samples.shape[0] >= 2:
+                    channel_parts[0].append(np.asarray(samples[0], dtype="<i2"))
+                    channel_parts[1].append(np.asarray(samples[1], dtype="<i2"))
+        for converted in resampler.resample(None):
+            samples = converted.to_ndarray()
+            if samples.ndim == 2 and samples.shape[0] >= 2:
+                channel_parts[0].append(np.asarray(samples[0], dtype="<i2"))
+                channel_parts[1].append(np.asarray(samples[1], dtype="<i2"))
+    if not all(channel_parts):
+        return []
+    outputs = []
+    try:
+        for index, parts in enumerate(channel_parts):
+            descriptor, name = tempfile.mkstemp(prefix=f"goodspeech-speaker-{index + 1}-", suffix=".wav")
+            os.close(descriptor)
+            output = Path(name)
+            outputs.append(output)
+            with wave.open(str(output), "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16_000)
+                wav_file.writeframes(np.concatenate(parts).astype("<i2", copy=False).tobytes())
+        return outputs
+    except Exception:
+        for output in outputs:
+            output.unlink(missing_ok=True)
+        raise
+
+
+def transcribe_file(path: Path, language: str | None, diarization: str = "none") -> dict:
+    if diarization != "channels":
+        return {**transcribe_track(path, language), "diarization": "none", "speakers": []}
+    channels = stereo_channel_wavs(path)
+    if not channels:
+        result = transcribe_track(path, language, "Speaker 1")
+        return {**result, "diarization": "single_channel", "speakers": ["Speaker 1"]}
+    try:
+        tracks = [transcribe_track(channel, language, f"Speaker {index + 1}") for index, channel in enumerate(channels)]
+    finally:
+        for channel in channels:
+            channel.unlink(missing_ok=True)
+    segments = sorted(
+        [segment for track in tracks for segment in track["segments"]],
+        key=lambda segment: (segment["start"], segment.get("speaker", "")),
+    )
+    for index, segment in enumerate(segments):
+        segment["id"] = index
+    return {
+        "text": " ".join(f'{segment["speaker"]}: {segment["text"]}' for segment in segments if segment["text"]).strip(),
+        "language": max(tracks, key=lambda track: track["languageProbability"])["language"],
+        "languageProbability": round(sum(track["languageProbability"] for track in tracks) / len(tracks), 5),
+        "durationSeconds": max(track["durationSeconds"] for track in tracks),
+        "durationAfterVadSeconds": max(track["durationAfterVadSeconds"] for track in tracks),
+        "segments": segments,
+        "model": MODEL_ID,
+        "modelRevision": os.getenv("FASTER_WHISPER_MODEL_REVISION", MODEL_REVISION),
+        "diarization": "channels",
+        "speakers": ["Speaker 1", "Speaker 2"],
+    }
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(
     file: Annotated[UploadFile, File()],
     language: Annotated[str, Form()] = "",
+    diarization: Annotated[str, Form()] = "none",
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict:
     authorize(authorization)
     normalized_language = language.strip().lower()
     if normalized_language and (len(normalized_language) < 2 or len(normalized_language) > 12 or not normalized_language.replace("-", "").isalpha()):
         raise HTTPException(status_code=422, detail="Language must be an ISO language code")
+    normalized_diarization = diarization.strip().lower()
+    if normalized_diarization not in {"none", "channels"}:
+        raise HTTPException(status_code=422, detail="Diarization must be none or channels")
     path = await save_bounded_upload(file)
     try:
         async with generation_slots:
-            return await asyncio.to_thread(transcribe_file, path, normalized_language or None)
+            return await asyncio.to_thread(transcribe_file, path, normalized_language or None, normalized_diarization)
     except HTTPException:
         raise
     except Exception:

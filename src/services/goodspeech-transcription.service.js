@@ -34,6 +34,14 @@ function normalizeLanguage(value) {
   return language.split("-")[0];
 }
 
+function normalizeDiarization(value) {
+  const diarization = String(value || "none").trim().toLowerCase();
+  if (!["none", "channels"].includes(diarization)) {
+    throw transcriptionError("Speaker detection must be off or use separate stereo channels.");
+  }
+  return diarization;
+}
+
 function validateAudio(file) {
   library._internal.validateFile(file, MAX_AUDIO_BYTES);
   const type = String(file.mimetype || "").toLowerCase();
@@ -60,7 +68,9 @@ function boundedResult(payload) {
       start: Math.max(0, Number(word?.start) || 0),
       end: Math.max(0, Number(word?.end) || 0),
       probability: Math.min(1, Math.max(0, Number(word?.probability) || 0)),
+      speaker: word?.speaker ? String(word.speaker).slice(0, 80) : null,
     })).filter((word) => word.word) : [],
+    speaker: segment?.speaker ? String(segment.speaker).slice(0, 80) : null,
   })).filter((segment) => segment.text) : [];
   return {
     text: String(payload.text || "").trim().slice(0, 1_000_000),
@@ -71,6 +81,8 @@ function boundedResult(payload) {
     segments,
     model: String(payload.model || MODEL_ID).slice(0, 200),
     modelRevision: String(payload.modelRevision || MODEL_REVISION).slice(0, 64),
+    diarization: ["none", "single_channel", "channels"].includes(payload.diarization) ? payload.diarization : "none",
+    speakers: Array.isArray(payload.speakers) ? payload.speakers.slice(0, 8).map((speaker) => String(speaker).slice(0, 80)) : [],
   };
 }
 
@@ -83,6 +95,8 @@ async function recordUsage({ result, context, userId, request, latencyMs }) {
     modelRevision: result.modelRevision,
     language: result.language,
     segments: result.segments.length,
+    diarization: result.diarization,
+    speakers: result.speakers.length,
     latencyMs,
   });
   await database.query(
@@ -102,7 +116,7 @@ async function recordUsage({ result, context, userId, request, latencyMs }) {
   );
 }
 
-async function transcribe({ file, language, context, userId, request, fetchFn = global.fetch }) {
+async function transcribe({ file, language, diarization = "none", context, userId, request, fetchFn = global.fetch }) {
   validateAudio(file);
   const configured = provider();
   if (!configured) {
@@ -111,6 +125,7 @@ async function transcribe({ file, language, context, userId, request, fetchFn = 
   const form = new FormData();
   form.append("file", new Blob([file.buffer], { type: file.mimetype }), String(file.originalname || "audio.wav").slice(0, 180));
   form.append("language", normalizeLanguage(language));
+  form.append("diarization", normalizeDiarization(diarization));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
   const started = Date.now();
@@ -171,6 +186,7 @@ module.exports = {
   MODEL_REVISION,
   checkHealth,
   normalizeLanguage,
+  normalizeDiarization,
   transcribe,
   _internal: { boundedResult, provider, validateAudio },
 };

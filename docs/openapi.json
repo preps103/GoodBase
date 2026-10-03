@@ -309,7 +309,8 @@
                 "required": ["file"],
                 "properties": {
                   "file": { "type": "string", "format": "binary", "description": "Audio or audio-bearing video, up to 50 MB" },
-                  "language": { "type": "string", "default": "auto", "description": "Automatic detection or an ISO language code" }
+                  "language": { "type": "string", "default": "auto", "description": "Automatic detection or an ISO language code" },
+                  "diarization": { "type": "string", "enum": ["none", "channels"], "default": "none", "description": "Label Speaker 1 and Speaker 2 when they are recorded on separate stereo channels" }
                 }
               }
             }

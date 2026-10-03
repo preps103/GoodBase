@@ -30,6 +30,7 @@ const usageService = require("../src/services/goodspeech-usage.service");
 const agentService = require("../src/services/goodspeech-agent.service");
 const voiceService = require("../src/services/goodspeech-voice.service");
 const transcriptionRoutes = require("../src/routes/goodspeech-transcription.routes");
+const transcriptionService = require("../src/services/goodspeech-transcription.service");
 const qualityService = require("../src/services/goodspeech-quality.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
@@ -140,6 +141,20 @@ test("GoodSpeech streams low-latency clauses and supports stateless managed live
   assert.match(routes, /retainedAudio: false/);
   assert.match(worker, /SPLIT_PATTERN = r"\(\?<\=\[\.\!\?;:,。！？；：，、\]\)\\s\*\|\\n\+"/);
   assert.match(worker, /split_pattern=SPLIT_PATTERN/);
+});
+
+test("GoodSpeech labels speakers from separate stereo channels without retaining audio", () => {
+  assert.equal(transcriptionService.normalizeDiarization("channels"), "channels");
+  assert.equal(transcriptionService.normalizeDiarization(""), "none");
+  assert.throws(() => transcriptionService.normalizeDiarization("invented"), /speaker detection/i);
+  const worker = fs.readFileSync(path.join(__dirname, "..", "services", "faster-whisper", "app", "main.py"), "utf8");
+  assert.match(worker, /def stereo_channel_wavs/);
+  assert.match(worker, /AudioResampler\(format="s16p", layout="stereo", rate=16_000\)/);
+  assert.match(worker, /"Speaker 1", "Speaker 2"/);
+  assert.match(worker, /channel\.unlink\(missing_ok=True\)/);
+  const openapi = fs.readFileSync(path.join(__dirname, "..", "docs", "openapi.json"), "utf8");
+  assert.match(openapi, /"diarization"/);
+  assert.match(openapi, /separate stereo channels/i);
 });
 
 test("GoodSpeech measures all supported languages with a private quality suite", () => {
