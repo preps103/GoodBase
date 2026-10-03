@@ -875,7 +875,8 @@ router.post("/speech/stream", authRequired, tenantContext, requireGoodSpeechAcce
     res.set("X-GoodSpeech-Audio-Format", "pcm_s16le");
     res.set("X-GoodSpeech-Sample-Rate", "24000");
     res.set("X-GoodSpeech-Channels", "1");
-    res.set("X-GoodSpeech-First-Byte-Ms", String(Date.now() - started));
+    const firstByteMs = Date.now() - started;
+    res.set("X-GoodSpeech-First-Byte-Ms", String(firstByteMs));
     res.flushHeaders();
 
     const complete = async (success) => {
@@ -887,6 +888,7 @@ router.post("/speech/stream", authRequired, tenantContext, requireGoodSpeechAcce
         reservation,
         audioBytes: total,
         latencyMs: Date.now() - started,
+        firstByteMs,
         success,
         request: req,
       });

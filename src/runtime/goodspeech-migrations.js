@@ -10,6 +10,7 @@ const MIGRATIONS = [
   "apply-goodspeech-agents-migration.js",
   "apply-goodspeech-voices-migration.js",
   "apply-goodspeech-webhooks-migration.js",
+  "apply-goodspeech-governance-migration.js",
 ];
 
 function shouldRun() {

@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const { query } = require("../config/database");
 const storage = require("./storage-v2.service");
+const governance = require("./goodspeech-governance.service");
 
 const BUCKET_ID = "bucket_goodspeech_user_assets";
 const MAX_STATE_BYTES = 262144;
@@ -240,6 +241,9 @@ async function deleteAsset({ assetId, context, userId }) {
 }
 
 async function createHistory({ file, payload, context, userId }) {
+  if (!await governance.shouldRetainGeneratedContent({ context, userId })) {
+    return { retained: false, policy: "zero_retention" };
+  }
   validateFile(file, MAX_HISTORY_AUDIO_BYTES);
   const text = boundedText(payload?.text, 2000);
   if (!text) throw libraryError("Generation history requires the source script.", 400, "GOODSPEECH_HISTORY_SCRIPT_REQUIRED");

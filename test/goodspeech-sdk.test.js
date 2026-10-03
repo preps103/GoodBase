@@ -31,6 +31,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   await client.createWebhook({ endpointUrl: "https://hooks.example.test/goodspeech", events: ["speech.completed"] });
   await client.testWebhook("hook-1");
   await client.deleteWebhook("hook-1");
+  await client.updatePrivacySettings({ zeroRetention: true });
+  await client.qualitySummary();
 
   assert.equal(audio.audio.byteLength, 4);
   assert.equal(stream.headers.get("content-type"), "application/octet-stream");
@@ -46,6 +48,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
     "/api/goodspeech/v1/webhooks",
     "/api/goodspeech/v1/webhooks/hook-1/test",
     "/api/goodspeech/v1/webhooks/hook-1",
+    "/api/goodspeech/v1/governance/privacy",
+    "/api/goodspeech/v1/governance/quality",
   ]);
 });
 
@@ -67,6 +71,8 @@ test("GoodSpeech Python SDK ships audio, agent, voice, and webhook helpers", () 
   assert.match(source, /def send_agent_turn/);
   assert.match(source, /def create_webhook/);
   assert.match(source, /def test_webhook/);
+  assert.match(source, /def update_privacy_settings/);
+  assert.match(source, /def quality_summary/);
   assert.match(source, /def verify_goodspeech_webhook/);
   assert.match(source, /hmac\.compare_digest/);
 });

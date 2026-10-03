@@ -22,6 +22,8 @@ const marketplaceMessages =
   require("../services/fleet-marketplace-message.service");
 const goodSpeechWebhooks =
   require("../services/goodspeech-webhook.service");
+const goodSpeechGovernance =
+  require("../services/goodspeech-governance.service");
 
 const pool =
   database.pool ||
@@ -444,6 +446,8 @@ async function tick() {
       await marketplaceMessages.processScheduledTripMessages();
     const goodSpeechWebhookResults =
       await goodSpeechWebhooks.processDueDeliveries(5, workerId);
+    const goodSpeechRetentionResults =
+      await goodSpeechGovernance.purgeExpiredContent(25);
 
     let legacyBatchProcessed = false;
 
@@ -467,6 +471,8 @@ async function tick() {
         marketplaceMessageResults.length,
       goodSpeechWebhooksProcessed:
         goodSpeechWebhookResults.length,
+      goodSpeechRetentionPoliciesProcessed:
+        goodSpeechRetentionResults.length,
       legacyBatchProcessed,
       lastTickAt:
         new Date().toISOString()
@@ -478,13 +484,15 @@ async function tick() {
       eventCount:
         outboxResults.length +
         marketplaceMessageResults.length +
-        goodSpeechWebhookResults.length,
+        goodSpeechWebhookResults.length +
+        goodSpeechRetentionResults.length,
     });
 
     if (
       outboxResults.length > 0 ||
       marketplaceMessageResults.length > 0 ||
       goodSpeechWebhookResults.length > 0 ||
+      goodSpeechRetentionResults.length > 0 ||
       legacyBatchProcessed
     ) {
       console.log(
@@ -493,6 +501,7 @@ async function tick() {
           outboxResults,
           marketplaceMessageResults,
           goodSpeechWebhookResults,
+          goodSpeechRetentionResults,
           legacyBatchProcessed
         })
       );

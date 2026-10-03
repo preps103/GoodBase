@@ -6,6 +6,7 @@ const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const service = require("../services/goodspeech-agent.service");
 const webhookService = require("../services/goodspeech-webhook.service");
+const governanceService = require("../services/goodspeech-governance.service");
 const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes");
 
 const router = express.Router();
@@ -61,6 +62,7 @@ router.post("/sessions/:sessionId/turns", turnLimiter, async (req, res) => {
         context: req.tenantContext,
         userId: req.user.id,
       }).catch((error) => console.error("[GoodSpeech webhooks] agent handoff event failed:", error.message));
+      await governanceService.enforceSessionRetention({ sessionId: result.session.id, context: req.tenantContext, userId: req.user.id });
     }
     return res.status(201).json({ success: true, data: result });
   } catch (error) {
@@ -77,6 +79,7 @@ router.post("/sessions/:sessionId/complete", writeLimiter, async (req, res) => {
       context: req.tenantContext,
       userId: req.user.id,
     }).catch((error) => console.error("[GoodSpeech webhooks] agent completion event failed:", error.message));
+    await governanceService.enforceSessionRetention({ sessionId: result.id, context: req.tenantContext, userId: req.user.id });
     return res.json({ success: true, data: result });
   } catch (error) {
     return handle(res, "session.complete", Promise.reject(error));

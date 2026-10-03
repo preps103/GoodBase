@@ -77,6 +77,18 @@ class GoodSpeechClient:
     def delete_webhook(self, webhook_id):
         return self.request(f"/webhooks/{webhook_id}", "DELETE")
 
+    def privacy_settings(self):
+        return self.request("/governance/privacy")
+
+    def update_privacy_settings(self, payload):
+        return self.request("/governance/privacy", "PATCH", payload)
+
+    def purge_retained_content(self):
+        return self.request("/governance/privacy/purge", "POST", {})
+
+    def quality_summary(self):
+        return self.request("/governance/quality")
+
     def synthesize(self, payload, stream=False):
         path = "/speech/stream" if stream else "/speech"
         body = json.dumps(payload).encode("utf-8")

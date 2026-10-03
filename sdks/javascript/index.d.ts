@@ -29,6 +29,10 @@ export declare class GoodSpeechClient {
   createWebhook(payload: {endpointUrl: string; events: string[]; description?: string}): Promise<any>;
   testWebhook(webhookId: string): Promise<any>;
   deleteWebhook(webhookId: string): Promise<any>;
+  privacySettings(): Promise<any>;
+  updatePrivacySettings(payload: {zeroRetention?: boolean; generationRetentionDays?: 0 | 7 | 30 | 90 | 365; agentRetentionDays?: 0 | 7 | 30 | 90 | 365; residencyRegion?: "us-west"; modelTrainingEnabled?: false}): Promise<any>;
+  purgeRetainedContent(): Promise<any>;
+  qualitySummary(): Promise<any>;
   synthesize(payload: Record<string,unknown>, options?: {signal?: AbortSignal}): Promise<GoodSpeechAudioResult>;
   stream(payload: Record<string,unknown>, options?: {signal?: AbortSignal}): Promise<Response>;
   generateVoiceSpeech(voiceId: string, text: string, options?: {signal?: AbortSignal}): Promise<GoodSpeechAudioResult>;

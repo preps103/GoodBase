@@ -620,6 +620,39 @@
         "responses": { "202": { "description": "Verification delivery queued" }, "404": { "description": "Webhook not found" } }
       }
     },
+    "/api/goodspeech/v1/governance/privacy": {
+      "get": {
+        "summary": "Read enforced GoodSpeech privacy and retention settings",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Zero-retention, residency, training, and retention policy" }, "401": { "description": "Authentication required" } }
+      },
+      "patch": {
+        "summary": "Update GoodSpeech zero-retention and retention controls",
+        "description": "Zero-retention immediately purges generated history and completed agent content. Explicit user assets remain until the owner deletes them.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "zeroRetention": { "type": "boolean" }, "generationRetentionDays": { "type": "integer", "enum": [0, 7, 30, 90, 365] }, "agentRetentionDays": { "type": "integer", "enum": [0, 7, 30, 90, 365] }, "residencyRegion": { "type": "string", "enum": ["us-west"] }, "modelTrainingEnabled": { "type": "boolean", "enum": [false] } } } } } },
+        "responses": { "200": { "description": "Privacy controls enforced" }, "400": { "description": "Invalid retention selection" }, "409": { "description": "Requested residency or training policy is unavailable" } }
+      }
+    },
+    "/api/goodspeech/v1/governance/privacy/purge": {
+      "post": {
+        "summary": "Purge retained generated content and agent transcripts",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Owned generated history, audio, and agent content purged" }, "401": { "description": "Authentication required" } }
+      }
+    },
+    "/api/goodspeech/v1/governance/quality": {
+      "get": {
+        "summary": "Read measured GoodSpeech latency and reliability objectives",
+        "description": "Returns owner-scoped 30-day p50 and p95 first-audio timing, average generation latency, failure rate, and objective status.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Measured quality and SLO summary" }, "401": { "description": "Authentication required" } }
+      }
+    },
     "/api/goodspeech/v1/agents/{agentId}/tests/{testId}/run": {
       "post": {
         "summary": "Run a durable grounded agent regression test",

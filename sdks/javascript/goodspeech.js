@@ -83,6 +83,18 @@ class GoodSpeechClient {
     return this.request(`/webhooks/${encodeURIComponent(webhookId)}`, { method: "DELETE" });
   }
 
+  privacySettings() { return this.request("/governance/privacy"); }
+
+  updatePrivacySettings(payload) {
+    return this.request("/governance/privacy", { method: "PATCH", body: payload });
+  }
+
+  purgeRetainedContent() {
+    return this.request("/governance/privacy/purge", { method: "POST", body: {} });
+  }
+
+  qualitySummary() { return this.request("/governance/quality"); }
+
   async synthesize(payload, options = {}) {
     const response = await this.fetch(joinUrl(this.baseUrl, `${API_PREFIX}/speech`), {
       method: "POST",

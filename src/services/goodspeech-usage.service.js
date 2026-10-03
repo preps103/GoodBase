@@ -178,9 +178,10 @@ async function reserveUsage({ userId, context, characters }) {
   }
 }
 
-async function finishUsage({ userId, reservation, audioBytes, latencyMs, success, request }) {
+async function finishUsage({ userId, reservation, audioBytes, latencyMs, firstByteMs, success, request }) {
   const bytes = Math.max(0, Math.round(Number(audioBytes) || 0));
   const latency = Math.max(0, Math.round(Number(latencyMs) || 0));
+  const firstAudio = Math.max(0, Math.round(Number(firstByteMs) || latency));
   const { organizationId, projectId, environmentId } = reservation.scope;
   const client = await database.pool.connect();
   try {
@@ -214,6 +215,7 @@ async function finishUsage({ userId, reservation, audioBytes, latencyMs, success
         reservationId: reservation.reservationId,
         audioBytes: bytes,
         latencyMs: latency,
+        firstByteMs: firstAudio,
       });
       await client.query(
         `INSERT INTO backend_usage_events (
