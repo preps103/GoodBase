@@ -347,6 +347,56 @@
         }
       }
     },
+    "/api/goodspeech/v1/library/bootstrap": {
+      "get": {
+        "summary": "Load the signed-in user's GoodSpeech workspace state, assets, and generation history",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Private cloud library" }, "401": { "description": "Authentication required" }, "403": { "description": "GoodSpeech entitlement required" } }
+      }
+    },
+    "/api/goodspeech/v1/library/state": {
+      "put": {
+        "summary": "Durably save the signed-in user's GoodSpeech workspace state",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Workspace state saved" }, "401": { "description": "Authentication required" }, "413": { "description": "Workspace state too large" } }
+      }
+    },
+    "/api/goodspeech/v1/library/assets": {
+      "post": {
+        "summary": "Upload a private GoodSpeech asset",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["file"], "properties": { "file": { "type": "string", "format": "binary" }, "source": { "type": "string" }, "metadata": { "type": "string" } } } } } },
+        "responses": { "201": { "description": "Asset saved" }, "401": { "description": "Authentication required" }, "413": { "description": "Asset too large" }, "415": { "description": "Unsupported asset" } }
+      }
+    },
+    "/api/goodspeech/v1/library/assets/{assetId}/content": {
+      "get": {
+        "summary": "Download an owned private GoodSpeech asset",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "assetId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Private asset content" }, "401": { "description": "Authentication required" }, "404": { "description": "Asset not found" } }
+      },
+      "delete": {
+        "summary": "Delete an owned private GoodSpeech asset",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "assetId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Asset deleted" }, "401": { "description": "Authentication required" }, "404": { "description": "Asset not found" } }
+      }
+    },
+    "/api/goodspeech/v1/library/history": {
+      "post": {
+        "summary": "Save generated speech and its production metadata to private history",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["file", "text"], "properties": { "file": { "type": "string", "format": "binary" }, "text": { "type": "string", "maxLength": 2000 }, "voice": { "type": "string" }, "voiceLabel": { "type": "string" }, "style": { "type": "string" }, "tone": { "type": "string" } } } } } },
+        "responses": { "201": { "description": "Generation saved" }, "401": { "description": "Authentication required" }, "413": { "description": "Audio too large" } }
+      }
+    },
     "/api/goodspeech/v1/collaboration/bootstrap": {
       "get": {
         "summary": "Load the tenant-scoped GoodSpeech collaboration workspace",

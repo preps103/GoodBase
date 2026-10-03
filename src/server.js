@@ -2,10 +2,12 @@ require("./telemetry/bootstrap");
 
 const { runGoodCustomMigrations } = require("./runtime/goodcustom-migrations");
 const { runGoodScanMigrations } = require("./runtime/goodscan-migrations");
+const { runGoodSpeechMigrations } = require("./runtime/goodspeech-migrations");
 const { ensureBackupSshPort } = require("./runtime/backup-ssh-port");
 
 runGoodCustomMigrations();
 runGoodScanMigrations();
+runGoodSpeechMigrations();
 
 try {
   const backupSshPort = ensureBackupSshPort();

@@ -23,6 +23,7 @@ const {
 const videoService = require("../src/services/goodspeech-video.service");
 const avatarService = require("../src/services/goodspeech-avatar.service");
 const collaborationRoutes = require("../src/routes/goodspeech-collaboration.routes");
+const libraryService = require("../src/services/goodspeech-library.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -430,6 +431,53 @@ test("GoodSpeech collaboration ships durable projects, tasks, chat, read state, 
   assert.doesNotMatch(`${migration}\n${routes}\n${service}`, /Google AI|Gemini|AI Studio/i);
 });
 
+test("GoodSpeech cloud library validates state and uploaded media before persistence", () => {
+  const internal = libraryService._internal;
+  assert.deepEqual(internal.validateState({ presets: [{ id: "voiceover" }] }), {
+    presets: [{ id: "voiceover" }],
+  });
+  assert.throws(
+    () => internal.validateState({ draft: "x".repeat(libraryService.MAX_STATE_BYTES) }),
+    /too large/i,
+  );
+  assert.doesNotThrow(() => internal.assertFileSignature(Buffer.from("RIFF0000WAVEdata"), "audio/wav"));
+  assert.throws(
+    () => internal.assertFileSignature(Buffer.from("not-a-wave"), "audio/wav"),
+    /signature/i,
+  );
+  assert.throws(
+    () => internal.validateFile({ mimetype: "text/html", buffer: Buffer.from("<script>") }),
+    /not supported/i,
+  );
+});
+
+test("GoodSpeech cloud library is private, owner-scoped, and migrated on production startup", () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, "..", "migrations", "20261003_goodspeech_cloud_library.sql"),
+    "utf8",
+  );
+  const routes = fs.readFileSync(
+    path.join(__dirname, "..", "src", "routes", "goodspeech-library.routes.js"),
+    "utf8",
+  );
+  const service = fs.readFileSync(
+    path.join(__dirname, "..", "src", "services", "goodspeech-library.service.js"),
+    "utf8",
+  );
+  const server = fs.readFileSync(path.join(__dirname, "..", "src", "server.js"), "utf8");
+
+  assert.match(migration, /'private'/);
+  assert.match(migration, /public_read_enabled[\s\S]*FALSE/i);
+  assert.match(migration, /goodspeech_user_state/);
+  assert.match(migration, /goodspeech_assets/);
+  assert.match(migration, /goodspeech_generation_history/);
+  assert.match(routes, /authRequired, tenantContext, requireGoodSpeechAccess/);
+  assert.match(routes, /assets\/:assetId\/content/);
+  assert.match(service, /owner_user_id = \$3::uuid/);
+  assert.match(service, /organization_id = \$2/);
+  assert.match(server, /runGoodSpeechMigrations\(\)/);
+});
+
 test("GoodSpeech production contracts expose release identity, truthful health, and complete deployment wiring", () => {
   const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech.routes.js"), "utf8");
   const health = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "health.routes.js"), "utf8");
@@ -451,6 +499,9 @@ test("GoodSpeech production contracts expose release identity, truthful health, 
   assert.ok(openapi.paths["/api/goodspeech/v1/avatars/render"]);
   assert.ok(openapi.paths["/api/goodspeech/v1/video/jobs"]);
   assert.ok(openapi.paths["/api/goodspeech/v1/collaboration/projects"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/library/bootstrap"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/library/assets"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/library/history"]);
   assert.match(videoWorker, /GOODMOTION_RETENTION_SECONDS/);
   assert.match(videoWorker, /cleanup_stale_jobs/);
 });
