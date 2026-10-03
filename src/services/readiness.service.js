@@ -51,6 +51,8 @@ async function runReadinessChecks({
   goodSpeechRequired = booleanSetting(process.env.GOODSPEECH_REQUIRED, false),
   kokoroUrl = String(process.env.KOKORO_TTS_URL || "").trim(),
   kokoroToken = String(process.env.KOKORO_TTS_TOKEN || "").trim(),
+  fasterWhisperUrl = String(process.env.FASTER_WHISPER_URL || "").trim(),
+  fasterWhisperToken = String(process.env.FASTER_WHISPER_TOKEN || "").trim(),
 } = {}) {
   const lifecycleState = lifecycle.snapshot();
   const checks = [];
@@ -103,6 +105,33 @@ async function runReadinessChecks({
         if (!response.ok) throw new Error("Kokoro is unavailable");
         await response.body?.cancel?.();
         return { message: `GoodSpeech Kokoro returned HTTP ${response.status}.` };
+      },
+    }));
+  }
+
+  if (fasterWhisperUrl) {
+    checks.push(await runCheck({
+      name: "goodspeech-faster-whisper",
+      type: "inference",
+      critical: false,
+      action: async () => {
+        if (fasterWhisperToken.length < 32 || typeof fetchFn !== "function") {
+          return { ready: false, message: "GoodSpeech Faster-Whisper is not configured." };
+        }
+        const endpoint = new URL(fasterWhisperUrl);
+        if (!["http:", "https:"].includes(endpoint.protocol)) {
+          return { ready: false, message: "GoodSpeech Faster-Whisper has an invalid endpoint." };
+        }
+        endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}/health/ready`;
+        endpoint.search = "";
+        endpoint.hash = "";
+        const response = await fetchFn(endpoint.toString(), {
+          signal: AbortSignal.timeout(2500),
+          headers: { Accept: "application/json", "X-GoodBase-Service": "GoodSpeech" },
+        });
+        if (!response.ok) throw new Error("Faster-Whisper is unavailable");
+        await response.body?.cancel?.();
+        return { message: `GoodSpeech Faster-Whisper returned HTTP ${response.status}.` };
       },
     }));
   }

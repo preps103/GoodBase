@@ -149,6 +149,15 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
   assert.equal(ready.find((item) => item.id === "speech-to-text").engine, "whisper-small");
   assert.equal(ready.find((item) => item.id === "speech-to-text").status, "ready");
+  const managed = buildCapabilities(
+    { ready: true, message: "Ready" },
+    { ready: true },
+    { ready: true },
+    { ready: true },
+    { ready: true, message: "Managed transcription ready" },
+  );
+  assert.equal(managed.find((item) => item.id === "speech-to-text").execution, "goodbase");
+  assert.equal(managed.find((item) => item.id === "speech-to-text").engine, "faster-whisper-small");
   assert.equal(ready.find((item) => item.id === "assets").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "assets").status, "ready");
   assert.equal(ready.find((item) => item.id === "agents").engine, "goodspeech-grounded-v1");

@@ -117,6 +117,24 @@ class GoodSpeechClient {
     return this.request(`/studio/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST", body: {} });
   }
 
+  transcriptionHealth() { return this.request("/transcriptions/health"); }
+
+  async transcribe(file, language = "auto", options = {}) {
+    if (!file) throw new TypeError("GoodSpeech transcribe requires an audio file.");
+    const form = new FormData();
+    const value = file instanceof Blob ? file : new Blob([file.buffer || file], { type: file.type || "audio/wav" });
+    form.append("file", value, String(file.name || options.filename || "audio.wav"));
+    form.append("language", language || "auto");
+    const response = await this.fetch(joinUrl(this.baseUrl, `${API_PREFIX}/transcriptions`), {
+      method: "POST",
+      headers: this.headers(),
+      body: form,
+      signal: options.signal,
+    });
+    if (!response.ok) throw await responseError(response);
+    return response.json();
+  }
+
   async synthesize(payload, options = {}) {
     const response = await this.fetch(joinUrl(this.baseUrl, `${API_PREFIX}/speech`), {
       method: "POST",

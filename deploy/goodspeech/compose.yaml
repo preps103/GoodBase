@@ -71,6 +71,44 @@ services:
       start_period: 900s
       retries: 5
 
+  faster-whisper:
+    build:
+      context: ../../services/faster-whisper
+    image: goodos/faster-whisper:1.2.1
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8882:8882"
+    environment:
+      FASTER_WHISPER_TOKEN: ${FASTER_WHISPER_TOKEN:?FASTER_WHISPER_TOKEN is required}
+      FASTER_WHISPER_MODEL_REVISION: ${FASTER_WHISPER_MODEL_REVISION:-536b0662742c02347bc0e980a01041f333bce120}
+      FASTER_WHISPER_CPU_THREADS: ${FASTER_WHISPER_CPU_THREADS:-3}
+      FASTER_WHISPER_CONCURRENCY: ${FASTER_WHISPER_CONCURRENCY:-1}
+      HF_HOME: /var/lib/faster-whisper/models
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - faster_whisper_models:/var/lib/faster-whisper/models
+    tmpfs:
+      - /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 4g
+    cpus: "3.0"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8882/health/ready', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      start_period: 900s
+      retries: 5
+
 volumes:
   kokoro_models:
   chatterbox_models:
+  faster_whisper_models:

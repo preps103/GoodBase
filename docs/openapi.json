@@ -271,6 +271,56 @@
         }
       }
     },
+    "/api/goodspeech/v1/transcriptions/health": {
+      "get": {
+        "summary": "Check private managed GoodSpeech transcription",
+        "description": "Reports whether the authenticated user can reach the revision-pinned Faster-Whisper service. The on-device Whisper path remains available independently.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": {
+          "200": { "description": "Managed transcription is ready" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "GoodSpeech entitlement required" },
+          "503": { "description": "Managed transcription is loading or unavailable" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/transcriptions": {
+      "post": {
+        "summary": "Transcribe audio with private managed Faster-Whisper",
+        "description": "Accepts a bounded audio or audio-bearing video upload, applies voice activity detection, automatic or explicit language selection, and returns segment and word timestamps. Uploaded audio is processed transiently and is not retained.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary", "description": "Audio or audio-bearing video, up to 50 MB" },
+                  "language": { "type": "string", "default": "auto", "description": "Automatic detection or an ISO language code" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Transcript with detected language, segments, and word timestamps" },
+          "400": { "description": "Invalid or empty input" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "GoodSpeech entitlement required" },
+          "413": { "description": "Upload exceeds 50 MB" },
+          "415": { "description": "Unsupported media type or invalid file signature" },
+          "429": { "description": "Transcription rate limit exceeded" },
+          "502": { "description": "Managed transcription engine rejected the request" },
+          "503": { "description": "Managed transcription is not configured" }
+        }
+      }
+    },
+
+
     "/api/goodspeech/v1/usage": {
       "get": {
         "summary": "Read the signed-in user's GoodSpeech usage",

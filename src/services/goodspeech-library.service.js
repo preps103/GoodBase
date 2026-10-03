@@ -11,13 +11,15 @@ const MAX_ASSET_BYTES = 104857600;
 const MAX_HISTORY_AUDIO_BYTES = 25165824;
 const ALLOWED_MIME_TYPES = new Set([
   "audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/webm",
+  "audio/mp4", "audio/aac", "audio/flac",
   "video/mp4", "video/webm",
   "image/png", "image/jpeg", "image/webp",
   "text/plain", "application/json", "application/x-subrip", "text/vtt",
 ]);
 const EXTENSIONS = {
   "audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3",
-  "audio/ogg": "ogg", "audio/webm": "webm", "video/mp4": "mp4",
+  "audio/ogg": "ogg", "audio/webm": "webm", "audio/mp4": "m4a",
+  "audio/aac": "aac", "audio/flac": "flac", "video/mp4": "mp4",
   "video/webm": "webm", "image/png": "png", "image/jpeg": "jpg",
   "image/webp": "webp", "text/plain": "txt", "application/json": "json",
   "application/x-subrip": "srt", "text/vtt": "vtt",
@@ -69,6 +71,9 @@ function assertFileSignature(buffer, mimeType) {
     "audio/mpeg": hex(0, 3) === "494433" || (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0),
     "audio/ogg": ascii(0, 4) === "OggS",
     "audio/webm": hex(0, 4) === "1a45dfa3",
+    "audio/mp4": ascii(4, 8) === "ftyp",
+    "audio/aac": buffer[0] === 0xff && (buffer[1] & 0xf6) === 0xf0,
+    "audio/flac": ascii(0, 4) === "fLaC",
     "video/webm": hex(0, 4) === "1a45dfa3",
     "video/mp4": ascii(4, 8) === "ftyp",
     "image/png": hex(0, 8) === "89504e470d0a1a0a",

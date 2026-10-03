@@ -56,6 +56,11 @@ if [[ ! -f "${GOODSPEECH_ENV_FILE}" ]]; then
     echo "CHATTERBOX_TTS_URL=http://127.0.0.1:8881"
     echo "CHATTERBOX_TTS_TOKEN=$(openssl rand -hex 32)"
     echo "CHATTERBOX_CPU_THREADS=3"
+    echo "FASTER_WHISPER_URL=http://127.0.0.1:8882"
+    echo "FASTER_WHISPER_TOKEN=$(openssl rand -hex 32)"
+    echo "FASTER_WHISPER_MODEL_REVISION=536b0662742c02347bc0e980a01041f333bce120"
+    echo "FASTER_WHISPER_CPU_THREADS=3"
+    echo "FASTER_WHISPER_CONCURRENCY=1"
   } > "${GOODSPEECH_ENV_FILE}"
   unset token
 else
@@ -67,6 +72,11 @@ ensure_env_value "GOODSPEECH_REQUIRED" "true"
 ensure_env_value "CHATTERBOX_TTS_URL" "http://127.0.0.1:8881"
 ensure_env_value "CHATTERBOX_TTS_TOKEN" "$(openssl rand -hex 32)"
 ensure_env_value "CHATTERBOX_CPU_THREADS" "3"
+ensure_env_value "FASTER_WHISPER_URL" "http://127.0.0.1:8882"
+ensure_env_value "FASTER_WHISPER_TOKEN" "$(openssl rand -hex 32)"
+ensure_env_value "FASTER_WHISPER_MODEL_REVISION" "536b0662742c02347bc0e980a01041f333bce120"
+ensure_env_value "FASTER_WHISPER_CPU_THREADS" "3"
+ensure_env_value "FASTER_WHISPER_CONCURRENCY" "1"
 ensure_env_value "GOODMOTION_VIDEO_URL" ""
 ensure_env_value "GOODMOTION_VIDEO_TOKEN" ""
 ensure_env_value "GOODMOTION_JOB_SIGNING_SECRET" ""
@@ -87,6 +97,14 @@ if [[ -z "${token_length}" || "${token_length}" -lt 32 ]]; then
   exit 1
 fi
 
+faster_whisper_token_length="$(
+  awk -F= '/^FASTER_WHISPER_TOKEN=/{sub(/^[^=]*=/, ""); print length; exit}' "${GOODSPEECH_ENV_FILE}"
+)"
+if [[ -z "${faster_whisper_token_length}" || "${faster_whisper_token_length}" -lt 32 ]]; then
+  echo "FASTER_WHISPER_TOKEN must contain at least 32 characters." >&2
+  exit 1
+fi
+
 kokoro_url="$(
   awk -F= '/^KOKORO_TTS_URL=/{sub(/^[^=]*=/, ""); print; exit}' "${GOODSPEECH_ENV_FILE}"
 )"
@@ -101,6 +119,9 @@ goodavatar_url="$(read_env_value GOODAVATAR_LIVE_URL)"
 goodavatar_token="$(read_env_value GOODAVATAR_LIVE_TOKEN)"
 chatterbox_url="$(read_env_value CHATTERBOX_TTS_URL)"
 chatterbox_token="$(read_env_value CHATTERBOX_TTS_TOKEN)"
+faster_whisper_url="$(read_env_value FASTER_WHISPER_URL)"
+faster_whisper_token="$(read_env_value FASTER_WHISPER_TOKEN)"
+faster_whisper_revision="$(read_env_value FASTER_WHISPER_MODEL_REVISION)"
 release_commit="$(git -C "${GOODBASE_ROOT}" rev-parse HEAD)"
 
 if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
@@ -190,6 +211,25 @@ if [[ "${clone_ready}" -ne 1 ]]; then
   exit 1
 fi
 
+transcription_ready=0
+for _attempt in $(seq 1 360); do
+  if curl --fail --silent --show-error --max-time 5 \
+    http://127.0.0.1:8882/health/ready >/dev/null; then
+    transcription_ready=1
+    break
+  fi
+  sleep 5
+done
+
+if [[ "${transcription_ready}" -ne 1 ]]; then
+  docker compose \
+    --env-file "${GOODSPEECH_ENV_FILE}" \
+    -f "${GOODBASE_ROOT}/deploy/goodspeech/compose.yaml" \
+    logs --tail 100 faster-whisper >&2 || true
+  echo "Faster-Whisper did not become ready before the provisioning timeout." >&2
+  exit 1
+fi
+
 if command -v pm2 >/dev/null 2>&1; then
   restarted=0
   for pm2_runtime in ${GOODBASE_PM2_RUNTIMES}; do
@@ -216,6 +256,9 @@ if command -v pm2 >/dev/null 2>&1; then
             KOKORO_TTS_TOKEN="${kokoro_token}" \
             CHATTERBOX_TTS_URL="${chatterbox_url}" \
             CHATTERBOX_TTS_TOKEN="${chatterbox_token}" \
+            FASTER_WHISPER_URL="${faster_whisper_url}" \
+            FASTER_WHISPER_TOKEN="${faster_whisper_token}" \
+            FASTER_WHISPER_MODEL_REVISION="${faster_whisper_revision}" \
             GOODSPEECH_REQUIRED="${goodspeech_required}" \
             GOODBASE_RELEASE_COMMIT="${release_commit}" \
             GOODMOTION_VIDEO_URL="${goodmotion_url}" \
@@ -245,6 +288,7 @@ fi
 
 echo "GoodSpeech Kokoro is ready on the Base loopback interface at release ${release_commit}."
 echo "GoodSpeech consent-gated Chatterbox Nano voice cloning is ready on the Base loopback interface."
+echo "GoodSpeech Faster-Whisper transcription is ready on the Base loopback interface."
 if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
   echo "GoodMotion open video is ready on the Base loopback interface."
 fi

@@ -15,6 +15,12 @@ export declare class GoodbaseClient {
   exchangeAttestation(appId: string, platform: string, assertion: Record<string,unknown>): Promise<any>;
 }
 export interface GoodSpeechAudioResult { audio: ArrayBuffer; contentType: string; requestId?: string | null; voiceId?: string | null; watermark?: string | null; }
+export interface GoodSpeechTranscriptionWord { word: string; start: number; end: number; probability: number; }
+export interface GoodSpeechTranscriptionSegment { id: number; text: string; start: number; end: number; words: GoodSpeechTranscriptionWord[]; }
+export interface GoodSpeechTranscriptionResult {
+  success: true;
+  data: { text: string; language: string; languageProbability: number; durationSeconds: number; durationAfterVadSeconds: number; segments: GoodSpeechTranscriptionSegment[]; model: string; modelRevision: string; latencyMs: number; retention: "transient_audio"; };
+}
 export declare class GoodSpeechClient {
   constructor(options?: {client?: GoodbaseClient; baseUrl?: string; accessToken?: string; attestationToken?: string; fetch?: typeof fetch});
   health(): Promise<any>; capabilities(): Promise<any>; usage(): Promise<any>; voices(): Promise<any>; agents(): Promise<any>;
@@ -38,6 +44,8 @@ export declare class GoodSpeechClient {
   getStudioJob(jobId: string): Promise<any>;
   cancelStudioJob(jobId: string): Promise<any>;
   retryStudioJob(jobId: string): Promise<any>;
+  transcriptionHealth(): Promise<any>;
+  transcribe(file: Blob | Uint8Array | ArrayBuffer | {buffer: Uint8Array | ArrayBuffer; type?: string; name?: string}, language?: string, options?: {filename?: string; signal?: AbortSignal}): Promise<GoodSpeechTranscriptionResult>;
   synthesize(payload: Record<string,unknown>, options?: {signal?: AbortSignal}): Promise<GoodSpeechAudioResult>;
   stream(payload: Record<string,unknown>, options?: {signal?: AbortSignal}): Promise<Response>;
   generateVoiceSpeech(voiceId: string, text: string, options?: {signal?: AbortSignal}): Promise<GoodSpeechAudioResult>;

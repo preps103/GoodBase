@@ -3,6 +3,8 @@
 import hashlib
 import hmac
 import json
+import mimetypes
+from pathlib import Path
 import time
 import uuid
 import urllib.error
@@ -107,6 +109,33 @@ class GoodSpeechClient:
 
     def retry_studio_job(self, job_id):
         return self.request(f"/studio/jobs/{job_id}/retry", "POST", {})
+
+    def transcription_health(self):
+        return self.request("/transcriptions/health")
+
+    def transcribe(self, file_path, language="auto"):
+        path = Path(file_path)
+        audio = path.read_bytes()
+        if not audio:
+            raise ValueError("GoodSpeech transcribe requires a non-empty audio file.")
+        boundary = "----GoodSpeech" + uuid.uuid4().hex
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        safe_name = path.name.replace('"', "").replace("\r", "").replace("\n", "")
+        body = b"".join([
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\n{language or 'auto'}\r\n".encode("utf-8"),
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{safe_name}\"\r\nContent-Type: {content_type}\r\n\r\n".encode("utf-8"),
+            audio,
+            f"\r\n--{boundary}--\r\n".encode("ascii"),
+        ])
+        headers = self._headers()
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        request = urllib.request.Request(self.url + "/api/goodspeech/v1/transcriptions", data=body, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=max(self.timeout, 900)) as response:
+                return json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as error:
+            detail = json.loads(error.read() or b"{}")
+            raise GoodbaseError(detail.get("message", str(error)), error.code, detail.get("code"), error.headers.get("x-request-id")) from error
 
     def synthesize(self, payload, stream=False):
         path = "/speech/stream" if stream else "/speech"

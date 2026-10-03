@@ -47,6 +47,15 @@ test("GoodSpeech provisioner verifies and injects the private cloning worker", (
   assert.match(provisioner, /CHATTERBOX_TTS_URL="\$\{chatterbox_url\}"/);
 });
 
+test("GoodSpeech provisioner verifies and injects the private transcription worker", () => {
+  assert.match(provisioner, /FASTER_WHISPER_URL/);
+  assert.match(provisioner, /FASTER_WHISPER_TOKEN must contain at least 32 characters/);
+  assert.match(provisioner, /http:\/\/127\.0\.0\.1:8882\/health\/ready/);
+  assert.match(provisioner, /Faster-Whisper did not become ready/);
+  assert.match(provisioner, /FASTER_WHISPER_URL="\$\{faster_whisper_url\}"/);
+  assert.match(provisioner, /FASTER_WHISPER_MODEL_REVISION="\$\{faster_whisper_revision\}"/);
+});
+
 test("GoodSpeech provisioner discovers both user and root PM2 runtimes", () => {
   assert.match(
     provisioner,

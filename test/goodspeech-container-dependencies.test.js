@@ -45,6 +45,14 @@ const chatterboxDockerfile = fs.readFileSync(
   path.join(__dirname, "..", "services", "chatterbox-voice", "Dockerfile"),
   "utf8"
 );
+const whisperRequirements = fs.readFileSync(
+  path.join(__dirname, "..", "services", "faster-whisper", "requirements.txt"),
+  "utf8"
+);
+const whisperDockerfile = fs.readFileSync(
+  path.join(__dirname, "..", "services", "faster-whisper", "Dockerfile"),
+  "utf8"
+);
 
 test("Kokoro pins a Transformers-compatible Hugging Face Hub release", () => {
   assert.match(requirements, /^torch==2\.7\.1$/m);
@@ -76,4 +84,13 @@ test("GoodSpeech pins the CPU cloning engine and hardened private runtime", () =
   assert.match(kokoroCompose, /127\.0\.0\.1:8881:8881/);
   assert.match(kokoroCompose, /cap_drop:[\s\S]*- ALL/);
   assert.match(kokoroCompose, /no-new-privileges:true/);
+});
+
+test("GoodSpeech pins and isolates the private Faster-Whisper runtime", () => {
+  assert.match(whisperRequirements, /^faster-whisper==1\.2\.1$/m);
+  assert.match(whisperRequirements, /^huggingface-hub==1\.5\.0$/m);
+  assert.match(whisperDockerfile, /USER whisper/);
+  assert.match(kokoroCompose, /127\.0\.0\.1:8882:8882/);
+  assert.match(kokoroCompose, /faster_whisper_models/);
+  assert.match(kokoroCompose, /read_only: true/);
 });

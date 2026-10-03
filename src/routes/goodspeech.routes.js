@@ -14,6 +14,7 @@ const videoService = require("../services/goodspeech-video.service");
 const avatarService = require("../services/goodspeech-avatar.service");
 const voiceService = require("../services/goodspeech-voice.service");
 const webhookService = require("../services/goodspeech-webhook.service");
+const transcriptionService = require("../services/goodspeech-transcription.service");
 
 const router = express.Router();
 const MAX_TEXT_LENGTH = 2000;
@@ -204,6 +205,9 @@ function buildCapabilities(health, videoHealth = {
 }, voiceHealth = {
   ready: false,
   message: "Private voice cloning is still loading.",
+}, transcriptionHealth = {
+  ready: false,
+  message: "Managed transcription is still loading; private on-device transcription remains available.",
 }) {
   const kokoroStatus = health.ready ? "ready" : "unavailable";
   const kokoroIssue = health.ready ? null : health.message;
@@ -231,8 +235,8 @@ function buildCapabilities(health, videoHealth = {
     },
     {
       id: "speech-to-text",
-      execution: "browser",
-      engine: "whisper-small",
+      execution: transcriptionHealth.ready ? "goodbase" : "browser",
+      engine: transcriptionHealth.ready ? "faster-whisper-small" : "whisper-small",
       status: "ready",
       issue: null,
     },
@@ -438,11 +442,12 @@ async function readAudioBytes(response) {
 
 router.get("/status", statusLimiter, async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
-  const [speech, video, avatars, voices] = await Promise.all([
+  const [speech, video, avatars, voices, transcription] = await Promise.all([
     checkKokoroHealth(),
     videoService.checkHealth(),
     avatarService.checkHealth(),
     voiceService.checkHealth(),
+    transcriptionService.checkHealth(),
   ]);
   const readiness = buildSystemReadiness(speech, video, avatars);
   return res.status(speech.ready ? 200 : 503).json({
@@ -450,7 +455,7 @@ router.get("/status", statusLimiter, async (_req, res) => {
     service: "GoodSpeech",
     version: env.version,
     releaseCommit: env.releaseCommit,
-    engines: { speech, video, avatars, voices },
+    engines: { speech, video, avatars, voices, transcription },
     checkedAt: new Date().toISOString(),
   });
 });
@@ -468,11 +473,12 @@ router.get("/health", authRequired, async (_req, res) => {
 
 router.get("/capabilities", authRequired, async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
-  const [health, videoHealth, avatarHealth, voiceHealth] = await Promise.all([
+  const [health, videoHealth, avatarHealth, voiceHealth, transcriptionHealth] = await Promise.all([
     checkKokoroHealth(),
     videoService.checkHealth(),
     avatarService.checkHealth(),
     voiceService.checkHealth(),
+    transcriptionService.checkHealth(),
   ]);
   return res.json({
     success: true,
@@ -487,10 +493,11 @@ router.get("/capabilities", authRequired, async (_req, res) => {
       video: videoHealth,
       avatars: avatarHealth,
       voices: voiceHealth,
+      transcription: transcriptionHealth,
     },
     voices: Object.keys(KOKORO_VOICES),
     languages: Object.entries(KOKORO_LANGUAGES).map(([id, item]) => ({ id, label: item.label })),
-    capabilities: buildCapabilities(health, videoHealth, avatarHealth, voiceHealth),
+    capabilities: buildCapabilities(health, videoHealth, avatarHealth, voiceHealth, transcriptionHealth),
   });
 });
 

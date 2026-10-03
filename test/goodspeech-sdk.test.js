@@ -37,6 +37,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   await client.getStudioJob("job-1");
   await client.cancelStudioJob("job-1");
   await client.retryStudioJob("job-1");
+  await client.transcriptionHealth();
+  await client.transcribe(new Blob([new Uint8Array([82, 73, 70, 70])], { type: "audio/wav" }), "en", { filename: "sample.wav" });
 
   assert.equal(audio.audio.byteLength, 4);
   assert.equal(stream.headers.get("content-type"), "application/octet-stream");
@@ -58,7 +60,12 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
     "/api/goodspeech/v1/studio/jobs/job-1",
     "/api/goodspeech/v1/studio/jobs/job-1/cancel",
     "/api/goodspeech/v1/studio/jobs/job-1/retry",
+    "/api/goodspeech/v1/transcriptions/health",
+    "/api/goodspeech/v1/transcriptions",
   ]);
+  const transcriptionRequest = requests.at(-1);
+  assert.ok(transcriptionRequest.options.body instanceof FormData);
+  assert.equal(transcriptionRequest.options.headers["Content-Type"], undefined);
 });
 
 test("GoodSpeech SDK verifies signed webhook bodies with timestamp replay protection", () => {
@@ -83,6 +90,8 @@ test("GoodSpeech Python SDK ships audio, agent, voice, and webhook helpers", () 
   assert.match(source, /def quality_summary/);
   assert.match(source, /def create_studio_job/);
   assert.match(source, /def cancel_studio_job/);
+  assert.match(source, /def transcription_health/);
+  assert.match(source, /def transcribe/);
   assert.match(source, /def verify_goodspeech_webhook/);
   assert.match(source, /hmac\.compare_digest/);
 });
