@@ -472,6 +472,12 @@ router.delete("/connections/account/:id", (req, res) => handle(res, "connections
   userId: req.user.id,
   id: req.params.id,
 })));
+router.post("/generation/ad-draft", generationLimiter, (req, res) => handle(res, "generation.ad-draft", service.generateAndSaveAiAdDraft({
+  payload: req.body,
+  context: req.tenantContext,
+  userId: req.user.id,
+  idempotencyKey: req.get("Idempotency-Key"),
+})));
 router.post("/generation/content", generationLimiter, (req, res) => handle(res, "generation.content", service.generateContent({
   payload: req.body,
   context: req.tenantContext,

@@ -16,6 +16,9 @@ const {
   RESOURCE_TYPES,
   RESOURCE_STATUSES,
   deterministicCampaignImportId,
+  deterministicAiAdDraftId,
+  requireAiAdDraftIdempotencyKey,
+  aiAdDraftRequestHash,
   normalizeCampaignImport,
   rowToResourceActivity,
 } = require("../src/services/goodads.service");
@@ -81,6 +84,35 @@ test("GoodAds validates and bounds authenticated generation input", () => {
   assert.equal(input.audience, "Workspace owners");
   assert.equal(input.additionalInfo.length, 3000);
   assert.throws(() => normalizeGenerationInput({ businessName: "" }), /business name/i);
+});
+
+test("GoodAds AI ad drafts have stable retry identity and reject ambiguous keys", () => {
+  const first = deterministicAiAdDraftId("organization-live", "draft-attempt-123");
+  const replay = deterministicAiAdDraftId("organization-live", "draft-attempt-123");
+  const next = deterministicAiAdDraftId("organization-live", "draft-attempt-124");
+  assert.equal(first, replay);
+  assert.notEqual(first, next);
+  assert.match(first, /^[0-9a-f-]{36}$/);
+  assert.equal(requireAiAdDraftIdempotencyKey("draft-attempt-123"), "draft-attempt-123");
+  assert.throws(() => requireAiAdDraftIdempotencyKey("short"), /Idempotency-Key/i);
+  assert.throws(() => requireAiAdDraftIdempotencyKey("unsafe key"), /Idempotency-Key/i);
+});
+
+test("GoodAds AI ad draft retries bind to the exact instructions", () => {
+  const original = aiAdDraftRequestHash({ businessName: "GoodOS", brief: "Launch the workspace" });
+  const replay = aiAdDraftRequestHash({ businessName: "GoodOS", brief: "Launch the workspace" });
+  const changed = aiAdDraftRequestHash({ businessName: "GoodOS", brief: "Promote the workspace" });
+  assert.equal(original, replay);
+  assert.notEqual(original, changed);
+});
+
+test("GoodAds exposes one atomic AI generation and draft-save route", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  const automated = source.indexOf('router.post("/generation/ad-draft"');
+  const generic = source.indexOf('router.post("/generation/content"');
+  assert.ok(automated >= 0 && automated < generic);
+  assert.match(source.slice(automated, generic), /Idempotency-Key/);
+  assert.match(source.slice(automated, generic), /generateAndSaveAiAdDraft/);
 });
 
 test("GoodAds payloads require bounded JSON objects", () => {

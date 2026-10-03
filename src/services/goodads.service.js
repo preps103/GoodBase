@@ -443,6 +443,26 @@ function deterministicCampaignImportId(organizationId, idempotencyKey, index) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function deterministicAiAdDraftId(organizationId, idempotencyKey) {
+  return deterministicCampaignImportId(organizationId, `ai-ad-draft:${idempotencyKey}`, 0);
+}
+
+function requireAiAdDraftIdempotencyKey(value) {
+  const key = boundedText(value, 200);
+  if (key.length < 8 || !/^[A-Za-z0-9._:-]+$/.test(key)) {
+    throw serviceError(
+      "A valid Idempotency-Key header is required for AI ad drafts.",
+      400,
+      "GOODADS_AI_AD_DRAFT_IDEMPOTENCY_REQUIRED"
+    );
+  }
+  return key;
+}
+
+function aiAdDraftRequestHash(payload) {
+  return crypto.createHash("sha256").update(JSON.stringify(normalizePayload(payload))).digest("hex");
+}
+
 function blockedIpv4(address) {
   const parts = address.split(".").map(Number);
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
@@ -766,6 +786,158 @@ async function generateContent({ payload, context }) {
     throw serviceError("The AI provider returned no content.", 502, "GOODADS_GENERATION_EMPTY");
   }
   return { content, provider: "google-gemini", model };
+}
+
+async function generateAndSaveAiAdDraft({ payload, context, userId, idempotencyKey }) {
+  requireMutationRole(context);
+  const requestKey = requireAiAdDraftIdempotencyKey(idempotencyKey);
+  const requestPayload = normalizePayload(payload);
+  const requestHash = aiAdDraftRequestHash(requestPayload);
+  const resourceId = deterministicAiAdDraftId(context.organizationId, requestKey);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `goodads-ai-ad-draft:${context.organizationId}:${requestKey}`,
+    ]);
+
+    const existing = await client.query(
+      `SELECT * FROM goodads_resources
+       WHERE id = $1::uuid AND organization_id = $2 AND resource_type = 'content'
+         AND archived_at IS NULL
+       LIMIT 1`,
+      [resourceId, context.organizationId]
+    );
+    if (existing.rows[0]) {
+      if (existing.rows[0].data?.automation?.requestHash !== requestHash) {
+        throw serviceError(
+          "This AI ad draft key was already used with different instructions.",
+          409,
+          "GOODADS_AI_AD_DRAFT_IDEMPOTENCY_CONFLICT"
+        );
+      }
+      await client.query("COMMIT");
+      return {
+        content: existing.rows[0].data?.content || "",
+        provider: existing.rows[0].data?.generation?.provider || "unknown",
+        model: existing.rows[0].data?.generation?.model || "unknown",
+        draft: rowToResource(existing.rows[0]),
+        replayed: true,
+        brandApplied: Boolean(existing.rows[0].data?.automation?.brandId),
+        reviewRequired: true,
+        providerWrites: 0,
+        activatesAdvertising: false,
+        startsSpend: false,
+      };
+    }
+
+    const brandResult = await client.query(
+      `SELECT * FROM goodads_resources
+       WHERE organization_id = $1 AND resource_type = 'brand' AND archived_at IS NULL
+       ORDER BY
+         CASE status WHEN 'active' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+         updated_at DESC
+       LIMIT 1`,
+      [context.organizationId]
+    );
+    const brand = brandResult.rows[0] || null;
+    const brandData = brand?.data || {};
+    const brandGuidance = [
+      brandData.voice && `Brand voice: ${boundedText(brandData.voice, 600)}`,
+      brandData.personality && `Brand personality: ${boundedText(brandData.personality, 400)}`,
+      brandData.approvedClaims && `Approved claims only: ${boundedText(brandData.approvedClaims, 600)}`,
+      brandData.prohibitedLanguage && `Never use: ${boundedText(brandData.prohibitedLanguage, 500)}`,
+      brandData.requiredDisclosures && `Required disclosures: ${boundedText(brandData.requiredDisclosures, 600)}`,
+    ].filter(Boolean).join("\n");
+    const additionalInfo = [
+      boundedText(requestPayload.additionalInfo || requestPayload.brief, 1800),
+      brandGuidance,
+      "Write one review-ready ad draft. Keep the headline, primary copy, and call to action easy to identify.",
+    ].filter(Boolean).join("\n");
+    const generationInput = normalizeGenerationInput({
+      ...requestPayload,
+      type: requestPayload.type || "ad_copy",
+      businessName: requestPayload.businessName || brandData.name,
+      tone: requestPayload.tone || brandData.voice || "Professional",
+      platform: requestPayload.platform || "Multi-platform",
+      format: requestPayload.format || "Ad",
+      additionalInfo,
+    });
+    const generated = await generateContent({ payload: generationInput, context });
+    const name = boundedText(
+      requestPayload.name || `${generationInput.businessName} AI ad draft`,
+      240
+    );
+    const data = {
+      ...generationInput,
+      name,
+      status: "draft",
+      content: generated.content,
+      reviewRequired: true,
+      publicationStatus: "not_published",
+      generation: { provider: generated.provider, model: generated.model },
+      automation: {
+        type: "ai_ad_draft",
+        requestHash,
+        brandId: brand?.id || null,
+        savedAutomatically: true,
+        providerWrites: 0,
+        activatesAdvertising: false,
+        startsSpend: false,
+      },
+    };
+    const inserted = await client.query(
+      `INSERT INTO goodads_resources (
+         id, resource_type, organization_id, project_id, environment_id,
+         owner_user_id, name, status, data
+       ) VALUES ($1::uuid, 'content', $2, $3, $4, $5::uuid, $6, 'draft', $7::jsonb)
+       RETURNING *`,
+      [
+        resourceId,
+        context.organizationId,
+        context.projectId,
+        context.environmentId,
+        userId,
+        name,
+        JSON.stringify(data),
+      ]
+    );
+    await client.query(
+      `INSERT INTO goodads_resource_events (
+         resource_id, organization_id, actor_user_id, event_type,
+         next_status, metadata
+       ) VALUES ($1::uuid, $2, $3::uuid, 'content.ai_ad_draft_created', 'draft', $4::jsonb)`,
+      [resourceId, context.organizationId, userId, JSON.stringify({
+        requestHash,
+        brandId: brand?.id || null,
+        provider: generated.provider,
+        model: generated.model,
+        reviewRequired: true,
+        providerWrites: 0,
+        activatesAdvertising: false,
+        startsSpend: false,
+      })]
+    );
+    await client.query("COMMIT");
+    return {
+      content: generated.content,
+      provider: generated.provider,
+      model: generated.model,
+      draft: rowToResource(inserted.rows[0]),
+      replayed: false,
+      brandApplied: Boolean(brand),
+      reviewRequired: true,
+      providerWrites: 0,
+      activatesAdvertising: false,
+      startsSpend: false,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function normalizeLeadSubmission(value) {
@@ -1899,6 +2071,7 @@ module.exports = {
   blockedIp,
   parseFeedXml,
   generateContent,
+  generateAndSaveAiAdDraft,
   dashboard,
   workspace,
   listResources,
@@ -1908,6 +2081,9 @@ module.exports = {
   bulkImportCampaigns,
   normalizeCampaignImport,
   deterministicCampaignImportId,
+  deterministicAiAdDraftId,
+  requireAiAdDraftIdempotencyKey,
+  aiAdDraftRequestHash,
   archiveResource,
   transitionResource,
   publicFormFromRow,
