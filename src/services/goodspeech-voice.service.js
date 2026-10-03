@@ -32,6 +32,17 @@ const LANGUAGE_VOICES = Object.freeze({
   "pt-br": { female: "pf_dora", male: "pm_alex" },
   "zh-cn": { female: "zf_xiaobei", male: "zm_yunjian" },
 });
+const ENGLISH_DESIGN_VOICES = Object.freeze([
+  { name: "Amara", voice: "af_heart", trait: "warm and empathetic" },
+  { name: "Celeste", voice: "af_bella", trait: "expressive and polished" },
+  { name: "Zephyr", voice: "af_sky", trait: "bright and airy" },
+  { name: "Kore", voice: "af_kore", trait: "clear and composed" },
+  { name: "Puck", voice: "am_puck", trait: "energetic and playful" },
+  { name: "Fenrir", voice: "am_fenrir", trait: "bold and cinematic" },
+  { name: "Charon", voice: "am_onyx", trait: "deep and authoritative" },
+  { name: "Ellis", voice: "am_michael", trait: "grounded and conversational" },
+  { name: "Bennett", voice: "bm_george", trait: "refined British narration" },
+]);
 
 function voiceError(message, statusCode = 400, code = "GOODSPEECH_VOICE_INVALID") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -84,6 +95,7 @@ function wavDuration(buffer) {
 }
 
 function record(row) {
+  const recipe = decodeDesignRecipe(row.base_voice);
   return {
     id: row.id,
     name: row.name,
@@ -91,7 +103,10 @@ function record(row) {
     status: row.status,
     language: row.language,
     designPrompt: row.design_prompt || null,
-    baseVoice: row.base_voice || null,
+    baseVoice: recipe?.label || row.base_voice || null,
+    designCandidateId: recipe?.candidateId || null,
+    designBlend: recipe?.voices || [],
+    designSpeed: recipe?.speed || null,
     model: row.model_id,
     modelRevision: row.model_revision,
     watermark: row.watermark,
@@ -173,13 +188,100 @@ function selectDesignedVoice(prompt) {
   return choices[crypto.createHash("sha256").update(normalized).digest()[0] % choices.length];
 }
 
+function designSpeed(prompt) {
+  const normalized = prompt.toLowerCase();
+  if (/slow|measured|deliberate|calm|meditative/.test(normalized)) return 0.94;
+  if (/fast|quick|energetic|urgent|animated/.test(normalized)) return 1.06;
+  return 1;
+}
+
+function designCandidates(promptValue, languageValue = "en-us") {
+  const prompt = text(promptValue, 1000);
+  if (prompt.length < 8) throw voiceError("Describe the voice in at least eight characters.", 422, "GOODSPEECH_VOICE_PROMPT_REQUIRED");
+  const language = ALLOWED_LANGUAGES.has(languageValue) ? languageValue : "en-us";
+  const seed = crypto.createHash("sha256").update(`${language}:${prompt.toLowerCase()}`).digest();
+  const requestedSpeed = designSpeed(prompt);
+  let recipes;
+
+  if (language === "en-us") {
+    const anchorName = selectDesignedVoice(prompt);
+    const anchorIndex = Math.max(0, ENGLISH_DESIGN_VOICES.findIndex((item) => item.name === anchorName));
+    const remaining = ENGLISH_DESIGN_VOICES.filter((_, index) => index !== anchorIndex);
+    const support = remaining[seed[1] % remaining.length];
+    const contrast = remaining[(seed[2] + 3) % remaining.length] === support
+      ? remaining[(seed[2] + 4) % remaining.length]
+      : remaining[(seed[2] + 3) % remaining.length];
+    const anchor = ENGLISH_DESIGN_VOICES[anchorIndex];
+    recipes = [
+      { voices: [anchor, support], speed: requestedSpeed - 0.02, label: "Signature blend", description: `${anchor.trait}, balanced with ${support.trait}` },
+      { voices: [anchor, contrast], speed: requestedSpeed, label: "Focused blend", description: `${anchor.trait}, shaped by ${contrast.trait}` },
+      { voices: [support, contrast], speed: requestedSpeed + 0.02, label: "Contrast blend", description: `${support.trait}, paired with ${contrast.trait}` },
+    ];
+  } else {
+    const voices = [...new Set(Object.values(LANGUAGE_VOICES[language]))];
+    recipes = voices.length > 1
+      ? [
+        { voices: [{ voice: voices[0] }], speed: requestedSpeed - 0.03, label: "Measured", description: "A composed interpretation with deliberate pacing" },
+        { voices: voices.map((voice) => ({ voice })), speed: requestedSpeed, label: "Balanced blend", description: "A new blended timbre built from both language voices" },
+        { voices: [{ voice: voices[1] }], speed: requestedSpeed + 0.03, label: "Brisk", description: "A direct interpretation with brighter pacing" },
+      ]
+      : [
+        { voices: [{ voice: voices[0] }], speed: requestedSpeed - 0.06, label: "Measured", description: "A calm, deliberate interpretation" },
+        { voices: [{ voice: voices[0] }], speed: requestedSpeed, label: "Natural", description: "A balanced, natural interpretation" },
+        { voices: [{ voice: voices[0] }], speed: requestedSpeed + 0.06, label: "Brisk", description: "A brighter, more energetic interpretation" },
+      ];
+  }
+
+  return recipes.map((recipe, index) => ({
+    id: `candidate-${index + 1}`,
+    label: recipe.label,
+    description: recipe.description,
+    blendCount: recipe.voices.length,
+    speed: Number(Math.min(1.2, Math.max(0.8, recipe.speed)).toFixed(2)),
+    voices: recipe.voices.map((item) => item.voice),
+  }));
+}
+
+function encodeDesignRecipe(candidate) {
+  return JSON.stringify({
+    v: 1,
+    id: candidate.id,
+    label: candidate.label,
+    voices: candidate.voices,
+    speed: candidate.speed,
+  });
+}
+
+function decodeDesignRecipe(value) {
+  if (!value || !String(value).trim().startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed?.v !== 1 || !Array.isArray(parsed.voices) || !parsed.voices.length || parsed.voices.length > 3) return null;
+    return {
+      candidateId: text(parsed.id, 40),
+      label: text(parsed.label, 80, "Designed blend"),
+      voices: parsed.voices.map((voice) => text(voice, 40)).filter(Boolean),
+      speed: Math.min(1.2, Math.max(0.8, Number(parsed.speed) || 1)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveDesign(payload = {}) {
+  const prompt = text(payload.prompt, 1000);
+  const language = ALLOWED_LANGUAGES.has(payload.language) ? payload.language : "en-us";
+  const candidates = designCandidates(prompt, language);
+  const candidate = candidates.find((item) => item.id === payload.candidateId) || (!payload.candidateId ? candidates[0] : null);
+  if (!candidate) throw voiceError("Choose a valid designed voice candidate.", 422, "GOODSPEECH_VOICE_CANDIDATE_INVALID");
+  return { prompt, language, candidate };
+}
+
 async function createDesignedVoice({ payload, context, userId }) {
   const name = text(payload?.name, 80);
-  const prompt = text(payload?.prompt, 1000);
   if (!name) throw voiceError("Give the designed voice a name.", 400, "GOODSPEECH_VOICE_NAME_REQUIRED");
-  if (prompt.length < 8) throw voiceError("Describe the voice in at least eight characters.", 422, "GOODSPEECH_VOICE_PROMPT_REQUIRED");
-  const language = ALLOWED_LANGUAGES.has(payload?.language) ? payload.language : "en-us";
-  const baseVoice = selectDesignedVoice(prompt);
+  const { prompt, language, candidate } = resolveDesign(payload);
+  const baseVoice = encodeDesignRecipe(candidate);
   const result = await query(
     `INSERT INTO goodspeech_voice_profiles (
        organization_id, project_id, environment_id, owner_user_id, name, kind, language,
@@ -191,7 +293,12 @@ async function createDesignedVoice({ payload, context, userId }) {
     [context.organizationId, context.projectId, context.environmentId, userId, name, language,
       prompt, baseVoice, KOKORO_MODEL, KOKORO_MODEL_REVISION, DESIGN_CONSENT_VERSION],
   );
-  await addEvent(result.rows[0], "designed", { promptSha256: crypto.createHash("sha256").update(prompt).digest("hex"), baseVoice });
+  await addEvent(result.rows[0], "designed", {
+    promptSha256: crypto.createHash("sha256").update(prompt).digest("hex"),
+    candidateId: candidate.id,
+    blendCount: candidate.blendCount,
+    speed: candidate.speed,
+  });
   return record(result.rows[0]);
 }
 
@@ -257,17 +364,30 @@ async function generateDesign(profile, script, signal) {
   const endpoint = text(process.env.KOKORO_TTS_URL, 500);
   const token = text(process.env.KOKORO_TTS_TOKEN, 500);
   if (!/^https?:\/\//.test(endpoint) || token.length < 32) throw voiceError("The speech engine is not configured.", 503, "GOODSPEECH_VOICE_ENGINE_UNAVAILABLE");
+  const recipe = decodeDesignRecipe(profile.base_voice);
   const languageVoices = LANGUAGE_VOICES[profile.language] || LANGUAGE_VOICES["en-us"];
-  const voice = profile.language === "en-us"
-    ? (KOKORO_VOICES[profile.base_voice] || KOKORO_VOICES.Kore)
-    : (FEMALE_VOICES.has(profile.base_voice) ? languageVoices.female : languageVoices.male);
+  const voice = recipe
+    ? recipe.voices.join(",")
+    : profile.language === "en-us"
+      ? (KOKORO_VOICES[profile.base_voice] || KOKORO_VOICES.Kore)
+      : (FEMALE_VOICES.has(profile.base_voice) ? languageVoices.female : languageVoices.male);
+  const speed = recipe?.speed || 1;
   return boundedAudio(await fetch(`${endpoint.replace(/\/+$/, "")}/v1/audio/speech`, {
     method: "POST",
     signal,
     redirect: "error",
     headers: { Accept: "audio/wav", Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-GoodBase-Service": "GoodSpeech Voice Lab" },
-    body: JSON.stringify({ model: KOKORO_MODEL, input: script, voice, language: profile.language, speed: 1, response_format: "wav" }),
+    body: JSON.stringify({ model: KOKORO_MODEL, input: script, voice, language: profile.language, speed, response_format: "wav" }),
   }));
+}
+
+async function previewDesignedVoice({ payload, signal }) {
+  const { prompt, language, candidate } = resolveDesign(payload);
+  const script = text(payload?.text, 1_000);
+  if (!script) throw voiceError("Enter text to preview the voice candidates.", 400, "GOODSPEECH_VOICE_TEXT_REQUIRED");
+  const profile = { language, base_voice: encodeDesignRecipe(candidate) };
+  const audio = await generateDesign(profile, script, signal);
+  return { ...audio, candidate, promptSha256: crypto.createHash("sha256").update(prompt).digest("hex") };
 }
 
 async function generateSpeech({ voiceId, script, context, userId, signal }) {
@@ -327,8 +447,10 @@ module.exports = {
   checkHealth,
   createClonedVoice,
   createDesignedVoice,
+  designCandidates,
   generateSpeech,
   listVoices,
+  previewDesignedVoice,
   revokeVoice,
-  _internal: { parseBoolean, record, selectDesignedVoice, uuid, wavDuration },
+  _internal: { decodeDesignRecipe, designCandidates, encodeDesignRecipe, parseBoolean, record, selectDesignedVoice, uuid, wavDuration },
 };

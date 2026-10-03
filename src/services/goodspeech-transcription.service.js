@@ -42,6 +42,48 @@ function normalizeDiarization(value) {
   return diarization;
 }
 
+function normalizeKeyterms(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(/[,\n]/);
+  const keyterms = [];
+  for (const entry of source) {
+    const term = String(entry || "").trim().replace(/\s+/g, " ").slice(0, 80);
+    if (term && !keyterms.some((current) => current.toLocaleLowerCase() === term.toLocaleLowerCase())) keyterms.push(term);
+    if (keyterms.length >= 20) break;
+  }
+  if (keyterms.reduce((total, term) => total + term.length, 0) > 500) {
+    throw transcriptionError("Keyterms are limited to 500 characters in total.", 422, "GOODSPEECH_TRANSCRIPTION_KEYTERMS_INVALID");
+  }
+  return keyterms;
+}
+
+function extractEntities(value, keyterms = []) {
+  const transcript = String(value || "");
+  const definitions = [
+    ["email", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu],
+    ["url", /\bhttps?:\/\/[^\s<]+/giu],
+    ["money", /(?:[$€£]\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)/giu],
+    ["phone", /\+?\d(?:[\s().-]*\d){6,14}/gu],
+    ["date", /\b(?:\d{4}-\d{2}-\d{2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?)\b/giu],
+  ];
+  const entities = [];
+  for (const [type, pattern] of definitions) {
+    for (const match of transcript.matchAll(pattern)) entities.push({ type, value: match[0], start: match.index, end: match.index + match[0].length });
+  }
+  for (const keyterm of keyterms) {
+    const lower = transcript.toLocaleLowerCase();
+    const needle = keyterm.toLocaleLowerCase();
+    let start = lower.indexOf(needle);
+    while (start >= 0 && entities.length < 100) {
+      entities.push({ type: "keyterm", value: transcript.slice(start, start + keyterm.length), start, end: start + keyterm.length });
+      start = lower.indexOf(needle, start + keyterm.length);
+    }
+  }
+  return entities
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+    .filter((entity, index, all) => index === 0 || entity.start !== all[index - 1].start || entity.end !== all[index - 1].end || entity.type !== all[index - 1].type)
+    .slice(0, 100);
+}
+
 function validateAudio(file) {
   library._internal.validateFile(file, MAX_AUDIO_BYTES);
   const type = String(file.mimetype || "").toLowerCase();
@@ -72,8 +114,10 @@ function boundedResult(payload) {
     })).filter((word) => word.word) : [],
     speaker: segment?.speaker ? String(segment.speaker).slice(0, 80) : null,
   })).filter((segment) => segment.text) : [];
+  const keyterms = normalizeKeyterms(payload.keytermsApplied);
+  const transcriptText = String(payload.text || "").trim().slice(0, 1_000_000);
   return {
-    text: String(payload.text || "").trim().slice(0, 1_000_000),
+    text: transcriptText,
     language: String(payload.language || "unknown").slice(0, 20),
     languageProbability: Math.min(1, Math.max(0, Number(payload.languageProbability) || 0)),
     durationSeconds: Math.max(0, Number(payload.durationSeconds) || 0),
@@ -83,6 +127,8 @@ function boundedResult(payload) {
     modelRevision: String(payload.modelRevision || MODEL_REVISION).slice(0, 64),
     diarization: ["none", "single_channel", "channels"].includes(payload.diarization) ? payload.diarization : "none",
     speakers: Array.isArray(payload.speakers) ? payload.speakers.slice(0, 8).map((speaker) => String(speaker).slice(0, 80)) : [],
+    keyterms,
+    entities: extractEntities(transcriptText, keyterms),
   };
 }
 
@@ -97,6 +143,8 @@ async function recordUsage({ result, context, userId, request, latencyMs }) {
     segments: result.segments.length,
     diarization: result.diarization,
     speakers: result.speakers.length,
+    keyterms: result.keyterms.length,
+    entities: result.entities.length,
     latencyMs,
   });
   await database.query(
@@ -116,7 +164,7 @@ async function recordUsage({ result, context, userId, request, latencyMs }) {
   );
 }
 
-async function transcribe({ file, language, diarization = "none", context, userId, request, fetchFn = global.fetch }) {
+async function transcribe({ file, language, diarization = "none", keyterms = [], context, userId, request, fetchFn = global.fetch }) {
   validateAudio(file);
   const configured = provider();
   if (!configured) {
@@ -126,6 +174,7 @@ async function transcribe({ file, language, diarization = "none", context, userI
   form.append("file", new Blob([file.buffer], { type: file.mimetype }), String(file.originalname || "audio.wav").slice(0, 180));
   form.append("language", normalizeLanguage(language));
   form.append("diarization", normalizeDiarization(diarization));
+  form.append("keyterms", JSON.stringify(normalizeKeyterms(keyterms)));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
   const started = Date.now();
@@ -187,6 +236,7 @@ module.exports = {
   checkHealth,
   normalizeLanguage,
   normalizeDiarization,
+  normalizeKeyterms,
   transcribe,
-  _internal: { boundedResult, provider, validateAudio },
+  _internal: { boundedResult, extractEntities, provider, validateAudio },
 };

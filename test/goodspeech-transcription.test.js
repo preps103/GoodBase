@@ -33,6 +33,21 @@ test("GoodSpeech managed transcription normalizes languages and bounds provider 
   assert.equal(result.segments[0].words[0].probability, 1);
 });
 
+test("GoodSpeech transcription safely prompts keyterms and extracts bounded entities", () => {
+  assert.deepEqual(transcription.normalizeKeyterms("GoodSpeech, Maurice\nGoodSpeech"), ["GoodSpeech", "Maurice"]);
+  const entities = transcription._internal.extractEntities(
+    "Email Maurice at maurice@example.com on October 3, 2026 for $25 about GoodSpeech.",
+    ["GoodSpeech", "Maurice"],
+  );
+  assert.ok(entities.some((entity) => entity.type === "email" && entity.value === "maurice@example.com"));
+  assert.ok(entities.some((entity) => entity.type === "date"));
+  assert.ok(entities.some((entity) => entity.type === "money"));
+  assert.ok(entities.some((entity) => entity.type === "keyterm" && entity.value === "GoodSpeech"));
+  assert.ok(entities.length <= 100);
+  assert.match(worker, /initial_prompt=/);
+  assert.match(worker, /len\(parsed_keyterms\) > 20/);
+});
+
 test("GoodSpeech accepts modern audio containers with signature validation", () => {
   const m4a = Buffer.from("00000000667479706d703432", "hex");
   const flac = Buffer.from("664c614300000000", "hex");

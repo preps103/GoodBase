@@ -164,6 +164,7 @@ async function run({ language = "en-us", context, userId, request, fetchFn = glo
   const transcriptResult = await transcription.transcribe({
     file: { buffer: synthesis.audio, size: synthesis.audio.length, mimetype: "audio/wav", originalname: `goodspeech-quality-${normalizedLanguage}.wav` },
     language: normalizedLanguage,
+    keyterms: [sample.text.split(/\s+/u)[0].replace(/[.,!?。！？]/gu, "")],
     context: current,
     userId,
     request,

@@ -67,6 +67,21 @@ class GoodSpeechClient:
     def create_designed_voice(self, payload):
         return self.request("/voices/design", "POST", payload)
 
+    def design_voice_candidates(self, payload):
+        return self.request("/voices/design/candidates", "POST", payload)
+
+    def preview_designed_voice(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        headers = self._headers("audio/wav, application/json")
+        headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self.url + "/api/goodspeech/v1/voices/design/preview", data=body, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return response.read(), dict(response.headers)
+        except urllib.error.HTTPError as error:
+            detail = json.loads(error.read() or b"{}")
+            raise GoodbaseError(detail.get("message", str(error)), error.code, detail.get("code"), error.headers.get("x-request-id")) from error
+
     def start_agent_session(self, agent_id, payload=None):
         return self.request(f"/agents/{agent_id}/sessions", "POST", payload or {})
 

@@ -16,7 +16,7 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   const fetch = async (url, options = {}) => {
     requests.push({ url, options });
     if (url.endsWith("/speech/stream")) return response(new Uint8Array([1, 0, 2, 0]), { headers: { "content-type": "application/octet-stream" } });
-    if (url.endsWith("/speech")) return response(new Uint8Array([82, 73, 70, 70]), { headers: { "content-type": "audio/wav" } });
+    if (url.endsWith("/speech") || url.endsWith("/design/preview")) return response(new Uint8Array([82, 73, 70, 70]), { headers: { "content-type": "audio/wav" } });
     return response(JSON.stringify({ success: true, data: {} }), { headers: { "content-type": "application/json" } });
   };
   const client = new GoodSpeechClient({ baseUrl: "https://base.example", accessToken: "test-token", fetch });
@@ -25,6 +25,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   await client.usagePreferences();
   await client.updateUsagePreferences({ requestBudget: 500, characterBudget: 100000, warningPercent: 75 });
   await client.createDesignedVoice({ name: "Calm", prompt: "A calm narrator" });
+  await client.designVoiceCandidates({ prompt: "A calm narrator", language: "en-us" });
+  const candidate = await client.previewDesignedVoice({ prompt: "A calm narrator", language: "en-us", candidateId: "candidate-1", text: "Hello" });
   const audio = await client.synthesize({ text: "Hello" });
   const stream = await client.stream({ text: "Hello" });
   await client.startAgentSession("agent-1");
@@ -43,6 +45,7 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   await client.transcribe(new Blob([new Uint8Array([82, 73, 70, 70])], { type: "audio/wav" }), "en", { filename: "sample.wav" });
 
   assert.equal(audio.audio.byteLength, 4);
+  assert.equal(candidate.audio.byteLength, 4);
   assert.equal(stream.headers.get("content-type"), "application/octet-stream");
   assert.ok(requests.every((entry) => entry.options.headers?.Authorization === "Bearer test-token"));
   assert.deepEqual(requests.map((entry) => new URL(entry.url).pathname), [
@@ -50,6 +53,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
     "/api/goodspeech/v1/usage/preferences",
     "/api/goodspeech/v1/usage/preferences",
     "/api/goodspeech/v1/voices/design",
+    "/api/goodspeech/v1/voices/design/candidates",
+    "/api/goodspeech/v1/voices/design/preview",
     "/api/goodspeech/v1/speech",
     "/api/goodspeech/v1/speech/stream",
     "/api/goodspeech/v1/agents/agent-1/sessions",
@@ -103,6 +108,8 @@ test("GoodSpeech Python SDK ships audio, agent, voice, and webhook helpers", () 
   assert.match(source, /class GoodSpeechClient/);
   assert.match(source, /def synthesize/);
   assert.match(source, /def create_designed_voice/);
+  assert.match(source, /def design_voice_candidates/);
+  assert.match(source, /def preview_designed_voice/);
   assert.match(source, /def send_agent_turn/);
   assert.match(source, /def create_webhook/);
   assert.match(source, /def test_webhook/);

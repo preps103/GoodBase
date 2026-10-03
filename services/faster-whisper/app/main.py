@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import tempfile
@@ -91,6 +92,8 @@ async def ready() -> dict[str, str | bool]:
         "computeType": "int8",
         "wordTimestamps": True,
         "vad": True,
+        "keytermPrompting": True,
+        "stereoSpeakerLabels": True,
     }
 
 
@@ -119,7 +122,7 @@ async def save_bounded_upload(upload: UploadFile) -> Path:
         await upload.close()
 
 
-def transcribe_track(path: Path, language: str | None, speaker: str | None = None) -> dict:
+def transcribe_track(path: Path, language: str | None, speaker: str | None = None, keyterms: list[str] | None = None) -> dict:
     if model is None:
         raise RuntimeError("Faster-Whisper is not ready")
     segments, info = model.transcribe(
@@ -129,6 +132,7 @@ def transcribe_track(path: Path, language: str | None, speaker: str | None = Non
         word_timestamps=True,
         vad_filter=True,
         condition_on_previous_text=True,
+        initial_prompt=", ".join(keyterms or []) or None,
     )
     output_segments = []
     transcript_parts = []
@@ -209,15 +213,15 @@ def stereo_channel_wavs(path: Path) -> list[Path]:
         raise
 
 
-def transcribe_file(path: Path, language: str | None, diarization: str = "none") -> dict:
+def transcribe_file(path: Path, language: str | None, diarization: str = "none", keyterms: list[str] | None = None) -> dict:
     if diarization != "channels":
-        return {**transcribe_track(path, language), "diarization": "none", "speakers": []}
+        return {**transcribe_track(path, language, keyterms=keyterms), "diarization": "none", "speakers": [], "keytermsApplied": keyterms or []}
     channels = stereo_channel_wavs(path)
     if not channels:
-        result = transcribe_track(path, language, "Speaker 1")
-        return {**result, "diarization": "single_channel", "speakers": ["Speaker 1"]}
+        result = transcribe_track(path, language, "Speaker 1", keyterms)
+        return {**result, "diarization": "single_channel", "speakers": ["Speaker 1"], "keytermsApplied": keyterms or []}
     try:
-        tracks = [transcribe_track(channel, language, f"Speaker {index + 1}") for index, channel in enumerate(channels)]
+        tracks = [transcribe_track(channel, language, f"Speaker {index + 1}", keyterms) for index, channel in enumerate(channels)]
     finally:
         for channel in channels:
             channel.unlink(missing_ok=True)
@@ -238,6 +242,7 @@ def transcribe_file(path: Path, language: str | None, diarization: str = "none")
         "modelRevision": os.getenv("FASTER_WHISPER_MODEL_REVISION", MODEL_REVISION),
         "diarization": "channels",
         "speakers": ["Speaker 1", "Speaker 2"],
+        "keytermsApplied": keyterms or [],
     }
 
 
@@ -246,6 +251,7 @@ async def transcriptions(
     file: Annotated[UploadFile, File()],
     language: Annotated[str, Form()] = "",
     diarization: Annotated[str, Form()] = "none",
+    keyterms: Annotated[str, Form()] = "[]",
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict:
     authorize(authorization)
@@ -255,10 +261,23 @@ async def transcriptions(
     normalized_diarization = diarization.strip().lower()
     if normalized_diarization not in {"none", "channels"}:
         raise HTTPException(status_code=422, detail="Diarization must be none or channels")
+    try:
+        parsed_keyterms = json.loads(keyterms or "[]")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Keyterms must be a JSON array") from None
+    if not isinstance(parsed_keyterms, list) or len(parsed_keyterms) > 20:
+        raise HTTPException(status_code=422, detail="Up to 20 keyterms are supported")
+    normalized_keyterms = []
+    for value in parsed_keyterms:
+        term = str(value).strip()
+        if term and len(term) <= 80 and term not in normalized_keyterms:
+            normalized_keyterms.append(term)
+    if sum(len(term) for term in normalized_keyterms) > 500:
+        raise HTTPException(status_code=422, detail="Keyterms exceed the 500 character limit")
     path = await save_bounded_upload(file)
     try:
         async with generation_slots:
-            return await asyncio.to_thread(transcribe_file, path, normalized_language or None, normalized_diarization)
+            return await asyncio.to_thread(transcribe_file, path, normalized_language or None, normalized_diarization, normalized_keyterms)
     except HTTPException:
         raise
     except Exception:

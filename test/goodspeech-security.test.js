@@ -259,6 +259,25 @@ test("GoodSpeech voice cloning is consent-gated, watermarked, owner-scoped, and 
   assert.match(worker, /5\.5 and 30 seconds/);
 });
 
+test("GoodSpeech voice design returns reproducible selectable blends instead of relabeled stock voices", () => {
+  const first = voiceService.designCandidates("A warm empathetic narrator with clear pacing", "en-us");
+  const repeated = voiceService.designCandidates("A warm empathetic narrator with clear pacing", "en-us");
+  assert.equal(first.length, 3);
+  assert.deepEqual(first, repeated);
+  assert.ok(first.every((candidate) => candidate.id.startsWith("candidate-") && candidate.voices.length >= 2));
+  assert.ok(first.every((candidate) => candidate.speed >= 0.8 && candidate.speed <= 1.2));
+  const recipe = voiceService._internal.encodeDesignRecipe(first[0]);
+  const decoded = voiceService._internal.decodeDesignRecipe(recipe);
+  assert.deepEqual(decoded.voices, first[0].voices);
+  assert.equal(decoded.candidateId, first[0].id);
+  const worker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
+  const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech-voice.routes.js"), "utf8");
+  assert.match(worker, /request\.voice\.split\(","\)/);
+  assert.match(routes, /\/design\/candidates/);
+  assert.match(routes, /\/design\/preview/);
+  assert.match(routes, /goodspeech\.voice\.design\.preview/);
+});
+
 test("GoodSpeech agents validate configuration and restrict built-in tools", () => {
   const agent = agentService.validateAgent({
     name: "Support guide",

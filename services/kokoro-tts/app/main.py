@@ -227,7 +227,8 @@ def validate_language_voice(request: SpeechRequest) -> None:
     config = LANGUAGES.get(request.language)
     if config is None:
         raise HTTPException(status_code=422, detail="Unsupported language")
-    if request.voice not in config["voices"]:
+    requested_voices = [voice.strip() for voice in request.voice.split(",") if voice.strip()]
+    if not requested_voices or len(requested_voices) > 3 or any(voice not in config["voices"] for voice in requested_voices):
         raise HTTPException(status_code=422, detail="Voice does not support the requested language")
 
 
@@ -239,8 +240,6 @@ async def speech(
     authorize(authorization)
     if request.model != MODEL_ID:
         raise HTTPException(status_code=422, detail="Unsupported model")
-    if request.voice not in ALLOWED_VOICES:
-        raise HTTPException(status_code=422, detail="Unsupported voice")
     validate_language_voice(request)
     if request.response_format != "wav":
         raise HTTPException(status_code=422, detail="Unsupported response format")
@@ -272,8 +271,6 @@ async def speech_stream(
     authorize(authorization)
     if request.model != MODEL_ID:
         raise HTTPException(status_code=422, detail="Unsupported model")
-    if request.voice not in ALLOWED_VOICES:
-        raise HTTPException(status_code=422, detail="Unsupported voice")
     validate_language_voice(request)
 
     return StreamingResponse(

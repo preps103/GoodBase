@@ -118,6 +118,56 @@ router.post("/design", writeLimiter, async (req, res) => {
   }
 });
 
+router.post("/design/candidates", writeLimiter, async (req, res) => {
+  try {
+    const candidates = voiceService.designCandidates(req.body?.prompt, req.body?.language);
+    return res.json({ success: true, data: { candidates } });
+  } catch (error) {
+    return sendError(res, error, "design candidates");
+  }
+});
+
+router.post("/design/preview", generationLimiter, async (req, res) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90_000);
+  let reservation;
+  try {
+    const script = String(req.body?.text || "").trim();
+    reservation = await usageService.reserveUsage({
+      userId: req.user.id,
+      context: req.tenantContext,
+      characters: script.length,
+    });
+    const result = await voiceService.previewDesignedVoice({ payload: req.body, signal: controller.signal });
+    await usageService.finishUsage({
+      userId: req.user.id,
+      reservation,
+      audioBytes: result.bytes.length,
+      latencyMs: null,
+      success: true,
+      request: req,
+    });
+    logAudit({
+      userId: req.user.id,
+      action: "goodspeech.voice.design.preview",
+      entityType: "goodspeech_voice_candidate",
+      entityId: null,
+      ipAddress: req.ip,
+      metadata: { candidateId: result.candidate.id, blendCount: result.candidate.blendCount, promptSha256: result.promptSha256 },
+    }).catch(() => {});
+    res.set("Cache-Control", "private, no-store");
+    res.set("Content-Type", result.contentType);
+    return res.send(result.bytes);
+  } catch (error) {
+    if (reservation) {
+      await usageService.finishUsage({ userId: req.user.id, reservation, audioBytes: 0, latencyMs: null, success: false, request: req }).catch(() => {});
+    }
+    return sendError(res, error, "design preview");
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 router.post("/:voiceId/speech", generationLimiter, async (req, res) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000);

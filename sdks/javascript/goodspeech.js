@@ -54,6 +54,25 @@ class GoodSpeechClient {
     return this.request("/voices/design", { method: "POST", body: payload });
   }
 
+  designVoiceCandidates(payload) {
+    return this.request("/voices/design/candidates", { method: "POST", body: payload });
+  }
+
+  async previewDesignedVoice(payload, options = {}) {
+    const response = await this.fetch(joinUrl(this.baseUrl, `${API_PREFIX}/voices/design/preview`), {
+      method: "POST",
+      headers: this.headers({ "Content-Type": "application/json", Accept: "audio/wav, application/json" }),
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    });
+    if (!response.ok) throw await responseError(response);
+    return {
+      audio: await response.arrayBuffer(),
+      contentType: response.headers.get("content-type") || "audio/wav",
+      requestId: response.headers.get("x-request-id"),
+    };
+  }
+
   createAgent(payload) {
     return this.request("/agents", { method: "POST", body: payload });
   }
