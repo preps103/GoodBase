@@ -16,7 +16,9 @@ services:
     volumes:
       - kokoro_models:/var/lib/kokoro/models
     tmpfs:
-      - /tmp:size=256m,mode=1777
+      # phonemizer copies libespeak into its temporary directory before dlopen.
+      # Keep the mount isolated and ephemeral, but permit that native library map.
+      - /tmp:rw,exec,nosuid,nodev,size=256m,mode=1777
     read_only: true
     cap_drop:
       - ALL
