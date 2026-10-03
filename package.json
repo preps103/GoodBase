@@ -21,6 +21,7 @@
     "provision:goodspeech": "bash scripts/provision-goodspeech.sh",
     "migrate:goodspeech": "node scripts/apply-goodspeech-library-migration.js",
     "migrate:goodspeech-usage": "node scripts/apply-goodspeech-usage-migration.js",
+    "migrate:goodspeech-podcasts": "node scripts/apply-goodspeech-podcasts-migration.js",
     "provision:operations": "bash scripts/provision-operations.sh",
     "worker": "node src/workers/goodapp-worker-v3.js",
     "repair:corporate-passwords": "node scripts/restore-pre-bridge-passwords.js",

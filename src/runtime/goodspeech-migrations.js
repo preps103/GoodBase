@@ -14,6 +14,7 @@ const MIGRATIONS = [
   "apply-goodspeech-governance-migration.js",
   "apply-goodspeech-quality-benchmarks-migration.js",
   "apply-goodspeech-studio-jobs-migration.js",
+  "apply-goodspeech-podcasts-migration.js",
 ];
 
 function shouldRun() {

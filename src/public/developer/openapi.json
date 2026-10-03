@@ -368,6 +368,23 @@
     },
 
 
+    "/api/goodspeech/v1/podcasts": {
+      "get": { "summary": "List owner-scoped RSS podcast feeds", "servers": [{ "url": "https://base.goodos.app" }], "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }], "responses": { "200": { "description": "Podcast feeds and public RSS URLs" }, "401": { "description": "Authentication required" } } },
+      "post": { "summary": "Create a revocable public RSS podcast feed", "servers": [{ "url": "https://base.goodos.app" }], "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string", "maxLength": 120 }, "description": { "type": "string", "maxLength": 1000 }, "author": { "type": "string", "maxLength": 120 }, "language": { "type": "string", "maxLength": 20 } } } } } }, "responses": { "201": { "description": "RSS feed created" }, "400": { "description": "Invalid feed metadata" }, "401": { "description": "Authentication required" } } }
+    },
+    "/api/goodspeech/v1/podcasts/{feedId}/episodes": {
+      "post": { "summary": "Publish an owned GoodSpeech audio asset as an RSS episode", "servers": [{ "url": "https://base.goodos.app" }], "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }], "parameters": [{ "in": "path", "name": "feedId", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "201": { "description": "Episode published" }, "404": { "description": "Feed or audio asset not found" }, "415": { "description": "Asset is not audio" } } }
+    },
+    "/api/goodspeech/v1/podcasts/{feedId}": {
+      "delete": { "summary": "Revoke a public RSS feed", "servers": [{ "url": "https://base.goodos.app" }], "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }], "parameters": [{ "in": "path", "name": "feedId", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Feed revoked" }, "404": { "description": "Feed not found" } } }
+    },
+    "/api/goodspeech/v1/podcasts/public/{token}/feed.xml": {
+      "get": { "summary": "Read a public RSS 2.0 podcast feed", "servers": [{ "url": "https://base.goodos.app" }], "security": [], "parameters": [{ "in": "path", "name": "token", "required": true, "schema": { "type": "string", "minLength": 43, "maxLength": 43 } }], "responses": { "200": { "description": "RSS 2.0 XML with podcast enclosures" }, "404": { "description": "Feed not found or revoked" } } }
+    },
+    "/api/goodspeech/v1/podcasts/public/{token}/episodes/{episodeId}/audio": {
+      "get": { "summary": "Stream audio for a published RSS episode", "servers": [{ "url": "https://base.goodos.app" }], "security": [], "parameters": [{ "in": "path", "name": "token", "required": true, "schema": { "type": "string" } }, { "in": "path", "name": "episodeId", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Published audio bytes" }, "302": { "description": "Short-lived storage redirect" }, "404": { "description": "Episode not found or feed revoked" } } }
+    },
+
     "/api/goodspeech/v1/usage": {
       "get": {
         "summary": "Read the signed-in user's GoodSpeech usage",
