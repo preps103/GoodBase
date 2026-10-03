@@ -116,6 +116,11 @@ test("GoodSpeech maps nine supported languages to matching Kokoro voice packs", 
     assert.match(worker, new RegExp(`"${voice}"`));
   }
   assert.match(worker, /KPipeline\(lang_code=code, repo_id=MODEL_ID, model=pipeline\.model\)/);
+  assert.match(worker, /load_language_pipelines/);
+  const dockerfile = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "Dockerfile"), "utf8");
+  assert.match(dockerfile, /python -m unidic download/);
+  assert.match(dockerfile, /JAG2P\(\)/);
+  assert.match(dockerfile, /ZHG2P\(\)/);
 });
 
 test("GoodSpeech constrains Kokoro speed derived from style controls", () => {

@@ -22,8 +22,9 @@ RUN apt-get update \
     && pip install --no-cache-dir --requirement requirements.txt \
     && pip install --no-cache-dir \
       https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl \
+    && python -m unidic download \
     && python -c "import spacy; spacy.load('en_core_web_sm')" \
-    && python -c "from transformers.models.albert.modeling_albert import AlbertModel; from kokoro import KPipeline" \
+    && python -c "from transformers.models.albert.modeling_albert import AlbertModel; from kokoro import KPipeline; from misaki.ja import JAG2P; from misaki.zh import ZHG2P; JAG2P(); ZHG2P()" \
     && apt-get purge --auto-remove -y build-essential \
     && rm -rf /var/lib/apt/lists/*
 COPY --chown=kokoro:kokoro app ./app

@@ -97,6 +97,16 @@ def load_pipeline() -> KPipeline:
     return KPipeline(lang_code="a", repo_id=MODEL_ID)
 
 
+def load_language_pipelines() -> tuple[KPipeline, dict[str, KPipeline]]:
+    base = load_pipeline()
+    loaded = {"a": base}
+    for config in LANGUAGES.values():
+        code = config["code"]
+        if code not in loaded:
+            loaded[code] = KPipeline(lang_code=code, repo_id=MODEL_ID, model=base.model)
+    return base, loaded
+
+
 def pipeline_for(language: str) -> KPipeline:
     if pipeline is None:
         raise RuntimeError("Kokoro is not ready")
@@ -170,8 +180,7 @@ def synthesize_pcm_stream(request: SpeechRequest):
 async def lifespan(_: FastAPI):
     global pipeline, pipelines
     configured_token()
-    pipeline = await asyncio.to_thread(load_pipeline)
-    pipelines = {"a": pipeline}
+    pipeline, pipelines = await asyncio.to_thread(load_language_pipelines)
     LOGGER.info("%s ready", MODEL_ID)
     yield
     pipeline = None
