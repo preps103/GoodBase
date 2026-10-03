@@ -428,6 +428,15 @@ test("GoodSpeech exposes bounded PCM streaming and owner-scoped monthly usage", 
     assert.equal(snapshot.remaining.characters, 4000);
     assert.equal(snapshot.usage.averageLatencyMs, 100);
     assert.equal(snapshot.pricing.status, "included_beta");
+    const datedSnapshot = usageService.usageSnapshot({
+      period_start: new Date("2026-10-01T00:00:00.000Z"),
+      period_end: new Date("2026-11-01T00:00:00.000Z"),
+    });
+    assert.deepEqual(datedSnapshot.period, {
+      start: "2026-10-01",
+      end: "2026-11-01",
+      timezone: "UTC",
+    });
   } finally {
     if (originalUrl === undefined) delete process.env.KOKORO_TTS_URL; else process.env.KOKORO_TTS_URL = originalUrl;
     if (originalRequests === undefined) delete process.env.GOODSPEECH_MONTHLY_REQUEST_LIMIT; else process.env.GOODSPEECH_MONTHLY_REQUEST_LIMIT = originalRequests;

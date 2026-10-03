@@ -45,6 +45,14 @@ function quotaError(message, current, limit, metric) {
   return error;
 }
 
+function dateOnly(value, fallback) {
+  if (value instanceof Date && Number.isFinite(value.valueOf())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const match = String(value || "").match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : fallback;
+}
+
 function usageSnapshot(row, configuredLimits = limits(), bounds = periodBounds()) {
   const requests = Number(row?.request_count || 0);
   const characters = Number(row?.text_characters || 0);
@@ -56,8 +64,8 @@ function usageSnapshot(row, configuredLimits = limits(), bounds = periodBounds()
   const characterLimit = Number(row?.character_limit || configuredLimits.characters);
   return {
     period: {
-      start: row?.period_start || bounds.start,
-      end: row?.period_end || bounds.end,
+      start: dateOnly(row?.period_start, bounds.start),
+      end: dateOnly(row?.period_end, bounds.end),
       timezone: "UTC",
     },
     usage: {
@@ -239,6 +247,7 @@ module.exports = {
   DEFAULT_CHARACTER_LIMIT,
   limits,
   periodBounds,
+  dateOnly,
   usageSnapshot,
   getUsage,
   reserveUsage,
