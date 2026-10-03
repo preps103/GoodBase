@@ -586,4 +586,6 @@ test("GoodSpeech production contracts expose release identity, truthful health, 
   assert.ok(openapi.paths["/api/goodspeech/v1/usage"]);
   assert.match(videoWorker, /GOODMOTION_RETENTION_SECONDS/);
   assert.match(videoWorker, /cleanup_stale_jobs/);
+  const kokoroWorker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
+  assert.match(kokoroWorker, /async def ready\(\) -> dict\[str, str \| list\[str\]\]/);
 });

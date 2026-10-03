@@ -188,7 +188,7 @@ async def live() -> dict[str, str]:
 
 
 @app.get("/health/ready")
-async def ready() -> dict[str, str]:
+async def ready() -> dict[str, str | list[str]]:
     if pipeline is None:
         raise HTTPException(status_code=503, detail="Model is loading")
     return {
