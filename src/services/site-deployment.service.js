@@ -907,7 +907,7 @@ async function executeStagedRelease(runId, site, appPath, configuredRepository, 
     runId,
     "backup",
     "cp",
-    ["-a", "--link", `${appPath}${path.sep}.`, `${backupApplication}${path.sep}`],
+    ["-a", "--reflink=auto", `${appPath}${path.sep}.`, `${backupApplication}${path.sep}`],
     { timeoutMs: 20 * 60 * 1000 }
   );
   await fsp.writeFile(

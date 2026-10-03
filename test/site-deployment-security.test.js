@@ -300,6 +300,8 @@ test("non-GoodBase applications use build-first staged releases with rollback co
   assert.match(service, /Using a staged release/);
   assert.match(service, /"rsync"/);
   assert.match(service, /"--delete"/);
+  assert.match(service, /"--reflink=auto"/);
+  assert.doesNotMatch(service, /"--link"/);
   assert.match(service, /copyPreservedRuntimeState/);
   assert.match(service, /restoreStagedBackup/);
   assert.match(routes, /reconcileCanonicalDeploymentSites/);
