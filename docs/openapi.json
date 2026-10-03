@@ -748,10 +748,20 @@
     "/api/goodspeech/v1/governance/quality": {
       "get": {
         "summary": "Read measured GoodSpeech latency and reliability objectives",
-        "description": "Returns owner-scoped 30-day p50 and p95 first-audio timing, average generation latency, failure rate, and objective status.",
+        "description": "Returns owner-scoped 30-day p50 and p95 first-audio timing, average generation latency, failure rate, objective status, and recent private round-trip quality measurements.",
         "servers": [{ "url": "https://base.goodos.app" }],
         "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
         "responses": { "200": { "description": "Measured quality and SLO summary" }, "401": { "description": "Authentication required" } }
+      }
+    },
+    "/api/goodspeech/v1/governance/quality/benchmark": {
+      "post": {
+        "summary": "Run a private TTS-to-STT quality benchmark",
+        "description": "Synthesizes a fixed phrase with the selected managed voice, transcribes it privately, calculates word or character error rate, and stores the owner-scoped measurements in GoodBase. Temporary audio is never retained.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "language": { "type": "string", "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"], "default": "en-us" } } } } } },
+        "responses": { "201": { "description": "Persisted round-trip quality measurement" }, "400": { "description": "Unsupported benchmark language" }, "401": { "description": "Authentication required" }, "429": { "description": "Benchmark rate limit exceeded" }, "502": { "description": "A managed speech engine rejected the benchmark" } }
       }
     },
     "/api/goodspeech/v1/studio/jobs": {

@@ -277,7 +277,7 @@ async function purgeExpiredContent(limit = 25, now = Date.now()) {
 
 async function qualitySummary({ context, userId }) {
   const current = scope(context);
-  const [latencies, monthly] = await Promise.all([
+  const [latencies, monthly, benchmarks] = await Promise.all([
     database.query(
       `SELECT COUNT(*)::int AS samples,
         ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY COALESCE(NULLIF(metadata_json->>'firstByteMs','')::numeric,NULLIF(metadata_json->>'latencyMs','')::numeric)))::int AS p50_first_audio_ms,
@@ -292,6 +292,15 @@ async function qualitySummary({ context, userId }) {
     database.query(
       `SELECT COALESCE(SUM(successful_count),0)::int AS successes, COALESCE(SUM(failed_count),0)::int AS failures
        FROM goodspeech_monthly_usage WHERE organization_id=$1 AND user_id=$2::uuid AND period_start>=date_trunc('month',NOW())-INTERVAL '1 month'`,
+      [current.organizationId, userId],
+    ),
+    database.query(
+      `SELECT id, language, status, metric, error_rate_percent, quality_score,
+              tts_latency_ms, transcription_latency_ms, total_latency_ms,
+              audio_bytes, tts_model, transcription_model, created_at
+       FROM goodspeech_quality_benchmarks
+       WHERE organization_id=$1 AND owner_user_id=$2::uuid
+       ORDER BY created_at DESC LIMIT 9`,
       [current.organizationId, userId],
     ),
   ]);
@@ -309,6 +318,24 @@ async function qualitySummary({ context, userId }) {
     objectiveStatus: {
       firstAudio: latency.p95_first_audio_ms === null ? "collecting" : Number(latency.p95_first_audio_ms) <= 1000 ? "met" : "missed",
       reliability: failureRate === null ? "collecting" : failureRate <= 1 ? "met" : "missed",
+    },
+    roundTrip: {
+      targetErrorRatePercent: 20,
+      latest: benchmarks.rows.map((row) => ({
+        id: row.id,
+        language: row.language,
+        status: row.status,
+        metric: row.metric,
+        errorRatePercent: row.error_rate_percent === null ? null : Number(row.error_rate_percent),
+        qualityScore: row.quality_score === null ? null : Number(row.quality_score),
+        ttsLatencyMs: row.tts_latency_ms === null ? null : Number(row.tts_latency_ms),
+        transcriptionLatencyMs: row.transcription_latency_ms === null ? null : Number(row.transcription_latency_ms),
+        totalLatencyMs: row.total_latency_ms === null ? null : Number(row.total_latency_ms),
+        audioBytes: row.audio_bytes === null ? null : Number(row.audio_bytes),
+        ttsModel: row.tts_model,
+        transcriptionModel: row.transcription_model,
+        createdAt: row.created_at,
+      })),
     },
   };
 }
