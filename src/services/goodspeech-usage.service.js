@@ -18,6 +18,74 @@ function limits() {
   };
 }
 
+function preferenceRecord(row, configured = limits()) {
+  return {
+    requestBudget: Math.min(configured.requests, positiveLimit(row?.request_budget, configured.requests)),
+    characterBudget: Math.min(configured.characters, positiveLimit(row?.character_budget, configured.characters)),
+    warningPercent: Math.min(95, Math.max(50, Number.parseInt(String(row?.warning_percent || 80), 10) || 80)),
+    maximums: configured,
+  };
+}
+
+async function getPreferences({ userId, context }) {
+  const currentScope = scope(context);
+  const result = await database.query(
+    `SELECT * FROM goodspeech_usage_preferences
+     WHERE organization_id = $1 AND owner_user_id = $2::uuid LIMIT 1`,
+    [currentScope.organizationId, userId],
+  );
+  return preferenceRecord(result.rows[0]);
+}
+
+async function updatePreferences({ userId, context, payload }) {
+  const configured = limits();
+  const requestBudget = positiveLimit(payload?.requestBudget, 0);
+  const characterBudget = positiveLimit(payload?.characterBudget, 0);
+  const warningPercent = Number.parseInt(String(payload?.warningPercent || ""), 10);
+  if (!requestBudget || requestBudget > configured.requests) {
+    throw Object.assign(new Error(`Request budget must be between 1 and ${configured.requests.toLocaleString()}.`), { statusCode: 400, code: "GOODSPEECH_REQUEST_BUDGET_INVALID" });
+  }
+  if (!characterBudget || characterBudget > configured.characters) {
+    throw Object.assign(new Error(`Character budget must be between 1 and ${configured.characters.toLocaleString()}.`), { statusCode: 400, code: "GOODSPEECH_CHARACTER_BUDGET_INVALID" });
+  }
+  if (!Number.isInteger(warningPercent) || warningPercent < 50 || warningPercent > 95) {
+    throw Object.assign(new Error("Warning threshold must be between 50 and 95 percent."), { statusCode: 400, code: "GOODSPEECH_WARNING_THRESHOLD_INVALID" });
+  }
+  const currentScope = scope(context);
+  const client = await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const saved = await client.query(
+      `INSERT INTO goodspeech_usage_preferences (
+         organization_id, project_id, environment_id, owner_user_id,
+         request_budget, character_budget, warning_percent
+       ) VALUES ($1,$2,$3,$4::uuid,$5,$6,$7)
+       ON CONFLICT (organization_id, owner_user_id) DO UPDATE SET
+         project_id = COALESCE(EXCLUDED.project_id, goodspeech_usage_preferences.project_id),
+         environment_id = COALESCE(EXCLUDED.environment_id, goodspeech_usage_preferences.environment_id),
+         request_budget = EXCLUDED.request_budget,
+         character_budget = EXCLUDED.character_budget,
+         warning_percent = EXCLUDED.warning_percent,
+         updated_at = NOW()
+       RETURNING *`,
+      [currentScope.organizationId, currentScope.projectId, currentScope.environmentId, userId,
+        requestBudget, characterBudget, warningPercent],
+    );
+    await client.query(
+      `UPDATE goodspeech_monthly_usage SET request_limit = $4, character_limit = $5, updated_at = NOW()
+       WHERE organization_id = $1 AND user_id = $2::uuid AND period_start = $3::date`,
+      [currentScope.organizationId, userId, periodBounds().start, requestBudget, characterBudget],
+    );
+    await client.query("COMMIT");
+    return preferenceRecord(saved.rows[0], configured);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function periodBounds(now = new Date()) {
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
@@ -53,15 +121,17 @@ function dateOnly(value, fallback) {
   return match ? match[0] : fallback;
 }
 
-function usageSnapshot(row, configuredLimits = limits(), bounds = periodBounds()) {
+function usageSnapshot(row, configuredLimits = limits(), bounds = periodBounds(), warningPercent = 80) {
   const requests = Number(row?.request_count || 0);
   const characters = Number(row?.text_characters || 0);
   const successes = Number(row?.successful_count || 0);
   const failures = Number(row?.failed_count || 0);
   const audioBytes = Number(row?.audio_bytes || 0);
   const latencyTotal = Number(row?.latency_ms_total || 0);
-  const requestLimit = Number(row?.request_limit || configuredLimits.requests);
-  const characterLimit = Number(row?.character_limit || configuredLimits.characters);
+  const requestLimit = Math.min(configuredLimits.requests, Number(row?.request_limit || configuredLimits.requests));
+  const characterLimit = Math.min(configuredLimits.characters, Number(row?.character_limit || configuredLimits.characters));
+  const requestPercent = Math.min(100, Math.round((requests / requestLimit) * 100));
+  const characterPercent = Math.min(100, Math.round((characters / characterLimit) * 100));
   return {
     period: {
       start: dateOnly(row?.period_start, bounds.start),
@@ -85,8 +155,13 @@ function usageSnapshot(row, configuredLimits = limits(), bounds = periodBounds()
       characters: Math.max(0, characterLimit - characters),
     },
     percentUsed: {
-      requests: Math.min(100, Math.round((requests / requestLimit) * 100)),
-      characters: Math.min(100, Math.round((characters / characterLimit) * 100)),
+      requests: requestPercent,
+      characters: characterPercent,
+    },
+    safeguards: {
+      warningPercent,
+      warning: requestPercent >= warningPercent || characterPercent >= warningPercent,
+      exhausted: requests >= requestLimit || characters >= characterLimit,
     },
     pricing: {
       status: "included_beta",
@@ -98,7 +173,8 @@ function usageSnapshot(row, configuredLimits = limits(), bounds = periodBounds()
 }
 
 async function getUsage({ userId, context }) {
-  const configuredLimits = limits();
+  const preferences = await getPreferences({ userId, context });
+  const configuredLimits = { requests: preferences.requestBudget, characters: preferences.characterBudget };
   const bounds = periodBounds();
   const currentScope = scope(context);
   const result = await database.query(
@@ -107,7 +183,7 @@ async function getUsage({ userId, context }) {
      LIMIT 1`,
     [currentScope.organizationId, userId, bounds.start],
   );
-  return usageSnapshot(result.rows[0], configuredLimits, bounds);
+  return usageSnapshot(result.rows[0], configuredLimits, bounds, preferences.warningPercent);
 }
 
 async function reserveUsage({ userId, context, characters }) {
@@ -119,7 +195,8 @@ async function reserveUsage({ userId, context, characters }) {
     });
   }
 
-  const configuredLimits = limits();
+  const preferences = await getPreferences({ userId, context });
+  const configuredLimits = { requests: preferences.requestBudget, characters: preferences.characterBudget };
   const bounds = periodBounds();
   const currentScope = scope(context);
   const client = await database.pool.connect();
@@ -130,7 +207,10 @@ async function reserveUsage({ userId, context, characters }) {
          organization_id, project_id, environment_id, user_id, period_start, period_end,
          request_limit, character_limit
        ) VALUES ($1,$2,$3,$4::uuid,$5::date,$6::date,$7,$8)
-       ON CONFLICT (organization_id, user_id, period_start) DO NOTHING`,
+       ON CONFLICT (organization_id, user_id, period_start) DO UPDATE SET
+         request_limit = EXCLUDED.request_limit,
+         character_limit = EXCLUDED.character_limit,
+         updated_at = NOW()`,
       [currentScope.organizationId, currentScope.projectId, currentScope.environmentId, userId,
         bounds.start, bounds.end, configuredLimits.requests, configuredLimits.characters],
     );
@@ -166,9 +246,10 @@ async function reserveUsage({ userId, context, characters }) {
     return {
       reservationId: `gsr_${crypto.randomUUID().replace(/-/g, "")}`,
       characters: quantity,
+      warningPercent: preferences.warningPercent,
       scope: currentScope,
       period: bounds,
-      snapshot: usageSnapshot(updated.rows[0], configuredLimits, bounds),
+      snapshot: usageSnapshot(updated.rows[0], configuredLimits, bounds, preferences.warningPercent),
     };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -234,7 +315,12 @@ async function finishUsage({ userId, reservation, audioBytes, latencyMs, firstBy
       );
     }
     await client.query("COMMIT");
-    return usageSnapshot(updated.rows[0]);
+    return usageSnapshot(
+      updated.rows[0],
+      undefined,
+      reservation.period,
+      reservation.warningPercent,
+    );
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("[GoodSpeech usage] completion failed:", error.message);
@@ -254,4 +340,7 @@ module.exports = {
   getUsage,
   reserveUsage,
   finishUsage,
+  getPreferences,
+  preferenceRecord,
+  updatePreferences,
 };

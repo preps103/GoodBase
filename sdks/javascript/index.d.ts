@@ -1,8 +1,8 @@
 export * from "./telemetry";
 export declare class GoodbaseError extends Error { status?: number; code?: string; requestId?: string; }
 export declare class GoodbaseClient {
-  constructor(options?: {baseUrl?: string; accessToken?: string; attestationToken?: string; fetch?: typeof fetch});
-  accessToken: string | null; attestationToken: string | null;
+  constructor(options?: {baseUrl?: string; accessToken?: string; apiKey?: string; attestationToken?: string; fetch?: typeof fetch});
+  accessToken: string | null; apiKey: string | null; attestationToken: string | null;
   request(path: string, options?: {method?: string; headers?: Record<string,string>; body?: unknown; signal?: AbortSignal}): Promise<any>;
   recordSession(appId: string, payload: Record<string,unknown>): Promise<any>;
   captureCrash(appId: string, payload: Record<string,unknown>): Promise<any>;
@@ -21,9 +21,17 @@ export interface GoodSpeechTranscriptionResult {
   success: true;
   data: { text: string; language: string; languageProbability: number; durationSeconds: number; durationAfterVadSeconds: number; segments: GoodSpeechTranscriptionSegment[]; model: string; modelRevision: string; latencyMs: number; retention: "transient_audio"; };
 }
+export interface GoodSpeechUsagePreferences {
+  requestBudget: number;
+  characterBudget: number;
+  warningPercent: number;
+  maximums: { requests: number; characters: number };
+}
 export declare class GoodSpeechClient {
-  constructor(options?: {client?: GoodbaseClient; baseUrl?: string; accessToken?: string; attestationToken?: string; fetch?: typeof fetch});
+  constructor(options?: {client?: GoodbaseClient; baseUrl?: string; accessToken?: string; apiKey?: string; attestationToken?: string; fetch?: typeof fetch});
   health(): Promise<any>; capabilities(): Promise<any>; usage(): Promise<any>; voices(): Promise<any>; agents(): Promise<any>;
+  usagePreferences(): Promise<{success: true; data: GoodSpeechUsagePreferences}>;
+  updateUsagePreferences(payload: {requestBudget: number; characterBudget: number; warningPercent: number}): Promise<{success: true; data: GoodSpeechUsagePreferences}>;
   analytics(agentId?: string): Promise<any>;
   createDesignedVoice(payload: Record<string,unknown>): Promise<any>;
   createAgent(payload: Record<string,unknown>): Promise<any>;

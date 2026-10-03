@@ -44,7 +44,8 @@ test("GoodSpeech accepts modern audio containers with signature validation", () 
 });
 
 test("GoodSpeech transcription route is private, tenant-scoped, bounded, and audited", () => {
-  assert.match(routes, /router\.use\(authRequired, tenantContext, requireGoodSpeechAccess\)/);
+  assert.match(routes, /goodspeechAccess\("read:goodspeech"\)/);
+  assert.match(routes, /goodspeechAccess\("write:goodspeech"\)/);
   assert.match(routes, /limit: 30/);
   assert.match(routes, /upload\.single\("file"\)/);
   assert.match(routes, /goodspeech\.transcribe/);

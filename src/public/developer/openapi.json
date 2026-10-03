@@ -107,6 +107,9 @@
           },
           {
             "GoodOSBearer": []
+          },
+          {
+            "GoodOSApiKey": []
           }
         ],
         "responses": {
@@ -137,6 +140,9 @@
           },
           {
             "GoodOSBearer": []
+          },
+          {
+            "GoodOSApiKey": []
           }
         ],
         "responses": {
@@ -164,6 +170,9 @@
           },
           {
             "GoodOSBearer": []
+          },
+          {
+            "GoodOSApiKey": []
           }
         ],
         "requestBody": {
@@ -233,7 +242,7 @@
         "summary": "Stream synthesized speech as PCM",
         "description": "Authenticated sentence-level PCM streaming through the private Kokoro worker. Usage is reserved before synthesis and metered only after successful delivery.",
         "servers": [{ "url": "https://base.goodos.app" }],
-        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -276,7 +285,7 @@
         "summary": "Check private managed GoodSpeech transcription",
         "description": "Reports whether the authenticated user can reach the revision-pinned Faster-Whisper service. The on-device Whisper path remains available independently.",
         "servers": [{ "url": "https://base.goodos.app" }],
-        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
         "responses": {
           "200": { "description": "Managed transcription is ready" },
           "401": { "description": "Authentication required" },
@@ -290,7 +299,7 @@
         "summary": "Transcribe audio with private managed Faster-Whisper",
         "description": "Accepts a bounded audio or audio-bearing video upload, applies voice activity detection, automatic or explicit language selection, and returns segment and word timestamps. Uploaded audio is processed transiently and is not retained.",
         "servers": [{ "url": "https://base.goodos.app" }],
-        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -326,11 +335,53 @@
         "summary": "Read the signed-in user's GoodSpeech usage",
         "description": "Returns the current UTC billing period, successful and failed synthesis counts, characters, audio bytes, latency, enforced limits, remaining allowance, and beta pricing status.",
         "servers": [{ "url": "https://base.goodos.app" }],
-        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
         "responses": {
           "200": { "description": "Owner-scoped GoodSpeech usage snapshot" },
           "401": { "description": "Authentication required" },
           "403": { "description": "Tenant or application access denied" }
+        }
+      }
+    },
+
+    "/api/goodspeech/v1/usage/preferences": {
+      "get": {
+        "summary": "Read the user's GoodSpeech usage safeguards",
+        "description": "Returns owner-scoped monthly request and character budgets, the warning threshold, and the workspace maximums those budgets cannot exceed.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
+        "responses": {
+          "200": { "description": "Owner-scoped usage safeguard preferences" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "Tenant, application, or read scope denied" }
+        }
+      },
+      "patch": {
+        "summary": "Update the user's GoodSpeech usage safeguards",
+        "description": "Sets enforceable monthly budgets and the early-warning threshold without allowing a user to expand the workspace maximums.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["requestBudget", "characterBudget", "warningPercent"],
+                "properties": {
+                  "requestBudget": { "type": "integer", "minimum": 1 },
+                  "characterBudget": { "type": "integer", "minimum": 1 },
+                  "warningPercent": { "type": "integer", "minimum": 50, "maximum": 95 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Usage safeguards saved" },
+          "400": { "description": "Budget or warning threshold is outside the allowed range" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "Tenant, application, or write scope denied" }
         }
       }
     },

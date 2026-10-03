@@ -28,6 +28,7 @@ class GoodSpeechClient {
   headers(extra = {}) {
     const headers = { Accept: "application/json", ...extra };
     if (this.client.accessToken) headers.Authorization = `Bearer ${this.client.accessToken}`;
+    if (this.client.apiKey) headers["X-Goodbase-API-Key"] = this.client.apiKey;
     if (this.client.attestationToken) headers["X-Goodbase-Attestation"] = this.client.attestationToken;
     return headers;
   }
@@ -39,6 +40,10 @@ class GoodSpeechClient {
   health() { return this.request("/health"); }
   capabilities() { return this.request("/capabilities"); }
   usage() { return this.request("/usage"); }
+  usagePreferences() { return this.request("/usage/preferences"); }
+  updateUsagePreferences(payload) {
+    return this.request("/usage/preferences", { method: "PATCH", body: payload });
+  }
   voices() { return this.request("/voices/"); }
   agents() { return this.request("/agents/bootstrap"); }
   analytics(agentId) {

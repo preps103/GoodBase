@@ -6,10 +6,9 @@ const { rateLimit } = require("express-rate-limit");
 const multer = require("multer");
 const env = require("../config/env");
 const authRequired = require("../middleware/authRequired");
-const tenantContext = require("../middleware/tenantContext");
+const goodspeechAccess = require("../middleware/goodspeechAccess");
 const { logAudit } = require("../services/audit.service");
 const usageService = require("../services/goodspeech-usage.service");
-const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes");
 const videoService = require("../services/goodspeech-video.service");
 const avatarService = require("../services/goodspeech-avatar.service");
 const voiceService = require("../services/goodspeech-voice.service");
@@ -460,7 +459,7 @@ router.get("/status", statusLimiter, async (_req, res) => {
   });
 });
 
-router.get("/health", authRequired, async (_req, res) => {
+router.get("/health", goodspeechAccess("read:goodspeech"), async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   const health = await checkKokoroHealth();
   return res.status(health.ready ? 200 : 503).json({
@@ -471,7 +470,7 @@ router.get("/health", authRequired, async (_req, res) => {
   });
 });
 
-router.get("/capabilities", authRequired, async (_req, res) => {
+router.get("/capabilities", goodspeechAccess("read:goodspeech"), async (_req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   const [health, videoHealth, avatarHealth, voiceHealth, transcriptionHealth] = await Promise.all([
     checkKokoroHealth(),
@@ -501,7 +500,7 @@ router.get("/capabilities", authRequired, async (_req, res) => {
   });
 });
 
-router.get("/usage", authRequired, tenantContext, requireGoodSpeechAccess, async (req, res) => {
+router.get("/usage", goodspeechAccess("read:goodspeech"), async (req, res) => {
   res.set("Cache-Control", "private, no-store, max-age=0");
   try {
     return res.json({
@@ -515,6 +514,35 @@ router.get("/usage", authRequired, tenantContext, requireGoodSpeechAccess, async
       code: "GOODSPEECH_USAGE_UNAVAILABLE",
       message: "GoodSpeech usage is temporarily unavailable.",
     });
+  }
+});
+
+router.get("/usage/preferences", goodspeechAccess("read:goodspeech"), async (req, res) => {
+  res.set("Cache-Control", "private, no-store, max-age=0");
+  try {
+    return res.json({ success: true, data: await usageService.getPreferences({ userId: req.user.id, context: req.tenantContext }) });
+  } catch (error) {
+    console.error("[GoodSpeech usage] preferences failed:", error.message);
+    return res.status(500).json({ success: false, code: "GOODSPEECH_USAGE_PREFERENCES_UNAVAILABLE", message: "GoodSpeech usage safeguards are temporarily unavailable." });
+  }
+});
+
+router.patch("/usage/preferences", goodspeechAccess("write:goodspeech"), async (req, res) => {
+  res.set("Cache-Control", "private, no-store, max-age=0");
+  try {
+    const data = await usageService.updatePreferences({ userId: req.user.id, context: req.tenantContext, payload: req.body });
+    logAudit({
+      userId: req.user.id,
+      action: "goodspeech.usage.safeguards.update",
+      entityType: "goodspeech_usage_preferences",
+      entityId: req.user.id,
+      ipAddress: req.ip,
+      metadata: { requestBudget: data.requestBudget, characterBudget: data.characterBudget, warningPercent: data.warningPercent },
+    }).catch(() => {});
+    return res.json({ success: true, data });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, code: error.code || "GOODSPEECH_USAGE_PREFERENCES_FAILED", message: Number.isInteger(error.statusCode) ? error.message : "GoodSpeech could not save usage safeguards." });
   }
 });
 
@@ -658,7 +686,7 @@ router.get("/video/jobs/:jobId/content", authRequired, async (req, res) => {
   }
 });
 
-router.post("/speech", authRequired, tenantContext, requireGoodSpeechAccess, speechLimiter, async (req, res) => {
+router.post("/speech", goodspeechAccess("write:goodspeech"), speechLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   res.set("Pragma", "no-cache");
 
@@ -802,7 +830,7 @@ router.post("/speech", authRequired, tenantContext, requireGoodSpeechAccess, spe
   }
 });
 
-router.post("/speech/stream", authRequired, tenantContext, requireGoodSpeechAccess, speechLimiter, async (req, res) => {
+router.post("/speech/stream", goodspeechAccess("write:goodspeech"), speechLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   res.set("Pragma", "no-cache");
 

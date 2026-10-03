@@ -3,11 +3,9 @@
 const express = require("express");
 const { rateLimit } = require("express-rate-limit");
 const multer = require("multer");
-const authRequired = require("../middleware/authRequired");
-const tenantContext = require("../middleware/tenantContext");
+const goodspeechAccess = require("../middleware/goodspeechAccess");
 const { logAudit } = require("../services/audit.service");
 const service = require("../services/goodspeech-transcription.service");
-const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes");
 
 const router = express.Router();
 const limiter = rateLimit({
@@ -23,15 +21,13 @@ const upload = multer({
   limits: { fileSize: service.MAX_AUDIO_BYTES, files: 1, fields: 5 },
 });
 
-router.use(authRequired, tenantContext, requireGoodSpeechAccess);
-
-router.get("/health", async (_req, res) => {
+router.get("/health", goodspeechAccess("read:goodspeech"), async (_req, res) => {
   res.set("Cache-Control", "private, no-store, max-age=0");
   const health = await service.checkHealth();
   return res.status(health.ready ? 200 : 503).json({ success: health.ready, data: health });
 });
 
-router.post("/", limiter, upload.single("file"), async (req, res) => {
+router.post("/", goodspeechAccess("write:goodspeech"), limiter, upload.single("file"), async (req, res) => {
   res.set("Cache-Control", "private, no-store, max-age=0");
   try {
     const result = await service.transcribe({

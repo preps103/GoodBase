@@ -7,6 +7,7 @@ const MIGRATIONS = [
   "apply-goodspeech-collaboration-migration.js",
   "apply-goodspeech-library-migration.js",
   "apply-goodspeech-usage-migration.js",
+  "apply-goodspeech-usage-preferences-migration.js",
   "apply-goodspeech-agents-migration.js",
   "apply-goodspeech-voices-migration.js",
   "apply-goodspeech-webhooks-migration.js",

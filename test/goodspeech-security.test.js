@@ -530,6 +530,14 @@ test("GoodSpeech exposes bounded PCM streaming and owner-scoped monthly usage", 
     assert.equal(snapshot.remaining.characters, 4000);
     assert.equal(snapshot.usage.averageLatencyMs, 100);
     assert.equal(snapshot.pricing.status, "included_beta");
+    assert.deepEqual(snapshot.safeguards, { warningPercent: 80, warning: false, exhausted: false });
+    const warningSnapshot = usageService.usageSnapshot({
+      request_count: 21,
+      text_characters: 4500,
+      request_limit: 25,
+      character_limit: 5000,
+    }, undefined, undefined, 75);
+    assert.deepEqual(warningSnapshot.safeguards, { warningPercent: 75, warning: true, exhausted: false });
     const datedSnapshot = usageService.usageSnapshot({
       period_start: new Date("2026-10-01T00:00:00.000Z"),
       period_end: new Date("2026-11-01T00:00:00.000Z"),
@@ -548,14 +556,20 @@ test("GoodSpeech exposes bounded PCM streaming and owner-scoped monthly usage", 
   const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech.routes.js"), "utf8");
   const worker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
   const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "20261003_goodspeech_usage.sql"), "utf8");
+  const preferencesMigration = fs.readFileSync(path.join(__dirname, "..", "migrations", "20261003_goodspeech_usage_preferences.sql"), "utf8");
   const runtime = fs.readFileSync(path.join(__dirname, "..", "src", "runtime", "goodspeech-migrations.js"), "utf8");
-  assert.match(routes, /router\.post\("\/speech\/stream", authRequired, tenantContext, requireGoodSpeechAccess, speechLimiter/);
-  assert.match(routes, /router\.get\("\/usage", authRequired, tenantContext, requireGoodSpeechAccess/);
+  assert.match(routes, /router\.post\("\/speech\/stream", goodspeechAccess\("write:goodspeech"\), speechLimiter/);
+  assert.match(routes, /router\.get\("\/usage", goodspeechAccess\("read:goodspeech"\)/);
+  assert.match(routes, /router\.get\("\/usage\/preferences", goodspeechAccess\("read:goodspeech"\)/);
+  assert.match(routes, /router\.patch\("\/usage\/preferences", goodspeechAccess\("write:goodspeech"\)/);
   assert.match(worker, /StreamingResponse/);
   assert.match(worker, /audio\/pcm/);
   assert.match(migration, /goodspeech_monthly_usage/);
   assert.match(migration, /PRIMARY KEY \(organization_id, user_id, period_start\)/);
+  assert.match(preferencesMigration, /goodspeech_usage_preferences/);
+  assert.match(preferencesMigration, /warning_percent BETWEEN 50 AND 95/);
   assert.match(runtime, /apply-goodspeech-usage-migration\.js/);
+  assert.match(runtime, /apply-goodspeech-usage-preferences-migration\.js/);
 });
 
 test("GoodSpeech collaboration is tenant-scoped and requires an active app entitlement", () => {

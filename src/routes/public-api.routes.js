@@ -223,10 +223,10 @@ async function apiKeyRequired(req, res, next) {
 
     return next();
   } catch (error) {
+    console.error("[public API] key validation failed:", error.message);
     return res.status(500).json({
       success: false,
       message: "API key validation failed.",
-      detail: error.message,
     });
   }
 }
@@ -2201,3 +2201,8 @@ router.get("/functions/:slug", apiKeyRequired, requireScope("execute:functions")
 router.post("/functions/:slug", apiKeyRequired, requireScope("execute:functions"), publicCallableFunctionHandler);
 
 module.exports = router;
+module.exports.allowedApps = allowedApps;
+module.exports.apiKeyRequired = apiKeyRequired;
+module.exports.extractApiKey = extractApiKey;
+module.exports.hasScope = hasScope;
+module.exports.requireScope = requireScope;

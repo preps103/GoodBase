@@ -22,6 +22,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   const client = new GoodSpeechClient({ baseUrl: "https://base.example", accessToken: "test-token", fetch });
 
   await client.capabilities();
+  await client.usagePreferences();
+  await client.updateUsagePreferences({ requestBudget: 500, characterBudget: 100000, warningPercent: 75 });
   await client.createDesignedVoice({ name: "Calm", prompt: "A calm narrator" });
   const audio = await client.synthesize({ text: "Hello" });
   const stream = await client.stream({ text: "Hello" });
@@ -45,6 +47,8 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   assert.ok(requests.every((entry) => entry.options.headers?.Authorization === "Bearer test-token"));
   assert.deepEqual(requests.map((entry) => new URL(entry.url).pathname), [
     "/api/goodspeech/v1/capabilities",
+    "/api/goodspeech/v1/usage/preferences",
+    "/api/goodspeech/v1/usage/preferences",
     "/api/goodspeech/v1/voices/design",
     "/api/goodspeech/v1/speech",
     "/api/goodspeech/v1/speech/stream",
@@ -78,6 +82,22 @@ test("GoodSpeech SDK verifies signed webhook bodies with timestamp replay protec
   assert.equal(verifyGoodSpeechWebhook({ payload, signature, timestamp, secret, now: (timestamp + 301) * 1_000 }), false);
 });
 
+test("GoodSpeech JavaScript SDK sends a scoped API key without browser session credentials", async () => {
+  const requests = [];
+  const client = new GoodSpeechClient({
+    baseUrl: "https://base.example",
+    apiKey: "gos_live_test_key",
+    fetch: async (url, options = {}) => {
+      requests.push({ url, options });
+      return response(JSON.stringify({ success: true, data: {} }), { headers: { "content-type": "application/json" } });
+    },
+  });
+  await client.capabilities();
+  await client.transcriptionHealth();
+  assert.ok(requests.every((entry) => entry.options.headers["X-Goodbase-API-Key"] === "gos_live_test_key"));
+  assert.ok(requests.every((entry) => entry.options.headers.Authorization === undefined));
+});
+
 test("GoodSpeech Python SDK ships audio, agent, voice, and webhook helpers", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "sdks", "python", "goodbase", "goodspeech.py"), "utf8");
   assert.match(source, /class GoodSpeechClient/);
@@ -87,6 +107,8 @@ test("GoodSpeech Python SDK ships audio, agent, voice, and webhook helpers", () 
   assert.match(source, /def create_webhook/);
   assert.match(source, /def test_webhook/);
   assert.match(source, /def update_privacy_settings/);
+  assert.match(source, /def usage_preferences/);
+  assert.match(source, /def update_usage_preferences/);
   assert.match(source, /def quality_summary/);
   assert.match(source, /def create_studio_job/);
   assert.match(source, /def cancel_studio_job/);

@@ -14,15 +14,18 @@ from .client import GoodbaseError
 
 
 class GoodSpeechClient:
-    def __init__(self, url="https://base.goodos.app", access_token=None, timeout=60):
+    def __init__(self, url="https://base.goodos.app", access_token=None, api_key=None, timeout=60):
         self.url = url.rstrip("/")
         self.access_token = access_token
+        self.api_key = api_key
         self.timeout = timeout
 
     def _headers(self, accept="application/json"):
         headers = {"Accept": accept}
         if self.access_token:
             headers["Authorization"] = "Bearer " + self.access_token
+        if self.api_key:
+            headers["X-Goodbase-API-Key"] = self.api_key
         return headers
 
     def request(self, path, method="GET", body=None, extra_headers=None):
@@ -48,6 +51,12 @@ class GoodSpeechClient:
 
     def usage(self):
         return self.request("/usage")
+
+    def usage_preferences(self):
+        return self.request("/usage/preferences")
+
+    def update_usage_preferences(self, payload):
+        return self.request("/usage/preferences", "PATCH", payload)
 
     def voices(self):
         return self.request("/voices/")

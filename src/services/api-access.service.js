@@ -18,6 +18,7 @@ const READ_ONLY_SCOPES = [
   "read:db",
   "read:realtime",
   "subscribe:realtime",
+  "read:goodspeech",
 ];
 
 const AVAILABLE_SCOPES = [
@@ -97,6 +98,20 @@ const AVAILABLE_SCOPES = [
     description:
       "Subscribe to permitted realtime streams.",
     category: "Realtime",
+  },
+  {
+    id: "read:goodspeech",
+    label: "Read GoodSpeech",
+    description:
+      "Read GoodSpeech capabilities, usage, voices, and job status.",
+    category: "GoodSpeech",
+  },
+  {
+    id: "write:goodspeech",
+    label: "Create with GoodSpeech",
+    description:
+      "Generate speech, submit transcription, and create GoodSpeech jobs.",
+    category: "GoodSpeech",
   },
   {
     id: "execute:functions",
