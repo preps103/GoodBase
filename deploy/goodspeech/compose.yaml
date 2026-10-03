@@ -48,6 +48,7 @@ services:
       CHATTERBOX_CPU_THREADS: ${CHATTERBOX_CPU_THREADS:-3}
       HF_HOME: /var/lib/chatterbox/models
       HF_HUB_DISABLE_TELEMETRY: "1"
+      NUMBA_CACHE_DIR: /tmp/numba
     volumes:
       - chatterbox_models:/var/lib/chatterbox/models
     tmpfs:

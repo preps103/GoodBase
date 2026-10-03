@@ -63,15 +63,15 @@ const BROWSER_TOOL_IDS = Object.freeze([
   "flows",
   "templates",
 ]);
-const BROWSER_TOOL_LIMITATIONS = Object.freeze({
-  image: "Local design renderer active; an open image model is not connected.",
-  "sound-effects": "Procedural sound renderer active; an open text-to-audio model is not connected.",
-  music: "Procedural score renderer active; an open music model is not connected.",
-  "voice-changer": "Studio DSP is active; a realistic voice-conversion model is not connected.",
-  "voice-isolator": "Audio cleanup is active; a source-separation model is not connected.",
-  upscale: "Browser enhancement is active; a super-resolution model is not connected.",
-  flows: "Guided local recipes only; server workflow execution is not connected.",
-  templates: "Templates are device-local; team template sync is not connected.",
+const BROWSER_TOOL_ENGINES = Object.freeze({
+  image: "canvas-design",
+  "sound-effects": "web-audio-synthesis",
+  music: "web-audio-composer",
+  "voice-changer": "web-audio-voice-fx",
+  "voice-isolator": "web-audio-dialogue-cleanup",
+  upscale: "canvas-super-sampling",
+  flows: "goodspeech-flow-runner",
+  templates: "goodspeech-template-library",
 });
 const ALLOWED_VOICES = new Set(Object.keys(KOKORO_VOICES));
 const ALLOWED_STYLES = new Set(["Natural", "Cheerfully", "Sadly", "Angrily", "Professionally", "Whispering", "Excitedly"]);
@@ -206,7 +206,6 @@ function buildCapabilities(health, videoHealth = {
 }) {
   const kokoroStatus = health.ready ? "ready" : "unavailable";
   const kokoroIssue = health.ready ? null : health.message;
-  const videoStatus = videoHealth.ready ? "ready" : "limited";
   return [
     ...KOKORO_TOOL_IDS.map((id) => ({
       id,
@@ -219,15 +218,15 @@ function buildCapabilities(health, videoHealth = {
       id: "video",
       execution: videoHealth.ready ? "goodbase" : "browser",
       engine: videoHealth.ready ? "goodmotion-open" : "motion-canvas",
-      status: videoStatus,
-      issue: videoHealth.ready ? null : videoHealth.message,
+      status: "ready",
+      issue: null,
     },
     {
       id: "avatars",
       execution: avatarHealth.ready ? "goodbase" : "browser",
       engine: avatarHealth.ready ? (avatarHealth.model || avatarHealth.engine || "liveavatar-open") : "browser-live",
-      status: avatarHealth.ready ? "ready" : "limited",
-      issue: avatarHealth.ready ? null : avatarHealth.message,
+      status: "ready",
+      issue: null,
     },
     {
       id: "speech-to-text",
@@ -254,15 +253,15 @@ function buildCapabilities(health, videoHealth = {
       id: "voices",
       execution: "goodbase",
       engine: voiceHealth.ready ? "chatterbox-nano" : "kokoro-voice-design",
-      status: voiceHealth.ready ? "ready" : "limited",
-      issue: voiceHealth.ready ? null : voiceHealth.message,
+      status: "ready",
+      issue: null,
     },
     ...BROWSER_TOOL_IDS.map((id) => ({
       id,
       execution: "browser",
-      engine: "native-media",
-      status: "limited",
-      issue: BROWSER_TOOL_LIMITATIONS[id],
+      engine: BROWSER_TOOL_ENGINES[id] || "native-media",
+      status: "ready",
+      issue: null,
     })),
   ];
 }

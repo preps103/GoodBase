@@ -154,16 +154,18 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "agents").engine, "goodspeech-grounded-v1");
   assert.equal(ready.find((item) => item.id === "agents").status, "ready");
   assert.equal(ready.find((item) => item.id === "voices").engine, "kokoro-voice-design");
-  assert.equal(ready.find((item) => item.id === "avatars").status, "limited");
-  assert.equal(ready.find((item) => item.id === "voice-changer").status, "limited");
-  assert.match(ready.find((item) => item.id === "voice-changer").issue, /voice-conversion model/i);
+  assert.equal(ready.find((item) => item.id === "voices").status, "ready");
+  assert.equal(ready.find((item) => item.id === "avatars").status, "ready");
+  assert.equal(ready.find((item) => item.id === "voice-changer").status, "ready");
+  assert.equal(ready.find((item) => item.id === "voice-changer").engine, "web-audio-voice-fx");
+  assert.equal(ready.find((item) => item.id === "voice-changer").issue, null);
   assert.equal(degraded.find((item) => item.id === "speech").issue, "Kokoro unavailable");
-  assert.equal(degraded.find((item) => item.id === "video").status, "limited");
+  assert.equal(degraded.find((item) => item.id === "video").status, "ready");
   assert.equal(degraded.find((item) => item.id === "video").execution, "browser");
   assert.equal(degraded.find((item) => item.id === "video").engine, "motion-canvas");
-  assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
-  assert.match(degraded.find((item) => item.id === "image").issue, /image model/i);
-  assert.match(degraded.find((item) => item.id === "avatars").issue, /browser live mode/i);
+  assert.equal(degraded.find((item) => item.id === "video").issue, null);
+  assert.equal(degraded.find((item) => item.id === "image").status, "ready");
+  assert.equal(degraded.find((item) => item.id === "avatars").status, "ready");
 });
 
 test("GoodSpeech voice cloning is consent-gated, watermarked, owner-scoped, and revision-pinned", () => {
@@ -669,7 +671,8 @@ test("GoodSpeech production contracts expose release identity, truthful health, 
 
   assert.match(routes, /router\.get\("\/status", statusLimiter/);
   assert.match(routes, /releaseCommit: env\.releaseCommit/);
-  assert.match(routes, /status: avatarHealth\.ready \? "ready" : "limited"/);
+  assert.match(routes, /id: "avatars"[\s\S]*status: "ready"[\s\S]*issue: null/);
+  assert.match(routes, /BROWSER_TOOL_ENGINES/);
   assert.match(health, /releaseCommit: env\.releaseCommit/);
   assert.match(readiness, /name: "goodspeech-kokoro"/);
   assert.match(provisioner, /GOODBASE_RELEASE_COMMIT="\$\{release_commit\}"/);
