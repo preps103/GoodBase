@@ -35,5 +35,41 @@ services:
       start_period: 180s
       retries: 5
 
+  chatterbox-voice:
+    build:
+      context: ../../services/chatterbox-voice
+    image: goodos/chatterbox-voice:0.1.0
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8881:8881"
+    environment:
+      CHATTERBOX_TTS_TOKEN: ${CHATTERBOX_TTS_TOKEN:?CHATTERBOX_TTS_TOKEN is required}
+      CHATTERBOX_CPU_THREADS: ${CHATTERBOX_CPU_THREADS:-3}
+      HF_HOME: /var/lib/chatterbox/models
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - chatterbox_models:/var/lib/chatterbox/models
+    tmpfs:
+      - /tmp:rw,exec,nosuid,nodev,size=256m,mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 6g
+    cpus: "3.0"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8881/health/ready', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      start_period: 900s
+      retries: 5
+
 volumes:
   kokoro_models:
+  chatterbox_models:

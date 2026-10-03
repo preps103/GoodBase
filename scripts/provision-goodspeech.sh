@@ -53,6 +53,9 @@ if [[ ! -f "${GOODSPEECH_ENV_FILE}" ]]; then
     echo "KOKORO_TTS_URL=http://127.0.0.1:8880"
     echo "KOKORO_TTS_TOKEN=${token}"
     echo "KOKORO_CONCURRENCY=1"
+    echo "CHATTERBOX_TTS_URL=http://127.0.0.1:8881"
+    echo "CHATTERBOX_TTS_TOKEN=$(openssl rand -hex 32)"
+    echo "CHATTERBOX_CPU_THREADS=3"
   } > "${GOODSPEECH_ENV_FILE}"
   unset token
 else
@@ -61,6 +64,9 @@ else
 fi
 
 ensure_env_value "GOODSPEECH_REQUIRED" "true"
+ensure_env_value "CHATTERBOX_TTS_URL" "http://127.0.0.1:8881"
+ensure_env_value "CHATTERBOX_TTS_TOKEN" "$(openssl rand -hex 32)"
+ensure_env_value "CHATTERBOX_CPU_THREADS" "3"
 ensure_env_value "GOODMOTION_VIDEO_URL" ""
 ensure_env_value "GOODMOTION_VIDEO_TOKEN" ""
 ensure_env_value "GOODMOTION_JOB_SIGNING_SECRET" ""
@@ -93,6 +99,8 @@ goodmotion_token="$(read_env_value GOODMOTION_VIDEO_TOKEN)"
 goodmotion_signing_secret="$(read_env_value GOODMOTION_JOB_SIGNING_SECRET)"
 goodavatar_url="$(read_env_value GOODAVATAR_LIVE_URL)"
 goodavatar_token="$(read_env_value GOODAVATAR_LIVE_TOKEN)"
+chatterbox_url="$(read_env_value CHATTERBOX_TTS_URL)"
+chatterbox_token="$(read_env_value CHATTERBOX_TTS_TOKEN)"
 release_commit="$(git -C "${GOODBASE_ROOT}" rev-parse HEAD)"
 
 if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
@@ -163,6 +171,25 @@ if [[ "${ready}" -ne 1 ]]; then
   exit 1
 fi
 
+clone_ready=0
+for _attempt in $(seq 1 360); do
+  if curl --fail --silent --show-error --max-time 5 \
+    http://127.0.0.1:8881/health/ready >/dev/null; then
+    clone_ready=1
+    break
+  fi
+  sleep 5
+done
+
+if [[ "${clone_ready}" -ne 1 ]]; then
+  docker compose \
+    --env-file "${GOODSPEECH_ENV_FILE}" \
+    -f "${GOODBASE_ROOT}/deploy/goodspeech/compose.yaml" \
+    logs --tail 100 chatterbox-voice >&2 || true
+  echo "Chatterbox Nano did not become ready before the provisioning timeout." >&2
+  exit 1
+fi
+
 if command -v pm2 >/dev/null 2>&1; then
   restarted=0
   for pm2_runtime in ${GOODBASE_PM2_RUNTIMES}; do
@@ -187,6 +214,8 @@ if command -v pm2 >/dev/null 2>&1; then
             PM2_HOME="${pm2_home}" \
             KOKORO_TTS_URL="${kokoro_url}" \
             KOKORO_TTS_TOKEN="${kokoro_token}" \
+            CHATTERBOX_TTS_URL="${chatterbox_url}" \
+            CHATTERBOX_TTS_TOKEN="${chatterbox_token}" \
             GOODSPEECH_REQUIRED="${goodspeech_required}" \
             GOODBASE_RELEASE_COMMIT="${release_commit}" \
             GOODMOTION_VIDEO_URL="${goodmotion_url}" \
@@ -215,6 +244,7 @@ if command -v pm2 >/dev/null 2>&1; then
 fi
 
 echo "GoodSpeech Kokoro is ready on the Base loopback interface at release ${release_commit}."
+echo "GoodSpeech consent-gated Chatterbox Nano voice cloning is ready on the Base loopback interface."
 if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
   echo "GoodMotion open video is ready on the Base loopback interface."
 fi

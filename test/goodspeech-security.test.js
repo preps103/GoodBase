@@ -28,6 +28,7 @@ const collaborationRoutes = require("../src/routes/goodspeech-collaboration.rout
 const libraryService = require("../src/services/goodspeech-library.service");
 const usageService = require("../src/services/goodspeech-usage.service");
 const agentService = require("../src/services/goodspeech-agent.service");
+const voiceService = require("../src/services/goodspeech-voice.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -142,7 +143,7 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
     { ready: false, message: "GPU worker unavailable" },
   );
 
-  assert.equal(ready.length, 17);
+  assert.equal(ready.length, 18);
   assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "video").engine, "goodmotion-open");
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
@@ -152,6 +153,7 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "assets").status, "ready");
   assert.equal(ready.find((item) => item.id === "agents").engine, "goodspeech-grounded-v1");
   assert.equal(ready.find((item) => item.id === "agents").status, "ready");
+  assert.equal(ready.find((item) => item.id === "voices").engine, "kokoro-voice-design");
   assert.equal(ready.find((item) => item.id === "avatars").status, "limited");
   assert.equal(ready.find((item) => item.id === "voice-changer").status, "limited");
   assert.match(ready.find((item) => item.id === "voice-changer").issue, /voice-conversion model/i);
@@ -162,6 +164,35 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(degraded.find((item) => item.id === "video").issue, "GPU worker unavailable");
   assert.match(degraded.find((item) => item.id === "image").issue, /image model/i);
   assert.match(degraded.find((item) => item.id === "avatars").issue, /browser live mode/i);
+});
+
+test("GoodSpeech voice cloning is consent-gated, watermarked, owner-scoped, and revision-pinned", () => {
+  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "20261003_goodspeech_voices.sql"), "utf8");
+  const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech-voice.routes.js"), "utf8");
+  const index = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "index.js"), "utf8");
+  const runtime = fs.readFileSync(path.join(__dirname, "..", "src", "runtime", "goodspeech-migrations.js"), "utf8");
+  const worker = fs.readFileSync(path.join(__dirname, "..", "services", "chatterbox-voice", "app", "main.py"), "utf8");
+  for (const table of ["goodspeech_voice_profiles", "goodspeech_voice_events"]) {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(migration, /owner_user_id UUID NOT NULL REFERENCES users\(id\)/);
+  assert.match(migration, /identity_attested BOOLEAN/);
+  assert.match(migration, /consent_revoked_at TIMESTAMPTZ/);
+  assert.match(routes, /authRequired, tenantContext, requireGoodSpeechAccess/);
+  assert.match(routes, /upload\.single\("reference"\)/);
+  assert.match(routes, /goodspeech\.voice\.enroll/);
+  assert.match(routes, /goodspeech\.voice\.revoke/);
+  assert.match(index, /\/api\/goodspeech\/v1\/voices/);
+  assert.match(runtime, /apply-goodspeech-voices-migration\.js/);
+  assert.equal(voiceService.CONSENT_STATEMENT, "I consent to create a GoodSpeech voice model of my own voice.");
+  assert.equal(voiceService.CLONE_MODEL, "ResembleAI/chatterbox-nano");
+  assert.equal(voiceService.CLONE_MODEL_REVISION, "71ccd1d0081b430592cea481f4307e764e07bc64");
+  assert.equal(voiceService._internal.selectDesignedVoice("A deep cinematic baritone"), "Charon");
+  assert.equal(voiceService._internal.selectDesignedVoice("A warm empathetic guide"), "Amara");
+  assert.match(worker, /PerthImplicitWatermarker|watermark/);
+  assert.match(worker, /revision=MODEL_REVISION/);
+  assert.match(worker, /audio_prompt_path/);
+  assert.match(worker, /5\.5 and 30 seconds/);
 });
 
 test("GoodSpeech agents validate configuration and restrict built-in tools", () => {

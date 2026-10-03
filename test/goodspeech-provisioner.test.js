@@ -39,6 +39,14 @@ test("GoodSpeech provisioner injects the private Kokoro settings into Base", () 
   );
 });
 
+test("GoodSpeech provisioner verifies and injects the private cloning worker", () => {
+  assert.match(provisioner, /CHATTERBOX_TTS_URL/);
+  assert.match(provisioner, /CHATTERBOX_TTS_TOKEN/);
+  assert.match(provisioner, /http:\/\/127\.0\.0\.1:8881\/health\/ready/);
+  assert.match(provisioner, /Chatterbox Nano did not become ready/);
+  assert.match(provisioner, /CHATTERBOX_TTS_URL="\$\{chatterbox_url\}"/);
+});
+
 test("GoodSpeech provisioner discovers both user and root PM2 runtimes", () => {
   assert.match(
     provisioner,
