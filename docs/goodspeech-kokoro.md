@@ -4,7 +4,11 @@ GoodSpeech uses the Apache-2.0 licensed `hexgrad/Kokoro-82M` model through a pri
 
 `POST https://base.goodos.app/api/goodspeech/v1/speech`
 
-GoodBase authenticates the user, validates and rate-limits the request, calls the loopback-only Kokoro service, records audit metadata, and returns transient WAV audio. The browser never receives the internal service token and cannot call Kokoro directly.
+The current web client prefers sentence-level PCM streaming through:
+
+`POST https://base.goodos.app/api/goodspeech/v1/speech/stream`
+
+GoodBase authenticates and entitlement-checks the user, validates and rate-limits the request, reserves the owner's monthly allowance, calls the loopback-only Kokoro service, records audit and metering metadata, and returns either transient WAV audio or bounded 24 kHz PCM chunks. Failed generations release their quota reservation. The browser never receives the internal service token and cannot call Kokoro directly.
 
 Authenticated clients also read `GET /api/goodspeech/v1/capabilities`. That
 contract reports which application tools use GoodBase/Kokoro and which use a
@@ -19,6 +23,16 @@ With `GOODSPEECH_REQUIRED=true`, Kokoro also participates in the general
 
 GoodSpeech exposes nine distinct personas backed by nine real Kokoro voices:
 Kore, Puck, Charon, Fenrir, Zephyr, Amara, Celeste, Bennett, and Ellis.
+The API and web app support American English, British English, Spanish, French,
+Hindi, Italian, and Brazilian Portuguese using language-matched Kokoro voice
+packs while reusing the loaded model weights.
+
+Authenticated users can inspect their current UTC period, successful and failed
+requests, generated characters, audio bytes, average latency, enforced limits,
+and remaining allowance through `GET /api/goodspeech/v1/usage`. Defaults are
+1,000 successful requests and 200,000 characters per month and can be changed
+with `GOODSPEECH_MONTHLY_REQUEST_LIMIT` and
+`GOODSPEECH_MONTHLY_CHARACTER_LIMIT`.
 
 ## Production configuration
 
@@ -52,6 +66,7 @@ when a server uses different service accounts.
 - GoodBase-to-Kokoro calls require a constant-time-checked bearer token of at least 32 characters.
 - Containers run as an unprivileged user with all Linux capabilities removed, a read-only root filesystem, and a bounded temporary filesystem.
 - Request text is limited to 2,000 characters and generated audio is limited to 24 MiB at the GoodBase boundary.
+- Monthly request and character limits are owner-scoped and updated under a database row lock to avoid concurrent over-consumption.
 - The model cache is persistent so releases and restarts do not repeatedly download weights.
 - GoodMotion reference inputs are deleted after processing and generated outputs expire according to `GOODMOTION_RETENTION_SECONDS`.
 - Voice cloning is intentionally unavailable. Kokoro does not clone voices, and GoodSpeech must not imply that a stock voice is a user-provided voice.

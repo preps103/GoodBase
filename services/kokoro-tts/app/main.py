@@ -7,13 +7,14 @@ import io
 import logging
 import os
 import secrets
+import threading
 import wave
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from kokoro import KPipeline
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,10 +33,30 @@ ALLOWED_VOICES = frozenset({
     "am_onyx",
     "am_puck",
     "bm_george",
+    "bf_emma",
+    "ef_dora",
+    "em_alex",
+    "ff_siwis",
+    "hf_alpha",
+    "hm_omega",
+    "if_sara",
+    "im_nicola",
+    "pf_dora",
+    "pm_alex",
 })
+LANGUAGES = {
+    "en-us": {"code": "a", "voices": frozenset({"af_bella", "af_heart", "af_kore", "af_sky", "am_fenrir", "am_michael", "am_onyx", "am_puck", "bm_george"})},
+    "en-gb": {"code": "b", "voices": frozenset({"bf_emma", "bm_george"})},
+    "es": {"code": "e", "voices": frozenset({"ef_dora", "em_alex"})},
+    "fr-fr": {"code": "f", "voices": frozenset({"ff_siwis"})},
+    "hi": {"code": "h", "voices": frozenset({"hf_alpha", "hm_omega"})},
+    "it": {"code": "i", "voices": frozenset({"if_sara", "im_nicola"})},
+    "pt-br": {"code": "p", "voices": frozenset({"pf_dora", "pm_alex"})},
+}
 
 pipeline: KPipeline | None = None
-generation_slots = asyncio.Semaphore(max(1, int(os.getenv("KOKORO_CONCURRENCY", "1"))))
+pipelines: dict[str, KPipeline] = {}
+generation_slots = threading.BoundedSemaphore(max(1, int(os.getenv("KOKORO_CONCURRENCY", "1"))))
 
 
 class SpeechRequest(BaseModel):
@@ -44,6 +65,7 @@ class SpeechRequest(BaseModel):
     model: str = MODEL_ID
     input: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
     voice: str
+    language: str = "en-us"
     speed: float = Field(default=1, ge=0.8, le=1.2)
     response_format: str = "wav"
 
@@ -69,6 +91,18 @@ def load_pipeline() -> KPipeline:
     return KPipeline(lang_code="a", repo_id=MODEL_ID)
 
 
+def pipeline_for(language: str) -> KPipeline:
+    if pipeline is None:
+        raise RuntimeError("Kokoro is not ready")
+    config = LANGUAGES.get(language)
+    if config is None:
+        raise ValueError("Unsupported language")
+    code = config["code"]
+    if code not in pipelines:
+        pipelines[code] = KPipeline(lang_code=code, repo_id=MODEL_ID, model=pipeline.model)
+    return pipelines[code]
+
+
 def wav_bytes(chunks: list[np.ndarray]) -> bytes:
     if not chunks:
         raise RuntimeError("Kokoro returned no audio")
@@ -84,29 +118,58 @@ def wav_bytes(chunks: list[np.ndarray]) -> bytes:
     return output.getvalue()
 
 
+def pcm_bytes(audio: np.ndarray) -> bytes:
+    normalized = np.nan_to_num(np.asarray(audio, dtype=np.float32), nan=0.0, posinf=1.0, neginf=-1.0)
+    return (np.clip(normalized, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+
+
 def synthesize(request: SpeechRequest) -> bytes:
     if pipeline is None:
         raise RuntimeError("Kokoro is not ready")
-    chunks = [
-        audio
-        for _, _, audio in pipeline(
+    with generation_slots:
+        selected_pipeline = pipeline_for(request.language)
+        chunks = [
+            audio
+            for _, _, audio in selected_pipeline(
+                request.input.strip(),
+                voice=request.voice,
+                speed=request.speed,
+                split_pattern=r"(?<=[.!?])\s+|\n+",
+            )
+        ]
+    return wav_bytes(chunks)
+
+
+def synthesize_pcm_stream(request: SpeechRequest):
+    if pipeline is None:
+        raise RuntimeError("Kokoro is not ready")
+    with generation_slots:
+        selected_pipeline = pipeline_for(request.language)
+        produced = False
+        for _, _, audio in selected_pipeline(
             request.input.strip(),
             voice=request.voice,
             speed=request.speed,
-            split_pattern=r"\n+",
-        )
-    ]
-    return wav_bytes(chunks)
+            split_pattern=r"(?<=[.!?])\s+|\n+",
+        ):
+            chunk = pcm_bytes(audio)
+            if chunk:
+                produced = True
+                yield chunk
+        if not produced:
+            raise RuntimeError("Kokoro returned no audio")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global pipeline
+    global pipeline, pipelines
     configured_token()
     pipeline = await asyncio.to_thread(load_pipeline)
+    pipelines = {"a": pipeline}
     LOGGER.info("%s ready", MODEL_ID)
     yield
     pipeline = None
+    pipelines = {}
 
 
 app = FastAPI(
@@ -132,6 +195,7 @@ async def ready() -> dict[str, str]:
         "status": "ready",
         "model": MODEL_ID,
         "modelSha256": MODEL_SHA256,
+        "languages": sorted(LANGUAGES),
     }
 
 
@@ -140,7 +204,15 @@ async def voices(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, list[str]]:
     authorize(authorization)
-    return {"voices": sorted(ALLOWED_VOICES)}
+    return {"voices": sorted(ALLOWED_VOICES), "languages": sorted(LANGUAGES)}
+
+
+def validate_language_voice(request: SpeechRequest) -> None:
+    config = LANGUAGES.get(request.language)
+    if config is None:
+        raise HTTPException(status_code=422, detail="Unsupported language")
+    if request.voice not in config["voices"]:
+        raise HTTPException(status_code=422, detail="Voice does not support the requested language")
 
 
 @app.post("/v1/audio/speech")
@@ -153,12 +225,12 @@ async def speech(
         raise HTTPException(status_code=422, detail="Unsupported model")
     if request.voice not in ALLOWED_VOICES:
         raise HTTPException(status_code=422, detail="Unsupported voice")
+    validate_language_voice(request)
     if request.response_format != "wav":
         raise HTTPException(status_code=422, detail="Unsupported response format")
 
     try:
-        async with generation_slots:
-            audio = await asyncio.to_thread(synthesize, request)
+        audio = await asyncio.to_thread(synthesize, request)
     except HTTPException:
         raise
     except Exception:
@@ -171,6 +243,32 @@ async def speech(
         headers={
             "Cache-Control": "no-store, max-age=0",
             "X-GoodSpeech-Model": MODEL_ID,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/v1/audio/speech/stream")
+async def speech_stream(
+    request: SpeechRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> StreamingResponse:
+    authorize(authorization)
+    if request.model != MODEL_ID:
+        raise HTTPException(status_code=422, detail="Unsupported model")
+    if request.voice not in ALLOWED_VOICES:
+        raise HTTPException(status_code=422, detail="Unsupported voice")
+    validate_language_voice(request)
+
+    return StreamingResponse(
+        synthesize_pcm_stream(request),
+        media_type="audio/pcm",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "X-GoodSpeech-Model": MODEL_ID,
+            "X-GoodSpeech-Audio-Format": "pcm_s16le",
+            "X-GoodSpeech-Sample-Rate": str(SAMPLE_RATE),
+            "X-GoodSpeech-Channels": "1",
             "X-Content-Type-Options": "nosniff",
         },
     )

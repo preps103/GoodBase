@@ -195,6 +195,11 @@
                   },
                   "contextualExpressiveness": {
                     "type": "boolean"
+                  },
+                  "language": {
+                    "type": "string",
+                    "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"],
+                    "default": "en-us"
                   }
                 }
               }
@@ -223,6 +228,63 @@
         }
       }
     },
+    "/api/goodspeech/v1/speech/stream": {
+      "post": {
+        "summary": "Stream synthesized speech as PCM",
+        "description": "Authenticated sentence-level PCM streaming through the private Kokoro worker. Usage is reserved before synthesis and metered only after successful delivery.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["text", "voice"],
+                "properties": {
+                  "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+                  "voice": { "type": "object" },
+                  "style": { "type": "string" },
+                  "tone": { "type": "string" },
+                  "intensity": { "type": "integer", "minimum": 0, "maximum": 100 },
+                  "contextualExpressiveness": { "type": "boolean" },
+                  "language": {
+                    "type": "string",
+                    "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"],
+                    "default": "en-us"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Little-endian signed 16-bit mono PCM stream at 24 kHz",
+            "content": { "audio/pcm": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "400": { "description": "Invalid input" },
+          "401": { "description": "Authentication required" },
+          "429": { "description": "Rate or monthly usage quota exceeded" },
+          "502": { "description": "Speech provider unavailable" },
+          "503": { "description": "Streaming provider is not configured" }
+        }
+      }
+    },
+    "/api/goodspeech/v1/usage": {
+      "get": {
+        "summary": "Read the signed-in user's GoodSpeech usage",
+        "description": "Returns the current UTC billing period, successful and failed synthesis counts, characters, audio bytes, latency, enforced limits, remaining allowance, and beta pricing status.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": {
+          "200": { "description": "Owner-scoped GoodSpeech usage snapshot" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "Tenant or application access denied" }
+        }
+      }
+    },
+
     "/api/goodspeech/v1/status": {
       "get": {
         "summary": "Check public GoodSpeech production readiness",

@@ -16,14 +16,17 @@ const {
   buildSystemReadiness,
   kokoroEndpoint,
   kokoroHealthEndpoint,
+  kokoroStreamEndpoint,
   configuredProvider,
   checkKokoroHealth,
   readAudioBytes,
+  KOKORO_LANGUAGES,
 } = require("../src/routes/goodspeech.routes");
 const videoService = require("../src/services/goodspeech-video.service");
 const avatarService = require("../src/services/goodspeech-avatar.service");
 const collaborationRoutes = require("../src/routes/goodspeech-collaboration.routes");
 const libraryService = require("../src/services/goodspeech-library.service");
+const usageService = require("../src/services/goodspeech-usage.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -87,6 +90,30 @@ test("GoodSpeech maps the public voice names to real Kokoro voices", () => {
   assert.match(workerSource, /@app\.get\("\/v1\/audio\/voices"\)/);
 });
 
+test("GoodSpeech maps seven supported languages to matching Kokoro voice packs", () => {
+  assert.deepEqual(Object.keys(KOKORO_LANGUAGES), ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"]);
+  const femaleSpanish = validatePayload({
+    text: "Hola, esta es una prueba.",
+    language: "es",
+    voice: { apiVoice: "Kore" },
+  }).value;
+  const maleHindi = validatePayload({
+    text: "यह एक परीक्षण है।",
+    language: "hi",
+    voice: { apiVoice: "Puck" },
+  }).value;
+  assert.equal(kokoroRequest(femaleSpanish).voice, "ef_dora");
+  assert.equal(kokoroRequest(femaleSpanish).body.language, "es");
+  assert.equal(kokoroRequest(maleHindi).voice, "hm_omega");
+  assert.equal(validatePayload({ text: "Fallback", language: "untrusted", voice: {} }).value.language, "en-us");
+
+  const worker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
+  for (const voice of ["bf_emma", "ef_dora", "em_alex", "ff_siwis", "hf_alpha", "hm_omega", "if_sara", "im_nicola", "pf_dora", "pm_alex"]) {
+    assert.match(worker, new RegExp(`"${voice}"`));
+  }
+  assert.match(worker, /KPipeline\(lang_code=code, repo_id=MODEL_ID, model=pipeline\.model\)/);
+});
+
 test("GoodSpeech constrains Kokoro speed derived from style controls", () => {
   const fast = validatePayload({
     text: "Fast",
@@ -118,6 +145,10 @@ test("GoodSpeech publishes a capability contract for every application tool", ()
   assert.equal(ready.find((item) => item.id === "speech").execution, "goodbase");
   assert.equal(ready.find((item) => item.id === "video").engine, "goodmotion-open");
   assert.equal(ready.find((item) => item.id === "voice-changer").execution, "browser");
+  assert.equal(ready.find((item) => item.id === "speech-to-text").engine, "whisper-small");
+  assert.equal(ready.find((item) => item.id === "speech-to-text").status, "ready");
+  assert.equal(ready.find((item) => item.id === "assets").execution, "goodbase");
+  assert.equal(ready.find((item) => item.id === "assets").status, "ready");
   assert.equal(ready.find((item) => item.id === "avatars").status, "limited");
   assert.equal(ready.find((item) => item.id === "voice-changer").status, "limited");
   assert.match(ready.find((item) => item.id === "voice-changer").issue, /voice-conversion model/i);
@@ -367,6 +398,55 @@ test("GoodSpeech reads provider audio as a bounded stream", async () => {
   assert.equal(audio.toString("ascii"), "RIFF");
 });
 
+test("GoodSpeech exposes bounded PCM streaming and owner-scoped monthly usage", () => {
+  const originalUrl = process.env.KOKORO_TTS_URL;
+  const originalRequests = process.env.GOODSPEECH_MONTHLY_REQUEST_LIMIT;
+  const originalCharacters = process.env.GOODSPEECH_MONTHLY_CHARACTER_LIMIT;
+  try {
+    process.env.KOKORO_TTS_URL = "http://127.0.0.1:8880";
+    process.env.GOODSPEECH_MONTHLY_REQUEST_LIMIT = "25";
+    process.env.GOODSPEECH_MONTHLY_CHARACTER_LIMIT = "5000";
+    assert.equal(kokoroStreamEndpoint(), "http://127.0.0.1:8880/v1/audio/speech/stream");
+    assert.deepEqual(usageService.limits(), { requests: 25, characters: 5000 });
+    assert.deepEqual(usageService.periodBounds(new Date("2026-10-03T12:00:00Z")), {
+      start: "2026-10-01",
+      end: "2026-11-01",
+    });
+    const snapshot = usageService.usageSnapshot({
+      period_start: "2026-10-01",
+      period_end: "2026-11-01",
+      request_count: 5,
+      successful_count: 4,
+      failed_count: 1,
+      text_characters: 1000,
+      audio_bytes: 4096,
+      latency_ms_total: 400,
+      request_limit: 25,
+      character_limit: 5000,
+    });
+    assert.equal(snapshot.remaining.requests, 20);
+    assert.equal(snapshot.remaining.characters, 4000);
+    assert.equal(snapshot.usage.averageLatencyMs, 100);
+    assert.equal(snapshot.pricing.status, "included_beta");
+  } finally {
+    if (originalUrl === undefined) delete process.env.KOKORO_TTS_URL; else process.env.KOKORO_TTS_URL = originalUrl;
+    if (originalRequests === undefined) delete process.env.GOODSPEECH_MONTHLY_REQUEST_LIMIT; else process.env.GOODSPEECH_MONTHLY_REQUEST_LIMIT = originalRequests;
+    if (originalCharacters === undefined) delete process.env.GOODSPEECH_MONTHLY_CHARACTER_LIMIT; else process.env.GOODSPEECH_MONTHLY_CHARACTER_LIMIT = originalCharacters;
+  }
+
+  const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech.routes.js"), "utf8");
+  const worker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
+  const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "20261003_goodspeech_usage.sql"), "utf8");
+  const runtime = fs.readFileSync(path.join(__dirname, "..", "src", "runtime", "goodspeech-migrations.js"), "utf8");
+  assert.match(routes, /router\.post\("\/speech\/stream", authRequired, tenantContext, requireGoodSpeechAccess, speechLimiter/);
+  assert.match(routes, /router\.get\("\/usage", authRequired, tenantContext, requireGoodSpeechAccess/);
+  assert.match(worker, /StreamingResponse/);
+  assert.match(worker, /audio\/pcm/);
+  assert.match(migration, /goodspeech_monthly_usage/);
+  assert.match(migration, /PRIMARY KEY \(organization_id, user_id, period_start\)/);
+  assert.match(runtime, /apply-goodspeech-usage-migration\.js/);
+});
+
 test("GoodSpeech collaboration is tenant-scoped and requires an active app entitlement", () => {
   const middleware = collaborationRoutes.requireGoodSpeechAccess;
   let advanced = false;
@@ -502,6 +582,8 @@ test("GoodSpeech production contracts expose release identity, truthful health, 
   assert.ok(openapi.paths["/api/goodspeech/v1/library/bootstrap"]);
   assert.ok(openapi.paths["/api/goodspeech/v1/library/assets"]);
   assert.ok(openapi.paths["/api/goodspeech/v1/library/history"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/speech/stream"]);
+  assert.ok(openapi.paths["/api/goodspeech/v1/usage"]);
   assert.match(videoWorker, /GOODMOTION_RETENTION_SECONDS/);
   assert.match(videoWorker, /cleanup_stale_jobs/);
 });

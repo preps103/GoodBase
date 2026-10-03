@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const MIGRATIONS = [
   "apply-goodspeech-collaboration-migration.js",
   "apply-goodspeech-library-migration.js",
+  "apply-goodspeech-usage-migration.js",
 ];
 
 function shouldRun() {

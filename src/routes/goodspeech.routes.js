@@ -1,12 +1,15 @@
 "use strict";
 
-const { Readable } = require("node:stream");
+const { Readable, Transform } = require("node:stream");
 const express = require("express");
 const { rateLimit } = require("express-rate-limit");
 const multer = require("multer");
 const env = require("../config/env");
 const authRequired = require("../middleware/authRequired");
+const tenantContext = require("../middleware/tenantContext");
 const { logAudit } = require("../services/audit.service");
+const usageService = require("../services/goodspeech-usage.service");
+const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes");
 const videoService = require("../services/goodspeech-video.service");
 const avatarService = require("../services/goodspeech-avatar.service");
 
@@ -27,6 +30,16 @@ const KOKORO_VOICES = Object.freeze({
   Bennett: "bm_george",
   Ellis: "am_michael",
 });
+const FEMALE_VOICES = new Set(["Kore", "Zephyr", "Amara", "Celeste"]);
+const KOKORO_LANGUAGES = Object.freeze({
+  "en-us": { label: "English (US)", female: "af_heart", male: "am_michael" },
+  "en-gb": { label: "English (UK)", female: "bf_emma", male: "bm_george" },
+  es: { label: "Spanish", female: "ef_dora", male: "em_alex" },
+  "fr-fr": { label: "French", female: "ff_siwis", male: "ff_siwis" },
+  hi: { label: "Hindi", female: "hf_alpha", male: "hm_omega" },
+  it: { label: "Italian", female: "if_sara", male: "im_nicola" },
+  "pt-br": { label: "Portuguese (Brazil)", female: "pf_dora", male: "pm_alex" },
+});
 const KOKORO_SPEED_BIAS = Object.freeze({
   Kore: 0.98,
   Puck: 1.01,
@@ -46,10 +59,8 @@ const BROWSER_TOOL_IDS = Object.freeze([
   "voice-changer",
   "voice-isolator",
   "upscale",
-  "speech-to-text",
   "flows",
   "templates",
-  "assets",
 ]);
 const BROWSER_TOOL_LIMITATIONS = Object.freeze({
   image: "Local design renderer active; an open image model is not connected.",
@@ -58,10 +69,8 @@ const BROWSER_TOOL_LIMITATIONS = Object.freeze({
   "voice-changer": "Studio DSP is active; a realistic voice-conversion model is not connected.",
   "voice-isolator": "Audio cleanup is active; a source-separation model is not connected.",
   upscale: "Browser enhancement is active; a super-resolution model is not connected.",
-  "speech-to-text": "Browser live transcription only; private audio-file transcription is not connected.",
   flows: "Guided local recipes only; server workflow execution is not connected.",
   templates: "Templates are device-local; team template sync is not connected.",
-  assets: "Assets are device-local; team cloud storage is not connected.",
 });
 const ALLOWED_VOICES = new Set(Object.keys(KOKORO_VOICES));
 const ALLOWED_STYLES = new Set(["Natural", "Cheerfully", "Sadly", "Angrily", "Professionally", "Whispering", "Excitedly"]);
@@ -150,6 +159,7 @@ function validatePayload(body = {}) {
     value: {
       text,
       apiVoice,
+      language: Object.hasOwn(KOKORO_LANGUAGES, body.language) ? body.language : "en-us",
       style: cleanEnum(body.style, ALLOWED_STYLES, "Natural"),
       tone: cleanEnum(body.tone, ALLOWED_TONES, "Standard"),
       intensity: Math.min(100, Math.max(0, Number.isFinite(body.intensity) ? Math.round(body.intensity) : 50)),
@@ -215,6 +225,20 @@ function buildCapabilities(health, videoHealth = {
       status: avatarHealth.ready ? "ready" : "limited",
       issue: avatarHealth.ready ? null : avatarHealth.message,
     },
+    {
+      id: "speech-to-text",
+      execution: "browser",
+      engine: "whisper-small",
+      status: "ready",
+      issue: null,
+    },
+    {
+      id: "assets",
+      execution: "goodbase",
+      engine: "storage-v2",
+      status: "ready",
+      issue: null,
+    },
     ...BROWSER_TOOL_IDS.map((id) => ({
       id,
       execution: "browser",
@@ -272,14 +296,28 @@ function kokoroHealthEndpoint() {
   }
 }
 
+function kokoroStreamEndpoint() {
+  const endpoint = kokoroEndpoint();
+  if (!endpoint) return null;
+  const url = new URL(endpoint);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/stream`;
+  return url.toString();
+}
+
 function kokoroRequest(input) {
+  const language = KOKORO_LANGUAGES[input.language] || KOKORO_LANGUAGES["en-us"];
+  const voice = input.language === "en-us"
+    ? (KOKORO_VOICES[input.apiVoice] || KOKORO_VOICES.Kore)
+    : (FEMALE_VOICES.has(input.apiVoice) ? language.female : language.male);
   return {
     model: KOKORO_MODEL,
-    voice: KOKORO_VOICES[input.apiVoice] || KOKORO_VOICES.Kore,
+    voice,
+    language: input.language,
     body: {
       model: KOKORO_MODEL,
       input: input.text,
-      voice: KOKORO_VOICES[input.apiVoice] || KOKORO_VOICES.Kore,
+      voice,
+      language: input.language,
       speed: kokoroSpeed(input),
       response_format: "wav",
     },
@@ -430,8 +468,26 @@ router.get("/capabilities", authRequired, async (_req, res) => {
       avatars: avatarHealth,
     },
     voices: Object.keys(KOKORO_VOICES),
+    languages: Object.entries(KOKORO_LANGUAGES).map(([id, item]) => ({ id, label: item.label })),
     capabilities: buildCapabilities(health, videoHealth, avatarHealth),
   });
+});
+
+router.get("/usage", authRequired, tenantContext, requireGoodSpeechAccess, async (req, res) => {
+  res.set("Cache-Control", "private, no-store, max-age=0");
+  try {
+    return res.json({
+      success: true,
+      data: await usageService.getUsage({ userId: req.user.id, context: req.tenantContext }),
+    });
+  } catch (error) {
+    console.error("[GoodSpeech usage] snapshot failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      code: "GOODSPEECH_USAGE_UNAVAILABLE",
+      message: "GoodSpeech usage is temporarily unavailable.",
+    });
+  }
 });
 
 function sendAvatarError(res, error) {
@@ -574,7 +630,7 @@ router.get("/video/jobs/:jobId/content", authRequired, async (req, res) => {
   }
 });
 
-router.post("/speech", authRequired, speechLimiter, async (req, res) => {
+router.post("/speech", authRequired, tenantContext, requireGoodSpeechAccess, speechLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store, max-age=0");
   res.set("Pragma", "no-cache");
 
@@ -597,6 +653,21 @@ router.post("/speech", authRequired, speechLimiter, async (req, res) => {
   }
 
   const request = kokoroRequest(validation.value);
+  let reservation;
+  try {
+    reservation = await usageService.reserveUsage({
+      userId: req.user.id,
+      context: req.tenantContext,
+      characters: validation.value.text.length,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      code: error.code || "GOODSPEECH_USAGE_UNAVAILABLE",
+      message: error.statusCode === 429 ? error.message : "GoodSpeech usage is temporarily unavailable.",
+      usage: error.statusCode === 429 ? { metric: error.metric, current: error.current, limit: error.limit } : undefined,
+    });
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
   const started = Date.now();
@@ -627,6 +698,14 @@ router.post("/speech", authRequired, speechLimiter, async (req, res) => {
       throw Object.assign(new Error("Speech provider returned oversized audio."), { status: 502 });
     }
     const audioBytes = await readAudioBytes(response);
+    const usage = await usageService.finishUsage({
+      userId: req.user.id,
+      reservation,
+      audioBytes: audioBytes.length,
+      latencyMs: Date.now() - started,
+      success: true,
+      request: req,
+    });
 
     logAudit({
       userId: req.user.id,
@@ -637,6 +716,7 @@ router.post("/speech", authRequired, speechLimiter, async (req, res) => {
         model: request.model,
         provider: "kokoro",
         voice: request.voice,
+        language: request.language,
         textLength: validation.value.text.length,
         durationMs: Date.now() - started,
       },
@@ -649,6 +729,7 @@ router.post("/speech", authRequired, speechLimiter, async (req, res) => {
         mimeType: contentType.startsWith("audio/") ? contentType.split(";")[0] : "audio/wav",
         sampleRate: 24000,
         channels: 1,
+        usage,
       },
     });
   } catch (error) {
@@ -657,6 +738,14 @@ router.post("/speech", authRequired, speechLimiter, async (req, res) => {
       status: error?.status || 0,
       timedOut,
       durationMs: Date.now() - started,
+    });
+    await usageService.finishUsage({
+      userId: req.user.id,
+      reservation,
+      audioBytes: 0,
+      latencyMs: Date.now() - started,
+      success: false,
+      request: req,
     });
     return res.status(timedOut ? 504 : 502).json({
       success: false,
@@ -670,6 +759,134 @@ router.post("/speech", authRequired, speechLimiter, async (req, res) => {
   }
 });
 
+router.post("/speech/stream", authRequired, tenantContext, requireGoodSpeechAccess, speechLimiter, async (req, res) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  res.set("Pragma", "no-cache");
+
+  const validation = validatePayload(req.body);
+  if (validation.error) {
+    return res.status(validation.status || 400).json({
+      success: false,
+      code: validation.code || "GOODSPEECH_INVALID_REQUEST",
+      message: validation.error,
+    });
+  }
+  const provider = configuredProvider();
+  const endpoint = kokoroStreamEndpoint();
+  if (!provider || !endpoint) {
+    return res.status(503).json({
+      success: false,
+      code: "GOODSPEECH_NOT_CONFIGURED",
+      message: "GoodSpeech's streaming engine is not configured.",
+    });
+  }
+
+  let reservation;
+  try {
+    reservation = await usageService.reserveUsage({
+      userId: req.user.id,
+      context: req.tenantContext,
+      characters: validation.value.text.length,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      code: error.code || "GOODSPEECH_USAGE_UNAVAILABLE",
+      message: error.statusCode === 429 ? error.message : "GoodSpeech usage is temporarily unavailable.",
+      usage: error.statusCode === 429 ? { metric: error.metric, current: error.current, limit: error.limit } : undefined,
+    });
+  }
+
+  const request = kokoroRequest(validation.value);
+  request.body.response_format = "pcm_s16le";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
+  const started = Date.now();
+  let completed = false;
+
+  try {
+    const upstream = await fetch(endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Accept: "audio/pcm",
+        Authorization: `Bearer ${provider.token}`,
+        "Content-Type": "application/json",
+        "X-GoodBase-Service": "GoodSpeech",
+      },
+      body: JSON.stringify(request.body),
+    });
+    if (!upstream.ok || !upstream.body) {
+      await upstream.arrayBuffer().catch(() => null);
+      throw Object.assign(new Error("Speech provider rejected the streaming request."), { status: upstream.status });
+    }
+    const contentType = String(upstream.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("audio/")) throw new Error("Speech provider returned an invalid streaming content type.");
+
+    let total = 0;
+    const bounded = new Transform({
+      transform(chunk, _encoding, callback) {
+        total += chunk.length;
+        if (total > MAX_AUDIO_BYTES) {
+          callback(Object.assign(new Error("Speech provider returned oversized audio."), { status: 502 }));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    res.status(200);
+    res.set("Content-Type", "audio/pcm");
+    res.set("X-GoodSpeech-Audio-Format", "pcm_s16le");
+    res.set("X-GoodSpeech-Sample-Rate", "24000");
+    res.set("X-GoodSpeech-Channels", "1");
+    res.set("X-GoodSpeech-First-Byte-Ms", String(Date.now() - started));
+    res.flushHeaders();
+
+    const complete = async (success) => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(timeout);
+      await usageService.finishUsage({
+        userId: req.user.id,
+        reservation,
+        audioBytes: total,
+        latencyMs: Date.now() - started,
+        success,
+        request: req,
+      });
+    };
+    bounded.once("end", () => void complete(true));
+    bounded.once("error", () => {
+      controller.abort();
+      void complete(false);
+      if (!res.destroyed) res.destroy();
+    });
+    res.once("close", () => {
+      if (!res.writableEnded) {
+        controller.abort();
+        void complete(false);
+      }
+    });
+    return Readable.fromWeb(upstream.body).pipe(bounded).pipe(res);
+  } catch (error) {
+    clearTimeout(timeout);
+    await usageService.finishUsage({
+      userId: req.user.id,
+      reservation,
+      audioBytes: 0,
+      latencyMs: Date.now() - started,
+      success: false,
+      request: req,
+    });
+    const timedOut = error?.name === "AbortError";
+    return res.status(timedOut ? 504 : 502).json({
+      success: false,
+      code: timedOut ? "GOODSPEECH_TIMEOUT" : "GOODSPEECH_PROVIDER_ERROR",
+      message: timedOut ? "Speech streaming timed out. Try again." : "Speech streaming is temporarily unavailable.",
+    });
+  }
+});
+
 module.exports = router;
 module.exports.validatePayload = validatePayload;
 module.exports.kokoroRequest = kokoroRequest;
@@ -678,6 +895,8 @@ module.exports.buildCapabilities = buildCapabilities;
 module.exports.buildSystemReadiness = buildSystemReadiness;
 module.exports.kokoroEndpoint = kokoroEndpoint;
 module.exports.kokoroHealthEndpoint = kokoroHealthEndpoint;
+module.exports.kokoroStreamEndpoint = kokoroStreamEndpoint;
 module.exports.configuredProvider = configuredProvider;
 module.exports.checkKokoroHealth = checkKokoroHealth;
 module.exports.readAudioBytes = readAudioBytes;
+module.exports.KOKORO_LANGUAGES = KOKORO_LANGUAGES;
