@@ -20,7 +20,8 @@ RUN pip install --no-cache-dir \
     && pip install --no-cache-dir --requirement requirements.txt \
     && pip install --no-cache-dir \
       https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl \
-    && python -c "import spacy; spacy.load('en_core_web_sm')"
+    && python -c "import spacy; spacy.load('en_core_web_sm')" \
+    && python -c "from transformers.models.albert.modeling_albert import AlbertModel; from kokoro import KPipeline"
 COPY --chown=kokoro:kokoro app ./app
 
 USER kokoro

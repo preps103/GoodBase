@@ -15,6 +15,10 @@ const requirements = fs.readFileSync(
   ),
   "utf8"
 );
+const kokoroDockerfile = fs.readFileSync(
+  path.join(__dirname, "..", "services", "kokoro-tts", "Dockerfile"),
+  "utf8"
+);
 const goodMotionRequirements = fs.readFileSync(
   path.join(
     __dirname,
@@ -31,9 +35,12 @@ const goodMotionCompose = fs.readFileSync(
 );
 
 test("Kokoro pins a Transformers-compatible Hugging Face Hub release", () => {
-  assert.match(requirements, /^transformers==5\.10\.0$/m);
+  assert.match(requirements, /^torch==2\.7\.1$/m);
+  assert.match(requirements, /^transformers==5\.5\.2$/m);
   assert.match(requirements, /^huggingface-hub==1\.5\.0$/m);
   assert.doesNotMatch(requirements, /^huggingface-hub==0\.33\.4$/m);
+  assert.match(kokoroDockerfile, /from transformers\.models\.albert\.modeling_albert import AlbertModel/);
+  assert.match(kokoroDockerfile, /from kokoro import KPipeline/);
 });
 
 test("GoodMotion pins scanner-cleared media and model dependencies", () => {
