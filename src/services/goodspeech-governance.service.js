@@ -101,6 +101,43 @@ async function purgeHistoryRows(rows, reason) {
   return purged;
 }
 
+async function purgeStudioRows(rows, reason) {
+  let studioParts = 0;
+  let studioMasters = 0;
+  for (const job of rows) {
+    const parts = await database.query(
+      `DELETE FROM goodspeech_studio_job_parts WHERE job_id=$1::uuid RETURNING storage_file_id`,
+      [job.id],
+    );
+    studioParts += parts.rowCount;
+    for (const part of parts.rows) {
+      await storage.softDeleteObject({ fileId: part.storage_file_id, actorId: job.owner_user_id, createdBy: job.owner_user_id, reason })
+        .catch((error) => console.error("[GoodSpeech privacy] Studio part cleanup failed:", error.message));
+    }
+    if (job.output_asset_id) {
+      const asset = await database.query(
+        `UPDATE goodspeech_assets SET deleted_at=COALESCE(deleted_at,NOW())
+         WHERE id=$1::uuid AND owner_user_id=$2::uuid RETURNING storage_file_id`,
+        [job.output_asset_id, job.owner_user_id],
+      );
+      if (asset.rows[0]) {
+        studioMasters += 1;
+        await storage.softDeleteObject({ fileId: asset.rows[0].storage_file_id, actorId: job.owner_user_id, createdBy: job.owner_user_id, reason })
+          .catch((error) => console.error("[GoodSpeech privacy] Studio master cleanup failed:", error.message));
+      }
+    }
+    await database.query(
+      `UPDATE goodspeech_studio_jobs SET
+         status=CASE WHEN status IN ('queued','retrying','processing') THEN 'cancelled' ELSE status END,
+         cancellation_requested=TRUE, clips_json='[]'::jsonb, output_asset_id=NULL,
+         locked_by=NULL, locked_until=NULL, completed_at=COALESCE(completed_at,NOW()), updated_at=NOW()
+       WHERE id=$1::uuid`,
+      [job.id],
+    );
+  }
+  return { studioJobs: rows.length, studioParts, studioMasters };
+}
+
 async function purgeUserContent({ context, userId }) {
   const current = scope(context);
   let purgedHistoryCount = 0;
@@ -135,7 +172,14 @@ async function purgeUserContent({ context, userId }) {
      WHERE organization_id=$1 AND owner_user_id=$2::uuid`,
     [current.organizationId, userId],
   );
-  return { histories: purgedHistoryCount, agentMessages: messages.rowCount, agentToolCalls: tools.rowCount };
+  const studio = await database.query(
+    `SELECT id, owner_user_id, output_asset_id FROM goodspeech_studio_jobs
+     WHERE organization_id=$1 AND owner_user_id=$2::uuid
+       AND (clips_json<>'[]'::jsonb OR output_asset_id IS NOT NULL OR status IN ('queued','retrying','processing'))`,
+    [current.organizationId, userId],
+  );
+  const studioResult = await purgeStudioRows(studio.rows, "GoodSpeech privacy purge");
+  return { histories: purgedHistoryCount, agentMessages: messages.rowCount, agentToolCalls: tools.rowCount, ...studioResult };
 }
 
 async function enforceSessionRetention({ sessionId, context, userId }) {
@@ -216,8 +260,19 @@ async function purgeExpiredContent(limit = 25, now = Date.now()) {
        AND (privacy.zero_retention=TRUE OR session.ended_at < NOW()-(privacy.agent_retention_days*INTERVAL '1 day'))
      RETURNING message.id`,
   );
-  const result = { histories: purgedHistory.length, agentMessages: agentMessages.rowCount, agentToolCalls: agentTools.rowCount };
-  return result.histories || result.agentMessages || result.agentToolCalls ? [result] : [];
+  const expiredStudio = await database.query(
+    `SELECT job.id, job.owner_user_id, job.output_asset_id
+     FROM goodspeech_studio_jobs job
+     JOIN goodspeech_privacy_settings privacy
+       ON privacy.organization_id=job.organization_id AND privacy.owner_user_id=job.owner_user_id
+     WHERE job.clips_json<>'[]'::jsonb
+       AND (privacy.zero_retention=TRUE OR COALESCE(job.completed_at,job.created_at) < NOW()-(privacy.generation_retention_days*INTERVAL '1 day'))
+     ORDER BY COALESCE(job.completed_at,job.created_at) ASC LIMIT $1`,
+    [boundedLimit],
+  );
+  const studioResult = await purgeStudioRows(expiredStudio.rows, "GoodSpeech retention policy");
+  const result = { histories: purgedHistory.length, agentMessages: agentMessages.rowCount, agentToolCalls: agentTools.rowCount, ...studioResult };
+  return Object.values(result).some((value) => Number(value) > 0) ? [result] : [];
 }
 
 async function qualitySummary({ context, userId }) {

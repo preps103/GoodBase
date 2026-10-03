@@ -11,6 +11,8 @@ const SUPPORTED_EVENTS = Object.freeze([
   "voice.revoked",
   "agent.session.completed",
   "agent.handoff.requested",
+  "studio.job.completed",
+  "studio.job.failed",
   "webhook.test",
 ]);
 const MAX_ATTEMPTS = 5;

@@ -35,6 +35,7 @@ test("GoodSpeech webhook secrets are encrypted at rest and identifiers and event
   assert.notEqual(encrypted, secret);
   assert.equal(webhookService.decryptSecret(encrypted), secret);
   assert.deepEqual(webhookService.normalizeEvents(["speech.completed", "speech.completed", "voice.created"]), ["speech.completed", "voice.created"]);
+  assert.deepEqual(webhookService.normalizeEvents(["studio.job.completed", "studio.job.failed"]), ["studio.job.completed", "studio.job.failed"]);
   assert.throws(() => webhookService.normalizeEvents(["unknown.event"]), /supported/);
   assert.equal(webhookService.normalizeWebhookId("1f07be72-2e66-4f2b-bc7d-83822e854c4a"), "1f07be72-2e66-4f2b-bc7d-83822e854c4a");
   assert.throws(() => webhookService.normalizeWebhookId("not-an-id"), /invalid/);

@@ -33,6 +33,10 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
   await client.deleteWebhook("hook-1");
   await client.updatePrivacySettings({ zeroRetention: true });
   await client.qualitySummary();
+  await client.createStudioJob({ projectName: "Launch", clips: [{ text: "Hello" }] }, "studio-test-001");
+  await client.getStudioJob("job-1");
+  await client.cancelStudioJob("job-1");
+  await client.retryStudioJob("job-1");
 
   assert.equal(audio.audio.byteLength, 4);
   assert.equal(stream.headers.get("content-type"), "application/octet-stream");
@@ -50,6 +54,10 @@ test("GoodSpeech JavaScript SDK exposes JSON, binary, streaming, voice, and agen
     "/api/goodspeech/v1/webhooks/hook-1",
     "/api/goodspeech/v1/governance/privacy",
     "/api/goodspeech/v1/governance/quality",
+    "/api/goodspeech/v1/studio/jobs",
+    "/api/goodspeech/v1/studio/jobs/job-1",
+    "/api/goodspeech/v1/studio/jobs/job-1/cancel",
+    "/api/goodspeech/v1/studio/jobs/job-1/retry",
   ]);
 });
 
@@ -73,6 +81,8 @@ test("GoodSpeech Python SDK ships audio, agent, voice, and webhook helpers", () 
   assert.match(source, /def test_webhook/);
   assert.match(source, /def update_privacy_settings/);
   assert.match(source, /def quality_summary/);
+  assert.match(source, /def create_studio_job/);
+  assert.match(source, /def cancel_studio_job/);
   assert.match(source, /def verify_goodspeech_webhook/);
   assert.match(source, /hmac\.compare_digest/);
 });

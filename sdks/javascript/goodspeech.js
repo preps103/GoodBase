@@ -95,6 +95,28 @@ class GoodSpeechClient {
 
   qualitySummary() { return this.request("/governance/quality"); }
 
+  listStudioJobs() { return this.request("/studio/jobs"); }
+
+  createStudioJob(payload, idempotencyKey = crypto.randomUUID()) {
+    return this.request("/studio/jobs", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: payload,
+    });
+  }
+
+  getStudioJob(jobId) {
+    return this.request(`/studio/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  cancelStudioJob(jobId) {
+    return this.request(`/studio/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: {} });
+  }
+
+  retryStudioJob(jobId) {
+    return this.request(`/studio/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST", body: {} });
+  }
+
   async synthesize(payload, options = {}) {
     const response = await this.fetch(joinUrl(this.baseUrl, `${API_PREFIX}/speech`), {
       method: "POST",

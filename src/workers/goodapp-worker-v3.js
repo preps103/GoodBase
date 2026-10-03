@@ -24,6 +24,8 @@ const goodSpeechWebhooks =
   require("../services/goodspeech-webhook.service");
 const goodSpeechGovernance =
   require("../services/goodspeech-governance.service");
+const goodSpeechStudio =
+  require("../services/goodspeech-studio.service");
 
 const pool =
   database.pool ||
@@ -448,6 +450,8 @@ async function tick() {
       await goodSpeechWebhooks.processDueDeliveries(5, workerId);
     const goodSpeechRetentionResults =
       await goodSpeechGovernance.purgeExpiredContent(25);
+    const goodSpeechStudioResults =
+      await goodSpeechStudio.processDueJobs(1, workerId);
 
     let legacyBatchProcessed = false;
 
@@ -473,6 +477,8 @@ async function tick() {
         goodSpeechWebhookResults.length,
       goodSpeechRetentionPoliciesProcessed:
         goodSpeechRetentionResults.length,
+      goodSpeechStudioJobsProcessed:
+        goodSpeechStudioResults.length,
       legacyBatchProcessed,
       lastTickAt:
         new Date().toISOString()
@@ -485,7 +491,8 @@ async function tick() {
         outboxResults.length +
         marketplaceMessageResults.length +
         goodSpeechWebhookResults.length +
-        goodSpeechRetentionResults.length,
+        goodSpeechRetentionResults.length +
+        goodSpeechStudioResults.length,
     });
 
     if (
@@ -493,6 +500,7 @@ async function tick() {
       marketplaceMessageResults.length > 0 ||
       goodSpeechWebhookResults.length > 0 ||
       goodSpeechRetentionResults.length > 0 ||
+      goodSpeechStudioResults.length > 0 ||
       legacyBatchProcessed
     ) {
       console.log(
@@ -502,6 +510,7 @@ async function tick() {
           marketplaceMessageResults,
           goodSpeechWebhookResults,
           goodSpeechRetentionResults,
+          goodSpeechStudioResults,
           legacyBatchProcessed
         })
       );

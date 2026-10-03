@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 import urllib.error
 import urllib.request
 
@@ -22,11 +23,13 @@ class GoodSpeechClient:
             headers["Authorization"] = "Bearer " + self.access_token
         return headers
 
-    def request(self, path, method="GET", body=None):
+    def request(self, path, method="GET", body=None, extra_headers=None):
         payload = None if body is None else json.dumps(body).encode("utf-8")
         headers = self._headers()
         if payload is not None:
             headers["Content-Type"] = "application/json"
+        if extra_headers:
+            headers.update(extra_headers)
         request = urllib.request.Request(self.url + "/api/goodspeech/v1" + path, data=payload, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -88,6 +91,22 @@ class GoodSpeechClient:
 
     def quality_summary(self):
         return self.request("/governance/quality")
+
+    def list_studio_jobs(self):
+        return self.request("/studio/jobs")
+
+    def create_studio_job(self, payload, idempotency_key=None):
+        key = idempotency_key or str(uuid.uuid4())
+        return self.request("/studio/jobs", "POST", payload, {"Idempotency-Key": key})
+
+    def get_studio_job(self, job_id):
+        return self.request(f"/studio/jobs/{job_id}")
+
+    def cancel_studio_job(self, job_id):
+        return self.request(f"/studio/jobs/{job_id}/cancel", "POST", {})
+
+    def retry_studio_job(self, job_id):
+        return self.request(f"/studio/jobs/{job_id}/retry", "POST", {})
 
     def synthesize(self, payload, stream=False):
         path = "/speech/stream" if stream else "/speech"

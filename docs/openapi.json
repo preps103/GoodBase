@@ -598,7 +598,7 @@
         "description": "Registers an owner-scoped public HTTPS endpoint. The signing secret is encrypted at rest and returned only in this response.",
         "servers": [{ "url": "https://base.goodos.app" }],
         "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["endpointUrl", "events"], "properties": { "endpointUrl": { "type": "string", "format": "uri" }, "description": { "type": "string", "maxLength": 240 }, "events": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["speech.completed", "voice.created", "voice.revoked", "agent.session.completed", "agent.handoff.requested", "webhook.test"] } } } } } } },
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["endpointUrl", "events"], "properties": { "endpointUrl": { "type": "string", "format": "uri" }, "description": { "type": "string", "maxLength": 240 }, "events": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["speech.completed", "voice.created", "voice.revoked", "agent.session.completed", "agent.handoff.requested", "studio.job.completed", "studio.job.failed", "webhook.test"] } } } } } } },
         "responses": { "201": { "description": "Webhook created with a one-time signing secret" }, "400": { "description": "Invalid endpoint or event selection" }, "409": { "description": "Endpoint already registered" }, "422": { "description": "Endpoint resolved to a blocked destination" } }
       }
     },
@@ -651,6 +651,50 @@
         "servers": [{ "url": "https://base.goodos.app" }],
         "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
         "responses": { "200": { "description": "Measured quality and SLO summary" }, "401": { "description": "Authentication required" } }
+      }
+    },
+    "/api/goodspeech/v1/studio/jobs": {
+      "get": {
+        "summary": "List owned durable Studio rendering jobs",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Newest owner-scoped Studio jobs and progress" }, "401": { "description": "Authentication required" } }
+      },
+      "post": {
+        "summary": "Queue a resumable long-form Studio render",
+        "description": "Queues up to 24 clips and 18,000 characters. Completed clips are retained as private render parts so a worker retry resumes without regenerating them.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "header", "name": "Idempotency-Key", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["projectName", "clips"], "properties": { "projectName": { "type": "string", "maxLength": 100 }, "clips": { "type": "array", "minItems": 1, "maxItems": 24, "items": { "type": "object", "required": ["text", "voice"], "properties": { "id": { "type": "string" }, "speaker": { "type": "string", "maxLength": 60 }, "text": { "type": "string", "maxLength": 2000 }, "voice": { "type": "string" }, "language": { "type": "string" }, "style": { "type": "string" }, "tone": { "type": "string" }, "intensity": { "type": "integer", "minimum": 0, "maximum": 100 } } } } } } } } },
+        "responses": { "202": { "description": "Durable render queued or idempotently returned" }, "400": { "description": "Invalid project or idempotency key" }, "409": { "description": "Concurrency, idempotency, or zero-retention conflict" }, "413": { "description": "Project exceeds the long-form limit" } }
+      }
+    },
+    "/api/goodspeech/v1/studio/jobs/{jobId}": {
+      "get": {
+        "summary": "Read a durable Studio job and clip progress",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "jobId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Owned Studio job, progress, and private output asset link" }, "404": { "description": "Job not found" } }
+      }
+    },
+    "/api/goodspeech/v1/studio/jobs/{jobId}/cancel": {
+      "post": {
+        "summary": "Cancel an active Studio render",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "jobId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Cancellation recorded and private parts removed" }, "409": { "description": "Job is no longer active" } }
+      }
+    },
+    "/api/goodspeech/v1/studio/jobs/{jobId}/retry": {
+      "post": {
+        "summary": "Retry a failed Studio render from completed parts",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "jobId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Failed render requeued" }, "409": { "description": "Job is not failed or zero retention is active" } }
       }
     },
     "/api/goodspeech/v1/agents/{agentId}/tests/{testId}/run": {
