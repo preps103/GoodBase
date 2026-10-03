@@ -92,8 +92,8 @@ test("GoodSpeech maps the public voice names to real Kokoro voices", () => {
   assert.match(workerSource, /@app\.get\("\/v1\/audio\/voices"\)/);
 });
 
-test("GoodSpeech maps seven supported languages to matching Kokoro voice packs", () => {
-  assert.deepEqual(Object.keys(KOKORO_LANGUAGES), ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"]);
+test("GoodSpeech maps nine supported languages to matching Kokoro voice packs", () => {
+  assert.deepEqual(Object.keys(KOKORO_LANGUAGES), ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"]);
   const femaleSpanish = validatePayload({
     text: "Hola, esta es una prueba.",
     language: "es",
@@ -107,10 +107,12 @@ test("GoodSpeech maps seven supported languages to matching Kokoro voice packs",
   assert.equal(kokoroRequest(femaleSpanish).voice, "ef_dora");
   assert.equal(kokoroRequest(femaleSpanish).body.language, "es");
   assert.equal(kokoroRequest(maleHindi).voice, "hm_omega");
+  assert.equal(kokoroRequest(validatePayload({ text: "これは音声テストです。", language: "ja-jp", voice: { apiVoice: "Kore" } }).value).voice, "jf_alpha");
+  assert.equal(kokoroRequest(validatePayload({ text: "这是语音测试。", language: "zh-cn", voice: { apiVoice: "Puck" } }).value).voice, "zm_yunjian");
   assert.equal(validatePayload({ text: "Fallback", language: "untrusted", voice: {} }).value.language, "en-us");
 
   const worker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
-  for (const voice of ["bf_emma", "ef_dora", "em_alex", "ff_siwis", "hf_alpha", "hm_omega", "if_sara", "im_nicola", "pf_dora", "pm_alex"]) {
+  for (const voice of ["bf_emma", "ef_dora", "em_alex", "ff_siwis", "hf_alpha", "hm_omega", "if_sara", "im_nicola", "jf_alpha", "jm_kumo", "pf_dora", "pm_alex", "zf_xiaobei", "zm_yunjian"]) {
     assert.match(worker, new RegExp(`"${voice}"`));
   }
   assert.match(worker, /KPipeline\(lang_code=code, repo_id=MODEL_ID, model=pipeline\.model\)/);

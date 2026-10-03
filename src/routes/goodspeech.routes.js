@@ -40,7 +40,9 @@ const KOKORO_LANGUAGES = Object.freeze({
   "fr-fr": { label: "French", female: "ff_siwis", male: "ff_siwis" },
   hi: { label: "Hindi", female: "hf_alpha", male: "hm_omega" },
   it: { label: "Italian", female: "if_sara", male: "im_nicola" },
+  "ja-jp": { label: "Japanese", female: "jf_alpha", male: "jm_kumo" },
   "pt-br": { label: "Portuguese (Brazil)", female: "pf_dora", male: "pm_alex" },
+  "zh-cn": { label: "Chinese (Mandarin)", female: "zf_xiaobei", male: "zm_yunjian" },
 });
 const KOKORO_SPEED_BIAS = Object.freeze({
   Kore: 0.98,

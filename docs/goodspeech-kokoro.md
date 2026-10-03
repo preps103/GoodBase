@@ -24,8 +24,11 @@ With `GOODSPEECH_REQUIRED=true`, Kokoro also participates in the general
 GoodSpeech exposes nine distinct personas backed by nine real Kokoro voices:
 Kore, Puck, Charon, Fenrir, Zephyr, Amara, Celeste, Bennett, and Ellis.
 The API and web app support American English, British English, Spanish, French,
-Hindi, Italian, and Brazilian Portuguese using language-matched Kokoro voice
-packs while reusing the loaded model weights.
+Hindi, Italian, Japanese, Brazilian Portuguese, and Mandarin Chinese using
+language-matched Kokoro voice packs while reusing the loaded model weights.
+Kokoro's own model documentation grades Japanese and Mandarin below its English
+voices, so these languages are exposed honestly as supported rather than
+represented as English-equivalent quality.
 
 Authenticated users can inspect their current UTC period, successful and failed
 requests, generated characters, audio bytes, average latency, enforced limits,
@@ -69,7 +72,7 @@ when a server uses different service accounts.
 - Monthly request and character limits are owner-scoped and updated under a database row lock to avoid concurrent over-consumption.
 - The model cache is persistent so releases and restarts do not repeatedly download weights.
 - GoodMotion reference inputs are deleted after processing and generated outputs expire according to `GOODMOTION_RETENTION_SECONDS`.
-- Voice cloning is intentionally unavailable. Kokoro does not clone voices, and GoodSpeech must not imply that a stock voice is a user-provided voice.
+- Kokoro stock voices remain distinct from the separate consent-gated Chatterbox voice-cloning service; GoodSpeech never presents a stock voice as a user-provided voice.
 
 ## Verification
 

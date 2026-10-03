@@ -6,7 +6,7 @@ const usageService = require("./goodspeech-usage.service");
 
 const ALLOWED_TOOLS = Object.freeze(["knowledge_search", "current_time", "usage_summary", "handoff"]);
 const ALLOWED_VOICES = new Set(["Kore", "Puck", "Charon", "Fenrir", "Zephyr", "Amara", "Celeste", "Bennett", "Ellis"]);
-const ALLOWED_LANGUAGES = new Set(["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"]);
+const ALLOWED_LANGUAGES = new Set(["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"]);
 const STOP_WORDS = new Set(["a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "what", "when", "where", "which", "who", "with", "you", "your"]);
 
 function requestError(message, statusCode = 400, code = "GOODSPEECH_AGENT_INVALID") {

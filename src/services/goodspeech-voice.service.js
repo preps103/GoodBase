@@ -15,7 +15,7 @@ const DESIGN_CONSENT_VERSION = "goodspeech-designed-voice-v1";
 const CONSENT_STATEMENT = "I consent to create a GoodSpeech voice model of my own voice.";
 const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
 const MAX_GENERATED_BYTES = 24 * 1024 * 1024;
-const ALLOWED_LANGUAGES = new Set(["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"]);
+const ALLOWED_LANGUAGES = new Set(["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"]);
 const KOKORO_VOICES = Object.freeze({
   Kore: "af_kore", Puck: "am_puck", Charon: "am_onyx", Fenrir: "am_fenrir",
   Zephyr: "af_sky", Amara: "af_heart", Celeste: "af_bella", Bennett: "bm_george", Ellis: "am_michael",
@@ -28,7 +28,9 @@ const LANGUAGE_VOICES = Object.freeze({
   "fr-fr": { female: "ff_siwis", male: "ff_siwis" },
   hi: { female: "hf_alpha", male: "hm_omega" },
   it: { female: "if_sara", male: "im_nicola" },
+  "ja-jp": { female: "jf_alpha", male: "jm_kumo" },
   "pt-br": { female: "pf_dora", male: "pm_alex" },
+  "zh-cn": { female: "zf_xiaobei", male: "zm_yunjian" },
 });
 
 function voiceError(message, statusCode = 400, code = "GOODSPEECH_VOICE_INVALID") {

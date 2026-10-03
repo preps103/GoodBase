@@ -41,8 +41,12 @@ ALLOWED_VOICES = frozenset({
     "hm_omega",
     "if_sara",
     "im_nicola",
+    "jf_alpha",
+    "jm_kumo",
     "pf_dora",
     "pm_alex",
+    "zf_xiaobei",
+    "zm_yunjian",
 })
 LANGUAGES = {
     "en-us": {"code": "a", "voices": frozenset({"af_bella", "af_heart", "af_kore", "af_sky", "am_fenrir", "am_michael", "am_onyx", "am_puck", "bm_george"})},
@@ -51,7 +55,9 @@ LANGUAGES = {
     "fr-fr": {"code": "f", "voices": frozenset({"ff_siwis"})},
     "hi": {"code": "h", "voices": frozenset({"hf_alpha", "hm_omega"})},
     "it": {"code": "i", "voices": frozenset({"if_sara", "im_nicola"})},
+    "ja-jp": {"code": "j", "voices": frozenset({"jf_alpha", "jm_kumo"})},
     "pt-br": {"code": "p", "voices": frozenset({"pf_dora", "pm_alex"})},
+    "zh-cn": {"code": "z", "voices": frozenset({"zf_xiaobei", "zm_yunjian"})},
 }
 
 pipeline: KPipeline | None = None

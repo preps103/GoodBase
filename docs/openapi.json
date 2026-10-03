@@ -207,7 +207,7 @@
                   },
                   "language": {
                     "type": "string",
-                    "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"],
+                    "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"],
                     "default": "en-us"
                   }
                 }
@@ -259,7 +259,7 @@
                   "contextualExpressiveness": { "type": "boolean" },
                   "language": {
                     "type": "string",
-                    "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "pt-br"],
+                    "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"],
                     "default": "en-us"
                   }
                 }
