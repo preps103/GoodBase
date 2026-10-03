@@ -18,6 +18,12 @@ test("GoodSpeech provisioner restarts the live Base PM2 process", () => {
   assert.match(provisioner, /pm2 restart "\$\{process_name\}" --update-env/);
 });
 
+test("GoodSpeech provisioner rebuilds the inference worker for the checked-out release", () => {
+  assert.match(provisioner, /systemctl enable goodspeech-inference\.service/);
+  assert.match(provisioner, /systemctl restart goodspeech-inference\.service/);
+  assert.doesNotMatch(provisioner, /systemctl enable --now goodspeech-inference\.service/);
+});
+
 test("GoodSpeech provisioner injects the private Kokoro settings into Base", () => {
   assert.match(
     provisioner,

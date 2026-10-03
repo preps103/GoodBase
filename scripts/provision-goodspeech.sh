@@ -118,7 +118,11 @@ fi
 
 install -m 0644 "${SERVICE_SOURCE}" "${SERVICE_TARGET}"
 systemctl daemon-reload
-systemctl enable --now goodspeech-inference.service
+systemctl enable goodspeech-inference.service
+# A running oneshot unit is not restarted by `enable --now`. Restart it
+# explicitly so every provision applies the image and worker code from the
+# checked-out GoodBase release.
+systemctl restart goodspeech-inference.service
 
 if [[ "${GOODSPEECH_ENABLE_VIDEO}" == "1" ]]; then
   systemctl enable --now goodspeech-video.service
