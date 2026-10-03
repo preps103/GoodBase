@@ -297,6 +297,59 @@
         }
       }
     },
+    "/api/goodspeech/v1/voices/": {
+      "get": {
+        "summary": "List the signed-in user's private GoodSpeech voices",
+        "description": "Returns owner-scoped designed and consent-verified cloned voices plus the current cloning consent statement.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Private voice registry" }, "401": { "description": "Authentication required" }, "403": { "description": "GoodSpeech access required" } }
+      }
+    },
+    "/api/goodspeech/v1/voices/status": {
+      "get": {
+        "summary": "Check the consent-gated private cloning engine",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Pinned cloning model and watermark are ready" }, "503": { "description": "Cloning engine is starting or unavailable" } }
+      }
+    },
+    "/api/goodspeech/v1/voices/clone": {
+      "post": {
+        "summary": "Create a consent-verified private instant voice clone",
+        "description": "Requires an adult rights holder, the exact displayed consent phrase, and a 5.5–30 second PCM WAV sample. The sample is stored privately and may be revoked and deleted.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["reference", "name", "consentStatement", "identityAttested", "rightsAttested", "adultAttested"], "properties": { "reference": { "type": "string", "format": "binary" }, "name": { "type": "string", "maxLength": 80 }, "consentStatement": { "type": "string" }, "identityAttested": { "type": "boolean" }, "rightsAttested": { "type": "boolean" }, "adultAttested": { "type": "boolean" } } } } } },
+        "responses": { "201": { "description": "Private clone enrolled" }, "400": { "description": "Invalid sample or consent" }, "413": { "description": "Sample too large" }, "415": { "description": "PCM WAV required" }, "422": { "description": "Consent attestations failed" } }
+      }
+    },
+    "/api/goodspeech/v1/voices/design": {
+      "post": {
+        "summary": "Create a prompt-designed GoodSpeech voice",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "prompt"], "properties": { "name": { "type": "string", "maxLength": 80 }, "prompt": { "type": "string", "minLength": 8, "maxLength": 1000 }, "language": { "type": "string" } } } } } },
+        "responses": { "201": { "description": "Designed voice saved" }, "400": { "description": "Invalid design prompt" } }
+      }
+    },
+    "/api/goodspeech/v1/voices/{voiceId}/speech": {
+      "post": {
+        "summary": "Generate watermarked speech with a private voice",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "voiceId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string", "maxLength": 2000 } } } } } },
+        "responses": { "200": { "description": "Watermarked WAV", "content": { "audio/wav": { "schema": { "type": "string", "format": "binary" } } } }, "404": { "description": "Voice not found" }, "410": { "description": "Voice revoked" }, "429": { "description": "Rate or quota exceeded" } }
+      },
+      "delete": {
+        "summary": "Revoke a private voice and delete its reference sample",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "voiceId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Voice revoked and private sample deleted" }, "404": { "description": "Voice not found" } }
+      }
+    },
     "/api/goodspeech/v1/avatars/status": {
       "get": {
         "summary": "Check the open avatar renderer",
@@ -457,6 +510,123 @@
         "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
         "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["file", "text"], "properties": { "file": { "type": "string", "format": "binary" }, "text": { "type": "string", "maxLength": 2000 }, "voice": { "type": "string" }, "voiceLabel": { "type": "string" }, "style": { "type": "string" }, "tone": { "type": "string" } } } } } },
         "responses": { "201": { "description": "Generation saved" }, "401": { "description": "Authentication required" }, "413": { "description": "Audio too large" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/bootstrap": {
+      "get": {
+        "summary": "Load owned voice agents and analytics",
+        "description": "Returns owner-scoped agent configurations, grounded knowledge counts, automated test counts, conversation analytics, and realtime capabilities.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Voice agent workspace" }, "401": { "description": "Authentication required" }, "403": { "description": "GoodSpeech entitlement required" } }
+      }
+    },
+    "/api/goodspeech/v1/agents": {
+      "post": {
+        "summary": "Create a governed GoodSpeech voice agent",
+        "description": "Creates an owner-scoped voice agent with a bounded system prompt, approved Kokoro voice, language, retention period, and allowlisted tools.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "systemPrompt", "greeting"], "properties": { "name": { "type": "string", "maxLength": 80 }, "systemPrompt": { "type": "string", "maxLength": 8000 }, "greeting": { "type": "string", "maxLength": 500 }, "voice": { "type": "string" }, "language": { "type": "string" }, "tools": { "type": "array", "items": { "type": "string", "enum": ["knowledge_search", "current_time", "usage_summary", "handoff"] } }, "retentionDays": { "type": "integer", "minimum": 0, "maximum": 365 } } } } } },
+        "responses": { "201": { "description": "Agent created" }, "400": { "description": "Invalid agent configuration" }, "401": { "description": "Authentication required" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/{agentId}/knowledge": {
+      "get": {
+        "summary": "List an owned agent's knowledge sources",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "agentId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Knowledge inventory" }, "404": { "description": "Agent not found" } }
+      },
+      "post": {
+        "summary": "Index a grounded knowledge source",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "agentId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "201": { "description": "Knowledge source indexed" }, "400": { "description": "Invalid or oversized source" }, "404": { "description": "Agent not found" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/{agentId}/sessions": {
+      "post": {
+        "summary": "Start a persistent voice agent session",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "agentId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "201": { "description": "Session started with the configured greeting and voice" }, "404": { "description": "Active agent not found" }, "429": { "description": "Rate limit exceeded" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/sessions/{sessionId}/turns": {
+      "post": {
+        "summary": "Run a grounded conversational turn",
+        "description": "Persists the user and assistant messages, executes at most one allowlisted tool, emits citations, and records response latency.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "sessionId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "201": { "description": "Grounded response and voice settings" }, "400": { "description": "Invalid message" }, "404": { "description": "Session not found" }, "409": { "description": "Session already ended" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/sessions/{sessionId}/interrupt": {
+      "post": {
+        "summary": "Record realtime barge-in",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "sessionId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Last assistant message interrupted and session counter updated" }, "404": { "description": "Session not found" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/sessions/{sessionId}/complete": {
+      "post": {
+        "summary": "Complete a persistent voice agent session",
+        "description": "Closes the owned session, records its outcome, and queues an agent.session.completed webhook event.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "sessionId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "outcome": { "type": "string", "enum": ["resolved", "unresolved", "handed_off"] } } } } } },
+        "responses": { "200": { "description": "Session completed" }, "404": { "description": "Session not found" } }
+      }
+    },
+    "/api/goodspeech/v1/webhooks": {
+      "get": {
+        "summary": "List owned GoodSpeech webhook endpoints",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "responses": { "200": { "description": "Webhook endpoints, delivery counts, and supported event types" }, "401": { "description": "Authentication required" } }
+      },
+      "post": {
+        "summary": "Create a signed GoodSpeech webhook endpoint",
+        "description": "Registers an owner-scoped public HTTPS endpoint. The signing secret is encrypted at rest and returned only in this response.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["endpointUrl", "events"], "properties": { "endpointUrl": { "type": "string", "format": "uri" }, "description": { "type": "string", "maxLength": 240 }, "events": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["speech.completed", "voice.created", "voice.revoked", "agent.session.completed", "agent.handoff.requested", "webhook.test"] } } } } } } },
+        "responses": { "201": { "description": "Webhook created with a one-time signing secret" }, "400": { "description": "Invalid endpoint or event selection" }, "409": { "description": "Endpoint already registered" }, "422": { "description": "Endpoint resolved to a blocked destination" } }
+      }
+    },
+    "/api/goodspeech/v1/webhooks/{webhookId}": {
+      "delete": {
+        "summary": "Delete an owned GoodSpeech webhook endpoint",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "webhookId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Webhook and queued deliveries deleted" }, "404": { "description": "Webhook not found" } }
+      }
+    },
+    "/api/goodspeech/v1/webhooks/{webhookId}/test": {
+      "post": {
+        "summary": "Queue a signed webhook verification event",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "webhookId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "202": { "description": "Verification delivery queued" }, "404": { "description": "Webhook not found" } }
+      }
+    },
+    "/api/goodspeech/v1/agents/{agentId}/tests/{testId}/run": {
+      "post": {
+        "summary": "Run a durable grounded agent regression test",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }],
+        "parameters": [{ "in": "path", "name": "agentId", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "in": "path", "name": "testId", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Test result and captured response" }, "404": { "description": "Agent or test not found" } }
       }
     },
     "/api/goodspeech/v1/collaboration/bootstrap": {

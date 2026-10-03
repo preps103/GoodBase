@@ -13,6 +13,7 @@ const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes")
 const videoService = require("../services/goodspeech-video.service");
 const avatarService = require("../services/goodspeech-avatar.service");
 const voiceService = require("../services/goodspeech-voice.service");
+const webhookService = require("../services/goodspeech-webhook.service");
 
 const router = express.Router();
 const MAX_TEXT_LENGTH = 2000;
@@ -742,6 +743,21 @@ router.post("/speech", authRequired, tenantContext, requireGoodSpeechAccess, spe
       },
     }).catch(() => {});
 
+    await webhookService.emitEvent({
+      type: "speech.completed",
+      context: req.tenantContext,
+      userId: req.user.id,
+      data: {
+        engine: "kokoro",
+        model: request.model,
+        voice: request.voice,
+        language: request.language,
+        characters: validation.value.text.length,
+        audioBytes: audioBytes.length,
+        latencyMs: Date.now() - started,
+      },
+    }).catch((error) => console.error("[GoodSpeech webhooks] speech event failed:", error.message));
+
     return res.json({
       success: true,
       data: {
@@ -874,6 +890,22 @@ router.post("/speech/stream", authRequired, tenantContext, requireGoodSpeechAcce
         success,
         request: req,
       });
+      if (success) {
+        await webhookService.emitEvent({
+          type: "speech.completed",
+          context: req.tenantContext,
+          userId: req.user.id,
+          data: {
+            engine: "kokoro-stream",
+            model: request.model,
+            voice: request.voice,
+            language: request.language,
+            characters: validation.value.text.length,
+            audioBytes: total,
+            latencyMs: Date.now() - started,
+          },
+        }).catch((error) => console.error("[GoodSpeech webhooks] stream event failed:", error.message));
+      }
     };
     bounded.once("end", () => void complete(true));
     bounded.once("error", () => {

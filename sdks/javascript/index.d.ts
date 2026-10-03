@@ -14,6 +14,26 @@ export declare class GoodbaseClient {
   syncMutations(collectionId: string, deviceId: string, mutations: unknown[]): Promise<any>;
   exchangeAttestation(appId: string, platform: string, assertion: Record<string,unknown>): Promise<any>;
 }
+export interface GoodSpeechAudioResult { audio: ArrayBuffer; contentType: string; requestId?: string | null; voiceId?: string | null; watermark?: string | null; }
+export declare class GoodSpeechClient {
+  constructor(options?: {client?: GoodbaseClient; baseUrl?: string; accessToken?: string; attestationToken?: string; fetch?: typeof fetch});
+  health(): Promise<any>; capabilities(): Promise<any>; usage(): Promise<any>; voices(): Promise<any>; agents(): Promise<any>;
+  analytics(agentId?: string): Promise<any>;
+  createDesignedVoice(payload: Record<string,unknown>): Promise<any>;
+  createAgent(payload: Record<string,unknown>): Promise<any>;
+  startAgentSession(agentId: string, payload?: Record<string,unknown>): Promise<any>;
+  sendAgentTurn(sessionId: string, payload: Record<string,unknown>): Promise<any>;
+  interruptAgentSession(sessionId: string): Promise<any>;
+  completeAgentSession(sessionId: string, payload?: Record<string,unknown>): Promise<any>;
+  listWebhooks(): Promise<any>;
+  createWebhook(payload: {endpointUrl: string; events: string[]; description?: string}): Promise<any>;
+  testWebhook(webhookId: string): Promise<any>;
+  deleteWebhook(webhookId: string): Promise<any>;
+  synthesize(payload: Record<string,unknown>, options?: {signal?: AbortSignal}): Promise<GoodSpeechAudioResult>;
+  stream(payload: Record<string,unknown>, options?: {signal?: AbortSignal}): Promise<Response>;
+  generateVoiceSpeech(voiceId: string, text: string, options?: {signal?: AbortSignal}): Promise<GoodSpeechAudioResult>;
+}
+export declare function verifyGoodSpeechWebhook(input: {payload: string | Uint8Array; signature: string; timestamp: string | number; secret: string; toleranceSeconds?: number; now?: number}): boolean;
 export function createGoodbaseReactBindings(React: unknown, client: GoodbaseTelemetryClient): Record<string, unknown>;
 export function createGoodbaseServerClient(createClient: Function, request: Request, options?: {baseUrl?: string}): unknown;
 import type { GoodbaseTelemetryClient } from "./telemetry";

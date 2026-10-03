@@ -21,6 +21,7 @@ const goodSpeechCollaborationRoutes = require("./goodspeech-collaboration.routes
 const goodSpeechLibraryRoutes = require("./goodspeech-library.routes");
 const goodSpeechAgentRoutes = require("./goodspeech-agent.routes");
 const goodSpeechVoiceRoutes = require("./goodspeech-voice.routes");
+const goodSpeechWebhookRoutes = require("./goodspeech-webhook.routes");
 const teamsRoutes = require("./teams.routes");
 const goodboostRoutes = require("./goodboost.routes");
 const goodbuilderRoutes = require("./goodbuilder.routes");
@@ -503,6 +504,7 @@ router.use("/api/goodspeech/v1/collaboration", goodSpeechCollaborationRoutes);
 router.use("/api/goodspeech/v1/library", goodSpeechLibraryRoutes);
 router.use("/api/goodspeech/v1/agents", goodSpeechAgentRoutes);
 router.use("/api/goodspeech/v1/voices", goodSpeechVoiceRoutes);
+router.use("/api/goodspeech/v1/webhooks", goodSpeechWebhookRoutes);
 router.use("/api/goodspeech/v1", goodSpeechRoutes);
 router.use("/api/teams", teamsRoutes);
 router.use("/api/fleet/v1/public", fleetPublicRoutes);

@@ -8,6 +8,7 @@ const tenantContext = require("../middleware/tenantContext");
 const { logAudit } = require("../services/audit.service");
 const usageService = require("../services/goodspeech-usage.service");
 const voiceService = require("../services/goodspeech-voice.service");
+const webhookService = require("../services/goodspeech-webhook.service");
 const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes");
 
 const router = express.Router();
@@ -82,6 +83,12 @@ router.post("/clone", writeLimiter, upload.single("reference"), async (req, res)
       ipAddress: req.ip,
       metadata: { model: voice.model, consentVersion: voice.consentVersion, sampleDurationSeconds: voice.sampleDurationSeconds },
     }).catch(() => {});
+    await webhookService.emitEvent({
+      type: "voice.created",
+      context: req.tenantContext,
+      userId: req.user.id,
+      data: { voiceId: voice.id, kind: voice.kind, model: voice.model, language: voice.language },
+    }).catch((error) => console.error("[GoodSpeech webhooks] clone event failed:", error.message));
     return res.status(201).json({ success: true, data: voice });
   } catch (error) {
     return sendError(res, error, "clone");
@@ -99,6 +106,12 @@ router.post("/design", writeLimiter, async (req, res) => {
       ipAddress: req.ip,
       metadata: { model: voice.model, language: voice.language },
     }).catch(() => {});
+    await webhookService.emitEvent({
+      type: "voice.created",
+      context: req.tenantContext,
+      userId: req.user.id,
+      data: { voiceId: voice.id, kind: voice.kind, model: voice.model, language: voice.language },
+    }).catch((error) => console.error("[GoodSpeech webhooks] design event failed:", error.message));
     return res.status(201).json({ success: true, data: voice });
   } catch (error) {
     return sendError(res, error, "design");
@@ -140,6 +153,20 @@ router.post("/:voiceId/speech", generationLimiter, async (req, res) => {
       ipAddress: req.ip,
       metadata: { model: result.profile.model, voiceKind: result.profile.kind, characters: script.length, durationMs: Date.now() - started },
     }).catch(() => {});
+    await webhookService.emitEvent({
+      type: "speech.completed",
+      context: req.tenantContext,
+      userId: req.user.id,
+      data: {
+        engine: result.profile.model,
+        voiceId: result.profile.id,
+        voiceKind: result.profile.kind,
+        characters: script.length,
+        audioBytes: result.bytes.length,
+        latencyMs: Date.now() - started,
+        watermark: result.profile.watermark,
+      },
+    }).catch((error) => console.error("[GoodSpeech webhooks] private voice event failed:", error.message));
     res.set("Cache-Control", "private, no-store");
     res.set("Content-Type", result.contentType);
     res.set("Content-Length", String(result.bytes.length));
@@ -179,6 +206,12 @@ router.delete("/:voiceId", writeLimiter, async (req, res) => {
       ipAddress: req.ip,
       metadata: { referenceDeleted: voice.kind === "cloned" },
     }).catch(() => {});
+    await webhookService.emitEvent({
+      type: "voice.revoked",
+      context: req.tenantContext,
+      userId: req.user.id,
+      data: { voiceId: voice.id, kind: voice.kind, referenceDeleted: voice.kind === "cloned" },
+    }).catch((error) => console.error("[GoodSpeech webhooks] revoke event failed:", error.message));
     return res.json({ success: true, data: voice });
   } catch (error) {
     return sendError(res, error, "revoke");

@@ -5,6 +5,7 @@ const { rateLimit } = require("express-rate-limit");
 const authRequired = require("../middleware/authRequired");
 const tenantContext = require("../middleware/tenantContext");
 const service = require("../services/goodspeech-agent.service");
+const webhookService = require("../services/goodspeech-webhook.service");
 const { requireGoodSpeechAccess } = require("./goodspeech-collaboration.routes");
 
 const router = express.Router();
@@ -50,9 +51,37 @@ router.delete("/:agentId/knowledge/:knowledgeId", writeLimiter, (req, res) => ha
 
 router.post("/:agentId/sessions", turnLimiter, (req, res) => handle(res, "session.start", service.startSession({ agentId: req.params.agentId, payload: req.body, context: req.tenantContext, userId: req.user.id }), 201));
 router.get("/sessions/:sessionId", (req, res) => handle(res, "session.get", service.getSession({ sessionId: req.params.sessionId, context: req.tenantContext, userId: req.user.id })));
-router.post("/sessions/:sessionId/turns", turnLimiter, (req, res) => handle(res, "session.turn", service.turn({ sessionId: req.params.sessionId, payload: req.body, context: req.tenantContext, userId: req.user.id }), 201));
+router.post("/sessions/:sessionId/turns", turnLimiter, async (req, res) => {
+  try {
+    const result = await service.turn({ sessionId: req.params.sessionId, payload: req.body, context: req.tenantContext, userId: req.user.id });
+    if (result.toolCall?.name === "handoff") {
+      webhookService.emitEvent({
+        type: "agent.handoff.requested",
+        data: { sessionId: result.session.id, agentId: result.session.agent_id, outcome: result.session.outcome },
+        context: req.tenantContext,
+        userId: req.user.id,
+      }).catch((error) => console.error("[GoodSpeech webhooks] agent handoff event failed:", error.message));
+    }
+    return res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    return handle(res, "session.turn", Promise.reject(error), 201);
+  }
+});
 router.post("/sessions/:sessionId/interrupt", turnLimiter, (req, res) => handle(res, "session.interrupt", service.interrupt({ sessionId: req.params.sessionId, context: req.tenantContext, userId: req.user.id })));
-router.post("/sessions/:sessionId/complete", writeLimiter, (req, res) => handle(res, "session.complete", service.completeSession({ sessionId: req.params.sessionId, payload: req.body, context: req.tenantContext, userId: req.user.id })));
+router.post("/sessions/:sessionId/complete", writeLimiter, async (req, res) => {
+  try {
+    const result = await service.completeSession({ sessionId: req.params.sessionId, payload: req.body, context: req.tenantContext, userId: req.user.id });
+    webhookService.emitEvent({
+      type: "agent.session.completed",
+      data: { sessionId: result.id, agentId: result.agent_id, outcome: result.outcome, endedAt: result.ended_at },
+      context: req.tenantContext,
+      userId: req.user.id,
+    }).catch((error) => console.error("[GoodSpeech webhooks] agent completion event failed:", error.message));
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handle(res, "session.complete", Promise.reject(error));
+  }
+});
 
 router.get("/:agentId/tests", (req, res) => handle(res, "tests.list", service.listTests({ agentId: req.params.agentId, context: req.tenantContext, userId: req.user.id })));
 router.post("/:agentId/tests", writeLimiter, (req, res) => handle(res, "test.create", service.createTest({ agentId: req.params.agentId, payload: req.body, context: req.tenantContext, userId: req.user.id }), 201));
