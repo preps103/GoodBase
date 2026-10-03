@@ -23,6 +23,7 @@ SAMPLE_RATE = 24_000
 MAX_TEXT_LENGTH = 2_000
 MODEL_ID = "hexgrad/Kokoro-82M"
 MODEL_SHA256 = "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4"
+SPLIT_PATTERN = r"(?<=[.!?;:,。！？；：，、])\s*|\n+"
 ALLOWED_VOICES = frozenset({
     "af_bella",
     "af_heart",
@@ -150,7 +151,7 @@ def synthesize(request: SpeechRequest) -> bytes:
                 request.input.strip(),
                 voice=request.voice,
                 speed=request.speed,
-                split_pattern=r"(?<=[.!?])\s+|\n+",
+                split_pattern=SPLIT_PATTERN,
             )
         ]
     return wav_bytes(chunks)
@@ -166,7 +167,7 @@ def synthesize_pcm_stream(request: SpeechRequest):
             request.input.strip(),
             voice=request.voice,
             speed=request.speed,
-            split_pattern=r"(?<=[.!?])\s+|\n+",
+            split_pattern=SPLIT_PATTERN,
         ):
             chunk = pcm_bytes(audio)
             if chunk:

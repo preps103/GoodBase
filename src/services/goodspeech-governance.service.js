@@ -295,11 +295,16 @@ async function qualitySummary({ context, userId }) {
       [current.organizationId, userId],
     ),
     database.query(
-      `SELECT id, language, status, metric, error_rate_percent, quality_score,
-              tts_latency_ms, transcription_latency_ms, total_latency_ms,
-              audio_bytes, tts_model, transcription_model, created_at
-       FROM goodspeech_quality_benchmarks
-       WHERE organization_id=$1 AND owner_user_id=$2::uuid
+      `SELECT * FROM (
+         SELECT DISTINCT ON (language)
+           id, language, status, metric, error_rate_percent, quality_score,
+           tts_latency_ms, transcription_latency_ms, total_latency_ms,
+           audio_bytes, tts_model, transcription_model, created_at
+         FROM goodspeech_quality_benchmarks
+         WHERE organization_id=$1 AND owner_user_id=$2::uuid
+           AND created_at>=NOW()-INTERVAL '30 days'
+         ORDER BY language, created_at DESC
+       ) latest
        ORDER BY created_at DESC LIMIT 9`,
       [current.organizationId, userId],
     ),
@@ -308,6 +313,8 @@ async function qualitySummary({ context, userId }) {
   const counts = monthly.rows[0] || {};
   const total = Number(counts.successes || 0) + Number(counts.failures || 0);
   const failureRate = total ? Number(((Number(counts.failures || 0) / total) * 100).toFixed(2)) : null;
+  const completedBenchmarks = benchmarks.rows.filter((row) => row.quality_score !== null);
+  const passedBenchmarks = completedBenchmarks.filter((row) => row.status === "passed");
   return {
     windowDays: 30,
     samples: Number(latency.samples || 0),
@@ -321,6 +328,14 @@ async function qualitySummary({ context, userId }) {
     },
     roundTrip: {
       targetErrorRatePercent: 20,
+      coverage: {
+        supportedLanguages: 9,
+        measuredLanguages: completedBenchmarks.length,
+        passedLanguages: passedBenchmarks.length,
+        averageQualityScore: completedBenchmarks.length
+          ? Math.round(completedBenchmarks.reduce((total, row) => total + Number(row.quality_score), 0) / completedBenchmarks.length)
+          : null,
+      },
       latest: benchmarks.rows.map((row) => ({
         id: row.id,
         language: row.language,

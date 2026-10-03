@@ -19,6 +19,14 @@ const qualityLimiter = rateLimit({
   keyGenerator: (req) => `goodspeech-quality-user:${req.user.id}`,
   message: { success: false, code: "GOODSPEECH_QUALITY_RATE_LIMITED", message: "The private quality check can run five times per hour." },
 });
+const qualitySuiteLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: 2,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => `goodspeech-quality-suite-user:${req.user.id}`,
+  message: { success: false, code: "GOODSPEECH_QUALITY_SUITE_RATE_LIMITED", message: "The nine-language quality suite can run twice per day." },
+});
 
 function handle(res, label, operation, status = 200) {
   return Promise.resolve(operation).then((data) => res.status(status).json({ success: true, data })).catch((error) => {
@@ -52,6 +60,27 @@ router.post("/quality/benchmark", qualityLimiter, async (req, res) => {
     logAudit({ userId: req.user.id, action: "goodspeech.quality.benchmark", entityType: "goodspeech_quality_benchmark", entityId: result.id, ipAddress: req.ip, metadata: { language: result.language, status: result.status, metric: result.metric, errorRatePercent: result.errorRatePercent, qualityScore: result.qualityScore, audioRetained: false } }).catch(() => {});
     return res.status(201).json({ success: true, data: result });
   } catch (error) { return handle(res, "quality.benchmark", Promise.reject(error)); }
+});
+router.post("/quality/suite", qualitySuiteLimiter, async (req, res) => {
+  try {
+    const result = await quality.runSuite({ context: req.tenantContext, userId: req.user.id, request: req });
+    logAudit({
+      userId: req.user.id,
+      action: "goodspeech.quality.suite",
+      entityType: "goodspeech_quality_suite",
+      entityId: req.user.id,
+      ipAddress: req.ip,
+      metadata: {
+        languages: result.languages,
+        completed: result.completed,
+        passed: result.passed,
+        averageQualityScore: result.averageQualityScore,
+        totalLatencyMs: result.totalLatencyMs,
+        audioRetained: false,
+      },
+    }).catch(() => {});
+    return res.status(201).json({ success: true, data: result });
+  } catch (error) { return handle(res, "quality.suite", Promise.reject(error)); }
 });
 
 module.exports = router;

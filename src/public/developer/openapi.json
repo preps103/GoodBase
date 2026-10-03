@@ -328,6 +328,41 @@
         }
       }
     },
+    "/api/goodspeech/v1/transcriptions/live": {
+      "post": {
+        "summary": "Transcribe a rolling private microphone chunk",
+        "description": "Accepts an independently playable microphone chunk from a live session and returns ordered partial or final Faster-Whisper text with timestamps. Chunks are processed transiently and are never retained.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }, { "GoodOSBearer": [] }, { "GoodOSApiKey": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "sessionId", "sequence"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary", "description": "Self-contained audio chunk, up to 8 MB" },
+                  "language": { "type": "string", "default": "auto" },
+                  "sessionId": { "type": "string", "minLength": 8, "maxLength": 80 },
+                  "sequence": { "type": "integer", "minimum": 0, "maximum": 10000 },
+                  "final": { "type": "boolean", "default": false }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Ordered partial or final transcript chunk with segment and word timestamps" },
+          "400": { "description": "Invalid live session metadata or empty chunk" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "GoodSpeech entitlement required" },
+          "413": { "description": "Chunk exceeds 8 MB" },
+          "429": { "description": "Live transcription safety limit exceeded" },
+          "502": { "description": "Managed transcription engine rejected the chunk" }
+        }
+      }
+    },
 
 
     "/api/goodspeech/v1/usage": {
@@ -762,6 +797,15 @@
         "security": [{ "GoodBaseSession": [] }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "language": { "type": "string", "enum": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"], "default": "en-us" } } } } } },
         "responses": { "201": { "description": "Persisted round-trip quality measurement" }, "400": { "description": "Unsupported benchmark language" }, "401": { "description": "Authentication required" }, "429": { "description": "Benchmark rate limit exceeded" }, "502": { "description": "A managed speech engine rejected the benchmark" } }
+      }
+    },
+    "/api/goodspeech/v1/governance/quality/suite": {
+      "post": {
+        "summary": "Run the private nine-language TTS-to-STT quality suite",
+        "description": "Sequentially measures all nine managed GoodSpeech languages, stores one owner-scoped result per language, and returns pass coverage plus average intelligibility. Temporary audio is never retained.",
+        "servers": [{ "url": "https://base.goodos.app" }],
+        "security": [{ "GoodBaseSession": [] }],
+        "responses": { "201": { "description": "Nine-language suite results and coverage summary" }, "401": { "description": "Authentication required" }, "429": { "description": "Daily suite limit exceeded" }, "502": { "description": "One or more managed speech engines rejected the suite" } }
       }
     },
     "/api/goodspeech/v1/studio/jobs": {

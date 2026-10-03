@@ -191,9 +191,42 @@ async function run({ language = "en-us", context, userId, request, fetchFn = glo
   };
 }
 
+async function runSuite({ context, userId, request, fetchFn = global.fetch }) {
+  const started = Date.now();
+  const results = [];
+  for (const language of Object.keys(QUALITY_BENCHMARKS)) {
+    try {
+      results.push(await run({ language, context, userId, request, fetchFn }));
+    } catch (error) {
+      results.push({
+        language,
+        status: "failed",
+        errorRatePercent: null,
+        qualityScore: null,
+        totalLatencyMs: null,
+        code: String(error?.code || "GOODSPEECH_QUALITY_FAILED").slice(0, 100),
+      });
+    }
+  }
+  const completed = results.filter((result) => Number.isFinite(result.qualityScore));
+  const passed = completed.filter((result) => result.status === "passed");
+  return {
+    languages: results.length,
+    completed: completed.length,
+    passed: passed.length,
+    averageQualityScore: completed.length
+      ? Math.round(completed.reduce((total, result) => total + Number(result.qualityScore), 0) / completed.length)
+      : null,
+    totalLatencyMs: Date.now() - started,
+    audioRetained: false,
+    results,
+  };
+}
+
 module.exports = {
   QUALITY_BENCHMARKS,
   benchmarkMetric,
   run,
+  runSuite,
   _internal: { editDistance, normalize, provider, readAudio, units },
 };

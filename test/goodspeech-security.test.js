@@ -29,6 +29,8 @@ const libraryService = require("../src/services/goodspeech-library.service");
 const usageService = require("../src/services/goodspeech-usage.service");
 const agentService = require("../src/services/goodspeech-agent.service");
 const voiceService = require("../src/services/goodspeech-voice.service");
+const transcriptionRoutes = require("../src/routes/goodspeech-transcription.routes");
+const qualityService = require("../src/services/goodspeech-quality.service");
 
 test("GoodSpeech rejects missing and oversized scripts", () => {
   assert.equal(validatePayload({}).error, "Text is required.");
@@ -121,6 +123,35 @@ test("GoodSpeech maps nine supported languages to matching Kokoro voice packs", 
   assert.match(dockerfile, /python -m unidic download/);
   assert.match(dockerfile, /JAG2P\(\)/);
   assert.match(dockerfile, /ZHG2P\(\)/);
+});
+
+test("GoodSpeech streams low-latency clauses and supports stateless managed live transcription", () => {
+  assert.deepEqual(transcriptionRoutes.liveChunkMetadata({ sessionId: "live_session_123", sequence: "4", final: "true" }), {
+    sessionId: "live_session_123",
+    sequence: 4,
+    isFinal: true,
+  });
+  assert.throws(() => transcriptionRoutes.liveChunkMetadata({ sessionId: "bad", sequence: 0 }), /session identifier/i);
+  assert.throws(() => transcriptionRoutes.liveChunkMetadata({ sessionId: "live_session_123", sequence: -1 }), /sequence/i);
+
+  const routes = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech-transcription.routes.js"), "utf8");
+  const worker = fs.readFileSync(path.join(__dirname, "..", "services", "kokoro-tts", "app", "main.py"), "utf8");
+  assert.match(routes, /router\.post\("\/live"/);
+  assert.match(routes, /retainedAudio: false/);
+  assert.match(worker, /SPLIT_PATTERN = r"\(\?<\=\[\.\!\?;:,。！？；：，、\]\)\\s\*\|\\n\+"/);
+  assert.match(worker, /split_pattern=SPLIT_PATTERN/);
+});
+
+test("GoodSpeech measures all supported languages with a private quality suite", () => {
+  assert.deepEqual(Object.keys(qualityService.QUALITY_BENCHMARKS), ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja-jp", "pt-br", "zh-cn"]);
+  assert.equal(typeof qualityService.runSuite, "function");
+  assert.equal(qualityService.benchmarkMetric("clear natural audio", "clear natural audio", "en-us").qualityScore, 100);
+  assert.equal(qualityService.benchmarkMetric("清晰自然", "清晰自然", "zh-cn").metric, "character_error_rate");
+  const governance = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "goodspeech-governance.routes.js"), "utf8");
+  const summary = fs.readFileSync(path.join(__dirname, "..", "src", "services", "goodspeech-governance.service.js"), "utf8");
+  assert.match(governance, /router\.post\("\/quality\/suite"/);
+  assert.match(summary, /supportedLanguages: 9/);
+  assert.match(summary, /DISTINCT ON \(language\)/);
 });
 
 test("GoodSpeech constrains Kokoro speed derived from style controls", () => {
