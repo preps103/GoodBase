@@ -21,6 +21,8 @@ yarn-error.log*
 *.backup
 *.backup-*
 .DS_Store
+__pycache__/
+*.py[cod]
 
 # Runtime data belongs outside the source baseline
 src/data/goodos-voice-db.json
