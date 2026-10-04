@@ -120,6 +120,11 @@ test("master top bar is responsive and themeable without changing structure", ()
   assert.match(styles, /@media \(max-width:\s*1120px\)[\s\S]*\[data-goodos-topbar-workspace\][\s\S]*display:\s*none\s*!important\s*;/);
   const mobileContract = styles.slice(styles.lastIndexOf("@media (max-width: 760px)"));
   assert.match(mobileContract, /\[data-goodos-topbar-workspace\]\s*\{\s*display:\s*none\s*!important\s*;\s*\}/);
+  assert.match(mobileContract, /grid-template-rows:\s*44px\s*!important\s*;/);
+  assert.match(mobileContract, /height:\s*64px\s*!important\s*;/);
+  assert.match(mobileContract, /\[data-goodos-topbar-search\]:focus-within input/);
+  assert.match(mobileContract, /inset:\s*72px 16px auto 16px\s*!important\s*;/);
+  assert.doesNotMatch(mobileContract, /grid-template-rows:\s*44px 46px/);
 });
 
 test("master top bar stylesheet is delivered as a cross-origin shared asset", () => {

@@ -192,7 +192,10 @@ Authenticated React applications mount the shared shell through
 widget portals the application-owned top-bar content
 to `document.body`, so sidebars, transforms, overflow containers, and stacking
 contexts can never shift or clip it. A responsive spacer remains in the
-application layout to reserve 77px on desktop and 116px on mobile.
+application layout to reserve 77px on desktop and 64px on mobile. The mobile
+bar is always one row: search collapses to its magnifying-glass control, and
+focus temporarily opens the search field beneath the bar without moving the
+application layout.
 
 ```tsx
 import { GoodOSTopBarWidget } from "@goodos/topbar-widget";
