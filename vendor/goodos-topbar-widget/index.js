@@ -298,6 +298,7 @@ export function GoodOSTopBarWidget(props) {
 const profileMenuCss = String.raw`
 .goodos-universal-profile{position:fixed;z-index:2147483002;top:21px;right:20px;width:34px;height:34px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e5e7eb}
 .goodos-universal-profile__trigger{display:grid!important;width:34px!important;min-width:34px!important;max-width:34px!important;height:34px!important;min-height:34px!important;max-height:34px!important;aspect-ratio:1/1!important;padding:0!important;overflow:hidden!important;place-items:center;border:1.5px solid rgba(255,255,255,.9)!important;border-radius:50%!important;background:linear-gradient(135deg,#6366f1,#06b6d4);color:#fff;cursor:pointer;font:inherit;font-size:12px;font-weight:850;line-height:1;box-shadow:0 4px 14px rgba(15,23,42,.28)}
+.goodos-universal-profile__trigger.has-image{background:var(--goodos-topbar-raised,rgba(24,31,56,.82))}
 .goodos-universal-profile__trigger img{display:block!important;width:100%!important;min-width:100%!important;max-width:100%!important;height:100%!important;min-height:100%!important;max-height:100%!important;aspect-ratio:1/1!important;border-radius:50%!important;object-fit:cover!important;object-position:center!important}
 .goodos-universal-profile__menu{position:absolute;top:42px;right:0;width:250px;padding:10px;border:1px solid rgba(148,163,184,.24);border-radius:16px;background:rgba(15,23,42,.98);box-shadow:0 24px 64px rgba(0,0,0,.38);backdrop-filter:blur(18px)}
 .goodos-universal-profile__identity{display:block;padding:10px 10px 12px;border-bottom:1px solid rgba(148,163,184,.16)}
@@ -311,6 +312,7 @@ function UniversalProfileMenu({ appName }) {
   const [busy, setBusy] = useState(false);
   const [profile, setProfile] = useState(null);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [avatarLoaded, setAvatarLoaded] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -328,7 +330,7 @@ function UniversalProfileMenu({ appName }) {
     const token = ["goodos_token", "goodos_auth_token", "auth_token", "goodtrusts_token", "token"]
       .map((key) => window.localStorage.getItem(key))
       .find(Boolean);
-    void fetch(`${GOODOS_AUTH_ORIGIN}/api/auth/me`, {
+    void fetch(`${GOODOS_AUTH_ORIGIN}/api/auth/session`, {
       credentials: "include",
       headers: {
         Accept: "application/json",
@@ -336,19 +338,23 @@ function UniversalProfileMenu({ appName }) {
       },
     })
       .then((response) => response.ok ? response.json() : null)
-      .then((payload) => payload?.user && setProfile(payload.user))
+      .then((payload) => {
+        const user = payload?.user || payload?.session?.user || payload?.data?.user || payload?.data;
+        if (user?.id || user?.email) setProfile(user);
+      })
       .catch(() => {});
   }, []);
 
   const displayName = profile?.displayName || [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.email || appName;
-  const initials = String(displayName || "G").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
-  const rawAvatarUrl = profile?.avatarUrl || profile?.avatar_url || null;
+  const initial = String(displayName || "G").trim().charAt(0).toUpperCase() || "G";
+  const rawAvatarUrl = profile?.avatarUrl || profile?.avatar_url || profile?.picture || profile?.photoURL || null;
   const avatarUrl = rawAvatarUrl && !/^(?:https?:|data:|blob:)/i.test(rawAvatarUrl)
     ? `${GOODOS_AUTH_ORIGIN}${rawAvatarUrl.startsWith("/") ? "" : "/"}${rawAvatarUrl}`
     : rawAvatarUrl;
 
   useEffect(() => {
     setAvatarFailed(false);
+    setAvatarLoaded(false);
   }, [avatarUrl]);
 
   const signOut = async () => {
@@ -381,8 +387,8 @@ function UniversalProfileMenu({ appName }) {
     createElement("style", null, profileMenuCss),
     createElement(
       "button",
-      { type: "button", className: "goodos-universal-profile__trigger", onClick: () => setOpen((value) => !value), "aria-label": `Open ${displayName} profile menu`, "aria-expanded": open, "data-goodos-topbar-control": "account" },
-      avatarUrl && !avatarFailed ? createElement("img", { src: avatarUrl, alt: "", onError: () => setAvatarFailed(true) }) : initials,
+      { type: "button", className: `goodos-universal-profile__trigger${avatarLoaded ? " has-image" : ""}`, onClick: () => setOpen((value) => !value), "aria-label": `Open ${displayName} profile menu`, "aria-expanded": open, "data-goodos-topbar-control": "account" },
+      avatarUrl && !avatarFailed ? createElement("img", { src: avatarUrl, alt: "", decoding: "async", referrerPolicy: "no-referrer", onLoad: () => setAvatarLoaded(true), onError: () => { setAvatarLoaded(false); setAvatarFailed(true); } }) : initial,
     ),
     open && createElement(
       "div",

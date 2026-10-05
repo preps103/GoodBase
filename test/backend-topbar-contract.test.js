@@ -42,6 +42,7 @@ test("master top bar supports the standard signed-in profile layout", () => {
   const contract = read("docs/goodos-topbar-integration.md");
   const consoleHtml = read("src/public/console.html");
   const accountSettings = read("src/public/account-settings.js");
+  const widget = read("vendor/goodos-topbar-widget/index.js");
 
   assert.match(styles, /data-goodos-topbar-account-layout="profile"/);
   assert.match(styles, /repeat\(3,\s*var\(--goodos-topbar-control-size\)\)/);
@@ -56,6 +57,12 @@ test("master top bar supports the standard signed-in profile layout", () => {
   assert.match(styles, /\.goodos-universal-profile \.goodos-universal-profile__trigger\s*\{[\s\S]*width:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-search\]\s*>\s*svg,[\s\S]*\[data-goodos-topbar-control\]\s*>\s*svg,[\s\S]*\[data-goodos-notification-trigger\]\s*>\s*svg[\s\S]*width:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;/);
   assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*\.goodos-universal-profile\.goodos-universal-profile\s*\{[\s\S]*top:\s*15px\s*;[\s\S]*right:\s*16px\s*;/);
+  assert.match(widget, /\/api\/auth\/session/);
+  assert.match(widget, /profile\?\.avatarUrl \|\| profile\?\.avatar_url \|\| profile\?\.picture \|\| profile\?\.photoURL/);
+  assert.match(widget, /decoding:\s*"async"/);
+  assert.match(widget, /referrerPolicy:\s*"no-referrer"/);
+  assert.match(widget, /setAvatarLoaded\(true\)/);
+  assert.match(widget, /setAvatarFailed\(true\)/);
 });
 
 test("master top bar preserves the GoodBase desktop dimensions", () => {
