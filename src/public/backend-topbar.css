@@ -9,6 +9,7 @@
   --goodos-topbar-search-width: clamp(360px, 34vw, 544px);
   --goodos-topbar-search-height: 46px;
   --goodos-topbar-control-size: 34px;
+  --goodos-topbar-icon-size: 22px;
   --goodos-topbar-control-gap: 10px;
   --goodos-topbar-controls-width: 166px;
   --goodos-topbar-profile-controls-width: 292px;
@@ -268,12 +269,25 @@
 }
 
 .goodos-universal-profile .goodos-universal-profile__trigger {
-  width: 18px !important;
-  min-width: 18px !important;
-  max-width: 18px !important;
-  height: 18px !important;
-  min-height: 18px !important;
-  max-height: 18px !important;
+  width: var(--goodos-topbar-icon-size) !important;
+  min-width: var(--goodos-topbar-icon-size) !important;
+  max-width: var(--goodos-topbar-icon-size) !important;
+  height: var(--goodos-topbar-icon-size) !important;
+  min-height: var(--goodos-topbar-icon-size) !important;
+  max-height: var(--goodos-topbar-icon-size) !important;
+}
+
+:where(
+  [data-goodos-topbar-search] > svg,
+  [data-goodos-topbar-control] > svg,
+  [data-goodos-notification-trigger] > svg
+) {
+  width: var(--goodos-topbar-icon-size) !important;
+  min-width: var(--goodos-topbar-icon-size) !important;
+  max-width: var(--goodos-topbar-icon-size) !important;
+  height: var(--goodos-topbar-icon-size) !important;
+  min-height: var(--goodos-topbar-icon-size) !important;
+  max-height: var(--goodos-topbar-icon-size) !important;
 }
 
 :where(
@@ -807,7 +821,7 @@
   /* The universal profile menu is rendered through a body-level portal, so it
    * does not inherit the mobile bar's grid alignment. Pin its 34px control
    * slot to the same 15px vertical origin and 16px edge inset as the other
-   * controls; the 18px avatar remains centered inside that slot. */
+   * controls; the shared-size avatar remains centered inside that slot. */
   .goodos-universal-profile.goodos-universal-profile {
     top: 15px;
     right: 16px;

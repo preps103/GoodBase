@@ -52,7 +52,9 @@ test("master top bar supports the standard signed-in profile layout", () => {
   assert.match(consoleHtml, /backend-topbar\.css\?v=20260819-profile-2/);
   assert.match(accountSettings, /class="topbar-avatar-wrap"/);
   assert.match(contract, /data-goodos-topbar-account-layout="profile"/);
-  assert.match(styles, /\.goodos-universal-profile \.goodos-universal-profile__trigger\s*\{[\s\S]*width:\s*18px\s*!important\s*;[\s\S]*height:\s*18px\s*!important\s*;/);
+  assert.match(styles, /--goodos-topbar-icon-size:\s*22px\s*;/);
+  assert.match(styles, /\.goodos-universal-profile \.goodos-universal-profile__trigger\s*\{[\s\S]*width:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar-search\]\s*>\s*svg,[\s\S]*\[data-goodos-topbar-control\]\s*>\s*svg,[\s\S]*\[data-goodos-notification-trigger\]\s*>\s*svg[\s\S]*width:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-icon-size\)\s*!important\s*;/);
   assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*\.goodos-universal-profile\.goodos-universal-profile\s*\{[\s\S]*top:\s*15px\s*;[\s\S]*right:\s*16px\s*;/);
 });
 
