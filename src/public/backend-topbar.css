@@ -259,6 +259,23 @@
   background: color-mix(in srgb, var(--goodos-topbar-accent) 14%, transparent);
 }
 
+/* The account image is visually inset inside the same 34px control slot used
+ * by the other universal controls. The widget-owned outer slot remains fixed,
+ * so every icon shares one optical center and one spacing rhythm. */
+.goodos-universal-profile.goodos-universal-profile {
+  display: grid;
+  place-items: center;
+}
+
+.goodos-universal-profile .goodos-universal-profile__trigger {
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+}
+
 :where(
   .goodos-topbar__search,
   [data-goodos-topbar-search],
