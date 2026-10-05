@@ -141,6 +141,10 @@ test("GoodSpeech streams low-latency clauses and supports stateless managed live
   assert.match(routes, /retainedAudio: false/);
   assert.match(worker, /SPLIT_PATTERN = r"\(\?<\=\[\.\!\?;:,。！？；：，、\]\)\\s\*\|\\n\+"/);
   assert.match(worker, /split_pattern=SPLIT_PATTERN/);
+  assert.match(worker, /STREAM_FIRST_SEGMENT_CHARS = 96/);
+  assert.match(worker, /STREAM_SEGMENT_CHARS = 220/);
+  assert.match(worker, /def streaming_segments\(text: str\):/);
+  assert.match(worker, /for segment in streaming_segments\(request\.input\):/);
 });
 
 test("GoodSpeech labels speakers from separate stereo channels without retaining audio", () => {
