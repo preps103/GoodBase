@@ -804,6 +804,15 @@
 }
 
 @media (max-width: 760px) {
+  /* The universal profile menu is rendered through a body-level portal, so it
+   * does not inherit the mobile bar's grid alignment. Pin its 34px control
+   * slot to the same 15px vertical origin and 16px edge inset as the other
+   * controls; the 18px avatar remains centered inside that slot. */
+  .goodos-universal-profile.goodos-universal-profile {
+    top: 15px;
+    right: 16px;
+  }
+
   [data-goodos-topbar] {
     grid-template-columns: minmax(0, 1fr) var(--goodos-topbar-control-size) var(--goodos-topbar-controls-width) !important;
     grid-template-rows: 44px !important;

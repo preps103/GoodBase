@@ -53,6 +53,7 @@ test("master top bar supports the standard signed-in profile layout", () => {
   assert.match(accountSettings, /class="topbar-avatar-wrap"/);
   assert.match(contract, /data-goodos-topbar-account-layout="profile"/);
   assert.match(styles, /\.goodos-universal-profile \.goodos-universal-profile__trigger\s*\{[\s\S]*width:\s*18px\s*!important\s*;[\s\S]*height:\s*18px\s*!important\s*;/);
+  assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*\.goodos-universal-profile\.goodos-universal-profile\s*\{[\s\S]*top:\s*15px\s*;[\s\S]*right:\s*16px\s*;/);
 });
 
 test("master top bar preserves the GoodBase desktop dimensions", () => {
