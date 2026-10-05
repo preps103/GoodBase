@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import secrets
 import threading
 import wave
@@ -24,6 +25,8 @@ MAX_TEXT_LENGTH = 2_000
 MODEL_ID = "hexgrad/Kokoro-82M"
 MODEL_SHA256 = "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4"
 SPLIT_PATTERN = r"(?<=[.!?;:,。！？；：，、])\s*|\n+"
+STREAM_FIRST_SEGMENT_CHARS = 96
+STREAM_SEGMENT_CHARS = 220
 ALLOWED_VOICES = frozenset({
     "af_bella",
     "af_heart",
@@ -140,6 +143,23 @@ def pcm_bytes(audio: np.ndarray) -> bytes:
     return (np.clip(normalized, -1.0, 1.0) * 32767).astype("<i2").tobytes()
 
 
+def streaming_segments(text: str):
+    """Yield an early first phrase, then bounded phrases for responsive playback."""
+    remaining = text.strip()
+    limit = STREAM_FIRST_SEGMENT_CHARS
+    while len(remaining) > limit:
+        window = remaining[: limit + 1]
+        candidates = [match.end() for match in re.finditer(r"[.!?;:,。！？；：，、]|\s+", window)]
+        split_at = max((position for position in candidates if position >= limit // 2), default=limit)
+        segment = remaining[:split_at].strip()
+        if segment:
+            yield segment
+        remaining = remaining[split_at:].strip()
+        limit = STREAM_SEGMENT_CHARS
+    if remaining:
+        yield remaining
+
+
 def synthesize(request: SpeechRequest) -> bytes:
     if pipeline is None:
         raise RuntimeError("Kokoro is not ready")
@@ -163,16 +183,17 @@ def synthesize_pcm_stream(request: SpeechRequest):
     with generation_slots:
         selected_pipeline = pipeline_for(request.language)
         produced = False
-        for _, _, audio in selected_pipeline(
-            request.input.strip(),
-            voice=request.voice,
-            speed=request.speed,
-            split_pattern=SPLIT_PATTERN,
-        ):
-            chunk = pcm_bytes(audio)
-            if chunk:
-                produced = True
-                yield chunk
+        for segment in streaming_segments(request.input):
+            for _, _, audio in selected_pipeline(
+                segment,
+                voice=request.voice,
+                speed=request.speed,
+                split_pattern=SPLIT_PATTERN,
+            ):
+                chunk = pcm_bytes(audio)
+                if chunk:
+                    produced = True
+                    yield chunk
         if not produced:
             raise RuntimeError("Kokoro returned no audio")
 
