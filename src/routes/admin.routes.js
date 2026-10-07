@@ -9134,7 +9134,7 @@ router.post("/usage-quotas/update-safe", async (req, res) => {
 router.post("/backups/create-real-safe", async (req, res) => {
   try {
     const childProcess = require("child_process");
-    const scriptPath = "/var/www/GoodAppBackEnd/scripts/create-db-backup.sh";
+    const scriptPath = "/var/www/GoodBase/scripts/create-db-backup.sh";
 
     const output = childProcess.execFileSync("/usr/bin/sudo", ["-n", scriptPath], {
       encoding: "utf8",
