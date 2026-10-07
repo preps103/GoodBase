@@ -56,7 +56,7 @@ const whisperDockerfile = fs.readFileSync(
 
 test("Kokoro pins a Transformers-compatible Hugging Face Hub release", () => {
   assert.match(requirements, /^torch==2\.7\.1$/m);
-  assert.match(requirements, /^transformers==5\.5\.2$/m);
+  assert.match(requirements, /^transformers==5\.10\.0$/m);
   assert.match(requirements, /^huggingface-hub==1\.5\.0$/m);
   assert.doesNotMatch(requirements, /^huggingface-hub==0\.33\.4$/m);
   assert.match(kokoroDockerfile, /from transformers\.models\.albert\.modeling_albert import AlbertModel/);
@@ -78,7 +78,8 @@ test("GoodMotion pins scanner-cleared media and model dependencies", () => {
 
 test("GoodSpeech pins the CPU cloning engine and hardened private runtime", () => {
   assert.match(chatterboxRequirements, /^python-multipart==0\.0\.30$/m);
-  assert.match(chatterboxRequirements, /^transformers==5\.2\.0$/m);
+  assert.match(chatterboxRequirements, /^transformers==5\.10\.0$/m);
+  assert.match(chatterboxRequirements, /^diffusers==0\.38\.0$/m);
   assert.match(chatterboxRequirements, /^huggingface-hub==1\.5\.0$/m);
   assert.match(chatterboxDockerfile, /chatterbox\.git@5de7a54aa4e5e2baadb0182dde554908b48b85c2/);
   assert.match(kokoroCompose, /127\.0\.0\.1:8881:8881/);
@@ -89,6 +90,7 @@ test("GoodSpeech pins the CPU cloning engine and hardened private runtime", () =
 test("GoodSpeech pins and isolates the private Faster-Whisper runtime", () => {
   assert.match(whisperRequirements, /^faster-whisper==1\.2\.1$/m);
   assert.match(whisperRequirements, /^huggingface-hub==1\.5\.0$/m);
+  assert.match(whisperRequirements, /^python-multipart==0\.0\.30$/m);
   assert.match(whisperDockerfile, /USER whisper/);
   assert.match(kokoroCompose, /127\.0\.0\.1:8882:8882/);
   assert.match(kokoroCompose, /faster_whisper_models/);
