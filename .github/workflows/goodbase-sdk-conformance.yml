@@ -62,7 +62,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1"
+          android_sdk_root="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          "${android_sdk_root}/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1"
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with: {gradle-version: "8.11.1"}
       - run: gradle :assembleRelease :testReleaseUnitTest
