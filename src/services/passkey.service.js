@@ -23,6 +23,7 @@ const EXPECTED_ORIGINS = Array.from(new Set([
   "https://escrow.goodos.app",
   "https://fleet.goodos.app",
   "https://gearhead.goodos.app",
+  "https://gifting.goodos.app",
   "https://mac.goodos.app",
   "https://panel.goodos.app",
   "https://qr.goodos.app",
@@ -125,6 +126,7 @@ async function registrationOptions(user) {
       residentKey: "required",
       userVerification: "required",
     },
+    preferredAuthenticatorType: "localDevice",
   });
   const challengeId = await createChallenge({
     userId: user.id,
@@ -189,6 +191,7 @@ async function authenticationOptions() {
     allowCredentials: [],
     userVerification: "required",
   });
+  options.hints = ["client-device"];
   const challengeId = await createChallenge({
     purpose: "authentication",
     challenge: options.challenge,
