@@ -32,12 +32,21 @@ native GoodBase adapter are all installed.
 | Pinterest | Pinterest | Native | Native, paused by default | Native |
 | Snapchat | Snapchat Marketing API | Native | Native, paused by default | Native |
 
+Facebook and Instagram use one approved Meta developer application. Configure
+either the `GOODADS_FACEBOOK_CLIENT_ID` / `GOODADS_FACEBOOK_CLIENT_SECRET` pair
+or the corresponding `GOODADS_INSTAGRAM_*` pair, and register both GoodBase
+callback URLs in that Meta application. Provider-specific variables remain
+available as overrides when separate Meta applications are intentionally used.
+
 X uses a separate X Ads authorization because the Ads API requires OAuth 1.0a
 user context and approved Ads API access; the OAuth 2.0 connection used for
 ordinary posting cannot be reused. Configure the approved application with
 `GOODADS_X_ADS_CONSUMER_KEY` and `GOODADS_X_ADS_CONSUMER_SECRET` (the equivalent
 `API_KEY`/`API_SECRET` names are also accepted), then reconnect after X grants
 Ads API access.
+
+The X Ads callback consumes both X's `oauth_token` and `oauth_verifier`; the
+verifier is never logged or returned to the browser.
 
 The native v12 adapter discovers only approved ad accounts, verifies an active
 funding instrument, a full promotable user, campaign-management access, and the

@@ -59,6 +59,33 @@ test("provider diagnostics expose standardized credential names without secret v
   }
 });
 
+test("one approved Meta application configures both Facebook and Instagram OAuth", () => {
+  const names = [
+    "GOODADS_FACEBOOK_CLIENT_ID",
+    "GOODADS_FACEBOOK_CLIENT_SECRET",
+    "GOODADS_INSTAGRAM_CLIENT_ID",
+    "GOODADS_INSTAGRAM_CLIENT_SECRET",
+  ];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    process.env.GOODADS_FACEBOOK_CLIENT_ID = "shared-meta-app";
+    process.env.GOODADS_FACEBOOK_CLIENT_SECRET = "shared-meta-secret";
+
+    const facebook = social.providerConfig("facebook");
+    const instagram = social.providerConfig("instagram");
+    assert.equal(facebook.configured, true);
+    assert.equal(instagram.configured, true);
+    assert.equal(instagram.clientId, "shared-meta-app");
+    assert.equal(JSON.stringify(social.publicProviders()).includes("shared-meta-secret"), false);
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
 test("provider capability registry reports only installed publishing adapters", () => {
   for (const provider of ["x", "linkedin", "threads", "reddit"]) {
     assert.equal(social.PROVIDER_PUBLISH_CAPABILITIES[provider].text, true);
@@ -134,6 +161,12 @@ test("X Ads uses a separate OAuth 1.0a business authorization", () => {
       else process.env[name] = saved[name];
     }
   }
+});
+
+test("X Ads callback accepts the OAuth 1.0a verifier returned by X", () => {
+  const routeSource = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  assert.match(routeSource, /req\.query\.code \|\| req\.query\.auth_code \|\| req\.query\.oauth_verifier/);
+  assert.match(routeSource, /oauthToken: req\.query\.oauth_token/);
 });
 
 test("OAuth refresh serializes token rotation and reuses the refreshed credential", async () => {

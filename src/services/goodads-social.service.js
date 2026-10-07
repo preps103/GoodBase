@@ -190,16 +190,24 @@ function providerConfig(provider) {
   const definition = PROVIDERS[id];
   if (!definition) throw socialError("Unsupported social provider.", 404, "GOODADS_PROVIDER_NOT_FOUND");
   const prefix = `GOODADS_${id.toUpperCase()}_`;
-  const clientId = process.env[`${prefix}CLIENT_ID`]
+  let clientId = process.env[`${prefix}CLIENT_ID`]
     || process.env[`${prefix}CLIENT_KEY`]
     || process.env[`${prefix}APP_ID`]
     || process.env[`${prefix}CONSUMER_KEY`]
     || process.env[`${prefix}API_KEY`]
     || "";
-  const clientSecret = process.env[`${prefix}CLIENT_SECRET`]
+  let clientSecret = process.env[`${prefix}CLIENT_SECRET`]
     || process.env[`${prefix}CONSUMER_SECRET`]
     || process.env[`${prefix}API_SECRET`]
     || "";
+  // Facebook and Instagram advertising are authorized by the same approved
+  // Meta application. Keep the provider-specific variables as overrides, but
+  // do not force operators to duplicate the same app secret in production.
+  if ((id === "facebook" || id === "instagram") && (!clientId || !clientSecret)) {
+    const siblingPrefix = id === "facebook" ? "GOODADS_INSTAGRAM_" : "GOODADS_FACEBOOK_";
+    clientId ||= process.env[`${siblingPrefix}CLIENT_ID`] || process.env[`${siblingPrefix}APP_ID`] || "";
+    clientSecret ||= process.env[`${siblingPrefix}CLIENT_SECRET`] || process.env[`${siblingPrefix}APP_SECRET`] || "";
+  }
   const advertisingEnabled = String(process.env[`GOODADS_${id.toUpperCase()}_ADS_OAUTH_ENABLED`] || "").toLowerCase() === "true";
   const scopes = [
     ...definition.scopes,

@@ -154,7 +154,7 @@ router.get("/oauth/:platform/callback", async (req, res) => {
     }
     const { connection, returnOrigin } = await social.completeAuthorization({
       provider: req.params.platform,
-      code: req.query.code || req.query.auth_code,
+      code: req.query.code || req.query.auth_code || req.query.oauth_verifier,
       state: req.query.state,
       oauthToken: req.query.oauth_token,
     });
