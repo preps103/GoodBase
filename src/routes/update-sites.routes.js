@@ -145,10 +145,23 @@ router.get("/sites", async (_request, response) => {
     `);
 
     const targets = await deployment.discoverServerApps().catch(() => []);
-    const sites = result.rows.map((site) => ({
-      ...site,
-      configuration: deployment.assessSiteConfiguration(site, targets),
-    }));
+    const inventory = deployment.applicationInventory();
+    const inventoryByAppId = new Map(inventory.map((entry) => [entry.appId, entry]));
+    const configuredAppIds = new Set(result.rows.map((site) => site.appId).filter(Boolean));
+    const configuredSites = result.rows.map((site) => {
+      const registry = inventoryByAppId.get(site.appId) || {};
+      return {
+        ...registry,
+        ...site,
+        deploymentType: registry.deploymentType || "vps",
+        deploymentManaged: true,
+        hostingProvider: registry.hostingProvider || "vps",
+        configuration: deployment.assessSiteConfiguration(site, targets),
+      };
+    });
+    const registryOnlySites = inventory.filter((entry) => !configuredAppIds.has(entry.appId));
+    const sites = [...configuredSites, ...registryOnlySites]
+      .sort((left, right) => left.name.localeCompare(right.name));
 
     return response.json({ success: true, sites, total: sites.length });
   } catch (error) {

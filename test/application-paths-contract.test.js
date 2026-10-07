@@ -16,21 +16,21 @@ test("the registry discovers active products without a fixed application count",
   assert.equal(Object.hasOwn(manifest, "applicationCount"), false);
   assert.ok(manifest.applications.length > 0);
 
-  for (const key of ["id", "name", "domain", "status", "classification", "repositoryUrl", "localDirectory", "deploymentType"]) {
+  for (const key of ["id", "name", "domain", "status", "classification", "localDirectory", "deploymentType"]) {
     for (const application of manifest.applications) {
       assert.ok(application[key], `${application.id || "unknown"} is missing ${key}`);
     }
   }
 
   for (const key of ["id", "domain", "repositoryUrl", "localDirectory"]) {
-    const values = manifest.applications.map((application) => application[key]);
+    const values = manifest.applications.map((application) => application[key]).filter(Boolean);
     assert.equal(new Set(values).size, values.length, `application ${key} values must be unique`);
   }
 
   for (const application of manifest.applications) {
     assert.equal(application.status, "active");
     assert.equal(application.classification, "product");
-    assert.doesNotThrow(() => new URL(application.repositoryUrl));
+    if (application.repositoryUrl) assert.doesNotThrow(() => new URL(application.repositoryUrl));
   }
 });
 
@@ -52,17 +52,21 @@ test("every active product declares the canonical login integration and theme to
   }
 });
 
-test("every product frontend uses its declared externally managed publishing target", () => {
+test("every product frontend declares its actual publishing target", () => {
   const projectIds = [];
   const sitesApplications = manifest.applications.filter((application) => application.deploymentType === "sites");
   for (const application of manifest.applications) {
-    assert.ok(["sites", "worker"].includes(application.deploymentType));
-    assert.equal(application.deploymentManaged, false);
-    assert.equal(Object.hasOwn(application, "productionPath"), false);
-    assert.equal(Object.hasOwn(application, "service"), false);
+    assert.ok(["sites", "worker", "vps"].includes(application.deploymentType));
     if (application.deploymentType === "sites") {
+      assert.equal(application.deploymentManaged, false);
+      assert.equal(Object.hasOwn(application, "productionPath"), false);
+      assert.equal(Object.hasOwn(application, "service"), false);
       assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
       projectIds.push(application.hostingProjectId);
+    } else if (application.deploymentType === "vps") {
+      assert.equal(application.deploymentManaged, true);
+      assert.match(application.productionPath, /^\/(?:home|var\/www|opt)\//);
+      assert.ok(application.service);
     }
   }
   assert.equal(new Set(projectIds).size, sitesApplications.length);

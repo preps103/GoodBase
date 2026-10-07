@@ -88,7 +88,7 @@
       "theme": { "accent": "#F58426", "accentInk": "#081b31" }
     },
     {
-      "id": "goodscan", "name": "GoodScan", "domain": "scan.goodos.app", "status": "active", "classification": "product",
+      "id": "goodscan", "name": "Good3D", "domain": "scan.goodos.app", "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/GoodScan-3D.git", "localDirectory": "goodscan-source",
       "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a87c45489fc81918557c2ae46a8934b",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/auth/GoodOSLogin.tsx",
@@ -170,6 +170,56 @@
       "deploymentType": "worker", "deploymentManaged": false, "hostingProjectId": "goodsigns-studio", "hostingProvider": "cloudflare-workers",
       "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
       "theme": { "accent": "#0c766e", "accentInk": "#ffffff" }
+    },
+    {
+      "id": "goodgifting", "name": "GoodGifting", "domain": "gifting.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": null, "localDirectory": "goodgifting-site",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6ac1a1f3a55c819199c9b3c2092dff79",
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#ec4899", "accentInk": "#ffffff" }
+    },
+    {
+      "id": "goodnonprofit", "name": "GoodNonProfit", "domain": "nonprofit.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": null, "localDirectory": "goodnonprofit-source",
+      "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6ac40ee3bfbc8191b8c943a9ee67c230",
+      "backend": { "deploymentType": "vps", "productionPath": "/home/mgoodlo3/GoodNonProfit", "service": "goodnonprofit", "domain": "nonprofit-backend.goodos.app" },
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#22c55e", "accentInk": "#052e16" }
+    },
+    {
+      "id": "goodadmin", "name": "GoodAdmin", "domain": "admin.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": "https://github.com/preps103/GoodAdmin.git", "localDirectory": "goodadmin-source",
+      "productionPath": "/var/www/GoodAdmin", "service": "goodadmin", "deploymentType": "vps", "deploymentManaged": true,
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#60a5fa", "accentInk": "#071e3d" }
+    },
+    {
+      "id": "goodstream", "name": "GoodStream", "domain": "stream.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": null, "localDirectory": "goodstream-source",
+      "productionPath": "/var/www/GoodStream", "service": "goodstream", "deploymentType": "vps", "deploymentManaged": true,
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#a855f7", "accentInk": "#ffffff" }
+    },
+    {
+      "id": "goodvpn", "name": "GoodVPN", "domain": "vpn.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": null, "localDirectory": "goodvpn-source",
+      "productionPath": "/var/www/GoodVPN", "service": "goodvpn", "deploymentType": "vps", "deploymentManaged": true,
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#06b6d4", "accentInk": "#082f49" }
+    },
+    {
+      "id": "goodytc", "name": "GoodYTC", "domain": "ytc.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": null, "localDirectory": "goodytc-source",
+      "productionPath": "/var/www/GoodYTC", "service": "goodytc", "deploymentType": "vps", "deploymentManaged": true,
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#ef4444", "accentInk": "#ffffff" }
+    },
+    {
+      "id": "goodreceipts", "name": "GoodReceipts", "domain": "receipt.goodos.app", "status": "active", "classification": "product",
+      "repositoryUrl": null, "localDirectory": "goodreceipts-source",
+      "productionPath": "/var/www/GoodReceipts", "service": "goodreceipts", "deploymentType": "vps", "deploymentManaged": true,
+      "authEnabled": true, "canonicalLoginRequired": true, "loginIntegration": "src/components/GoodOSAuthGate.tsx",
+      "theme": { "accent": "#14b8a6", "accentInk": "#042f2e" }
     }
   ],
   "platformServices": [

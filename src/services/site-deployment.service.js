@@ -37,7 +37,12 @@ const STAGED_PRESERVE_PATHS = [
 
 function canonicalDeploymentSites() {
   const applications = deploymentManifest.applications
-    .filter((application) => application.deploymentManaged !== false)
+    .filter((application) =>
+      application.deploymentManaged !== false &&
+      application.repositoryUrl &&
+      application.productionPath &&
+      application.service
+    )
     .map((application) => ({
       appId: application.id,
       name: application.name,
@@ -63,6 +68,55 @@ function canonicalDeploymentSites() {
     processManager: "pm2",
     healthUrl: `https://${site.domain}`,
   }));
+}
+
+function applicationInventory() {
+  const applications = deploymentManifest.applications.map((application) => ({
+    id: `registry_${application.id}`,
+    appId: application.id,
+    name: application.name,
+    domain: application.domain,
+    repositoryUrl: application.repositoryUrl || "",
+    branch: "main",
+    appPath: application.productionPath || application.backend?.productionPath || "",
+    processManager: application.service || application.backend?.service ? "pm2" : "none",
+    processName: application.service || application.backend?.service || "",
+    healthUrl: `https://${application.domain}`,
+    status: application.deploymentType === "vps" ? "setup_required" : "externally_managed",
+    deploymentType: application.deploymentType,
+    deploymentManaged: application.deploymentManaged === true,
+    hostingProjectId: application.hostingProjectId || null,
+    hostingProvider: application.hostingProvider || (application.deploymentType === "sites" ? "sites" : "vps"),
+    backend: application.backend || null,
+    configuration: {
+      ready: application.deploymentType !== "vps",
+      deploymentMode: application.deploymentType,
+      issues: application.deploymentType === "vps"
+        ? [application.repositoryUrl ? "Server mapping is not registered." : "Source repository is not connected."]
+        : [],
+    },
+  }));
+
+  const platformServices = deploymentManifest.platformServices.map((service) => ({
+    id: `registry_${service.id}`,
+    appId: service.id,
+    name: service.name,
+    domain: service.domain,
+    repositoryUrl: service.repositoryUrl || "",
+    branch: "main",
+    appPath: service.productionPath || "",
+    processManager: "pm2",
+    processName: service.services?.[0] || "",
+    healthUrl: `https://${service.domain}`,
+    status: "setup_required",
+    deploymentType: service.deploymentType,
+    deploymentManaged: service.deploymentManaged === true,
+    hostingProjectId: null,
+    hostingProvider: "vps",
+    configuration: { ready: false, deploymentMode: "vps", issues: ["Server mapping is not registered."] },
+  }));
+
+  return [...applications, ...platformServices];
 }
 
 function sitesHostedApplicationIds() {
@@ -1591,6 +1645,7 @@ module.exports = {
   validateProcessName,
   validateHealthUrl,
   canonicalDeploymentSites,
+  applicationInventory,
   sitesHostedApplicationIds,
   canonicalSiteByAppId,
   canonicalSiteByProcessName,

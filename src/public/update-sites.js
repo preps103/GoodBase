@@ -179,7 +179,7 @@ function selectedRepository() {
 
 function badge(status) {
   const value = String(status || "setup_required");
-  const good = ["ready", "success", "no_change", "online"].includes(value);
+  const good = ["ready", "success", "no_change", "online", "externally_managed"].includes(value) || value.endsWith("_managed");
   const bad = ["failed", "rolled_back", "errored"].includes(value);
   return `<span class="badge ${good ? "good" : bad ? "bad" : "warn"}">${escapeHtml(value.replaceAll("_", " "))}</span>`;
 }
@@ -302,11 +302,16 @@ function matchTargetByRepository(repositoryUrl) {
 
 function renderSites() {
   $("siteCount").textContent = state.sites.length;
-  $("readyCount").textContent = state.sites.filter((site) => site.configuration?.ready).length;
+  $("readyCount").textContent = state.sites.filter(
+    (site) =>
+      site.deploymentManaged !== false &&
+      !String(site.id || "").startsWith("registry_") &&
+      site.configuration?.ready
+  ).length;
   $("runningCount").textContent = state.sites.filter((site) => ["queued", "deploying"].includes(site.status)).length;
   $("failedCount").textContent = state.sites.filter(
     (site) =>
-      site.configuration?.ready === false ||
+      (site.deploymentManaged !== false && site.configuration?.ready === false) ||
       site.status === "failed" ||
       site.lastRunStatus === "rolled_back"
   ).length;
@@ -314,21 +319,30 @@ function renderSites() {
   $("sitesBody").innerHTML =
     state.sites
       .map((site) => {
+        const externallyManaged = site.deploymentManaged === false;
+        const registryOnly = String(site.id || "").startsWith("registry_");
         const configured = Boolean(
+          !registryOnly &&
           site.repositoryUrl &&
             site.appPath &&
             (site.processManager === "none" || site.processName)
         );
         const running = ["queued", "deploying"].includes(site.status);
         const ready = site.configuration?.ready === true;
-        const displayedStatus = running
+        const displayedStatus = externallyManaged
+          ? `${site.deploymentType || "external"}_managed`
+          : registryOnly
+            ? "source_required"
+            : running
           ? site.status
           : site.status === "failed"
             ? site.status
             : ready
               ? "ready"
               : "needs_attention";
-        const configurationDetail = ready
+        const configurationDetail = externallyManaged
+          ? `${site.deploymentType === "sites" ? "Sites frontend" : "External frontend"}${site.backend ? ` · ${site.backend.service} backend on VPS` : ""}`
+          : ready
           ? `${site.configuration.deploymentMode === "staged-release" ? "Staged release" : "Managed checkout"} · path and process aligned`
           : (site.configuration?.issues || []).join(" ");
 
@@ -337,20 +351,22 @@ function renderSites() {
             <td>
               <strong>${escapeHtml(site.name)}</strong>
               <div class="muted">${escapeHtml(site.domain || "No subdomain")}</div>
-              <div class="mono">${escapeHtml(site.appPath || "Target not selected")}</div>
+              <div class="mono">${escapeHtml(site.appPath || (externallyManaged ? "No VPS frontend path" : "Target not selected"))}</div>
               <div class="muted">${escapeHtml(configurationDetail)}</div>
             </td>
             <td>
-              <div class="mono">${escapeHtml(site.repositoryUrl || "Repository not selected")}</div>
+              <div class="mono">${escapeHtml(site.repositoryUrl || (externallyManaged ? "Owned source" : "Repository not connected"))}</div>
               <div class="muted">Branch: ${escapeHtml(site.branch || "main")}</div>
             </td>
             <td>
-              ${escapeHtml(site.processManager || "pm2")}
-              <div class="muted">${escapeHtml(site.processName || "Process not selected")}</div>
+              ${escapeHtml(externallyManaged ? (site.hostingProvider || site.deploymentType || "external") : (site.processManager || "pm2"))}
+              <div class="muted">${escapeHtml(externallyManaged ? (site.hostingProjectId || site.backend?.service || "Externally managed") : (site.processName || "Process not selected"))}</div>
             </td>
             <td>${badge(displayedStatus)}</td>
             <td>
               <div class="actions">
+                <a class="btn" href="https://${escapeHtml(site.domain)}" target="_blank" rel="noopener">Open App</a>
+                ${externallyManaged || registryOnly ? "" : `
                 <button class="btn js-select" type="button" data-site-id="${escapeHtml(site.id)}">Select</button>
                 <button class="btn js-configure" type="button" data-site-id="${escapeHtml(site.id)}">Configure</button>
                 <button class="btn js-test" type="button" data-site-id="${escapeHtml(site.id)}" ${configured ? "" : "disabled"}>Test</button>
@@ -359,6 +375,7 @@ function renderSites() {
                 ${running && site.lastRunId ? `<button class="btn js-recover-run" type="button" data-run-id="${escapeHtml(site.lastRunId)}">Recover Stale Run</button>` : ""}
                 ${site.appId === "goodbase" ? `<button class="btn js-restart-goodbase" type="button" data-site-id="${escapeHtml(site.id)}">Restart Services</button>` : ""}
                 ${isTemporaryGoodBaseRecoverySite(site) ? `<button class="btn js-remove-mapping" type="button" data-site-id="${escapeHtml(site.id)}">Remove Mapping</button>` : ""}
+                `}
               </div>
             </td>
           </tr>
@@ -416,6 +433,8 @@ function updateSummary() {
 
   const valid = Boolean(
     site &&
+      site.deploymentManaged !== false &&
+      !String(site.id || "").startsWith("registry_") &&
       selectedRepository() &&
       (target ||
         (site.appPath &&
@@ -638,7 +657,7 @@ async function loadWorkspace() {
     $("workspaceStatus").className = "badge warn";
   } else {
     $("workspaceStatus").textContent =
-      `${state.sites.length} sites · ${uniqueRepositories().length} repositories · ${state.targets.length} server targets`;
+      `${state.sites.length} applications · ${uniqueRepositories().length} repositories · ${state.targets.length} server targets`;
     $("workspaceStatus").className = "badge good";
   }
 

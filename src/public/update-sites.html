@@ -13,9 +13,9 @@
 <link rel="manifest" href="/site.webmanifest?v=20260728-1">
   <style>
     :root{color-scheme:dark;--bg:#070b11;--panel:#101722;--line:#29384d;--text:#f6f8fc;--muted:#a7b4c7;--accent:#82aaff;--good:#4dd29c;--warn:#f0be5a;--bad:#ff7373}
-    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#13213a 0,#070b11 42%);color:var(--text);font:14px/1.45 Inter,system-ui,sans-serif}
-    button,input,select{font:inherit}.shell{max-width:1540px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:18px}.title h1{margin:0;font-size:30px}.title p{margin:6px 0 0;color:var(--muted)}
-    .top-actions,.actions,.quick-actions{display:flex;gap:9px;flex-wrap:wrap}.btn{border:1px solid var(--line);background:#1b2738;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;text-decoration:none}.btn:hover{border-color:var(--accent)}.btn.primary{background:var(--accent);color:#07101f;border-color:var(--accent);font-weight:750}.btn:disabled{opacity:.45;cursor:not-allowed}
+    *{box-sizing:border-box}html,body{max-width:100%;overflow-x:hidden}body{margin:0;background:radial-gradient(circle at top,#13213a 0,#070b11 42%);color:var(--text);font:14px/1.45 Inter,system-ui,sans-serif}
+    button,input,select{font:inherit}.shell{width:100%;max-width:1540px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:18px;min-width:0}.title{flex:1 1 auto;min-width:260px}.title h1{margin:0;font-size:30px}.title p{margin:6px 0 0;color:var(--muted)}
+    .top-actions,.actions,.quick-actions{display:flex;gap:9px;flex-wrap:wrap}.top-actions{flex:0 1 auto;justify-content:flex-end;min-width:0}.btn{border:1px solid var(--line);background:#1b2738;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;text-decoration:none;white-space:nowrap}.btn:hover{border-color:var(--accent)}.btn.primary{background:var(--accent);color:#07101f;border-color:var(--accent);font-weight:750}.btn:disabled{opacity:.45;cursor:not-allowed}
     .panel,.stat{background:rgba(16,23,34,.95);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.22)}.panel{overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 17px;border-bottom:1px solid var(--line)}.panel-head h2{margin:0;font-size:17px}.panel-body{padding:16px}
     .alert{display:none;margin-bottom:16px;border:1px solid #78404a;background:#2a171c;color:#ffd9de;padding:13px 15px;border-radius:12px;align-items:center;justify-content:space-between;gap:14px}.alert.show{display:flex}.alert .btn{flex:0 0 auto;background:#ffd9de;color:#331116;border-color:#ffd9de;font-weight:750}
     .quick{margin-bottom:16px}.selector-grid{display:grid;grid-template-columns:1.15fr 1.35fr 1.1fr .65fr;gap:13px;align-items:end}.field{display:flex;flex-direction:column;gap:7px;min-width:0}.field label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;font-weight:700}.field input,.field select{width:100%;background:#090f18;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px;min-height:43px}.manual{display:none;margin-top:12px}.manual.show{display:block}
@@ -25,7 +25,7 @@
     .log{height:580px;overflow:auto;background:#080c12;border:1px solid #202a39;border-radius:10px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}.log-line{padding:4px 0;border-bottom:1px dashed #18202c}.log-line.error{color:var(--bad)}.log-line.warning{color:var(--warn)}.log-line.log{color:#c0cbe0}
     dialog{width:min(760px,calc(100vw - 30px));border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);padding:0}dialog::backdrop{background:rgba(0,0,0,.72)}.modal-head,.modal-foot{padding:16px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}.modal-foot{border-top:1px solid var(--line);border-bottom:0;justify-content:flex-end}.modal-body{padding:18px;max-height:70vh;overflow:auto}.fields{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field.full{grid-column:1/-1}.checks{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px}.checks label{display:flex;align-items:center;gap:7px}
     .toast{position:fixed;right:22px;bottom:22px;max-width:440px;background:#151e2b;border:1px solid var(--line);border-radius:10px;padding:12px 15px;display:none;z-index:10}.toast.show{display:block}.toast.error{border-color:#7c3842;color:#ffd6d6}
-    @media(max-width:1180px){.selector-grid{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}}@media(max-width:700px){.shell{padding:14px}.top{align-items:flex-start;flex-direction:column}.selector-grid,.summary,.stats,.fields{grid-template-columns:1fr}.field.full{grid-column:auto}}
+    @media(max-width:1180px){.top{align-items:flex-start;flex-direction:column}.top-actions{width:100%;justify-content:flex-start}.selector-grid{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}}@media(max-width:700px){.shell{padding:14px}.top-actions{display:grid;grid-template-columns:1fr}.top-actions .btn{text-align:center}.selector-grid,.summary,.stats,.fields{grid-template-columns:1fr}.field.full{grid-column:auto}}
   </style>
 </head>
 <body>
@@ -33,7 +33,7 @@
     <header class="top">
       <div class="title">
         <h1>Update Sites</h1>
-        <p>Select the application, select the GitHub repository, confirm the server target, and update it.</p>
+        <p>Review every GoodOS application in one place and update VPS-managed services from their verified source.</p>
       </div>
       <div class="top-actions">
         <a class="btn" href="/console">Back to Console</a>
@@ -95,7 +95,7 @@
     </section>
 
     <section class="stats">
-      <div class="stat"><strong id="siteCount">0</strong><span>VPS deployments</span></div>
+      <div class="stat"><strong id="siteCount">0</strong><span>Applications</span></div>
       <div class="stat"><strong id="readyCount">0</strong><span>Ready to update</span></div>
       <div class="stat"><strong id="runningCount">0</strong><span>Updates running</span></div>
       <div class="stat"><strong id="failedCount">0</strong><span>Needs attention</span></div>
@@ -104,7 +104,7 @@
     <section class="grid">
       <div class="panel">
         <div class="panel-head">
-          <h2>VPS-managed Deployments</h2>
+          <h2>Application Deployments</h2>
           <button class="btn" id="refreshButton" type="button">Refresh</button>
         </div>
         <div class="table-wrap">

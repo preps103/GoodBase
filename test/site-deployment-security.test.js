@@ -130,7 +130,12 @@ test("canonical server mappings include only VPS-managed platform services", () 
 
   const manifest = require("../deploy/application-paths.json");
   const managedIds = [...manifest.applications, ...manifest.platformServices]
-    .filter((entry) => entry.deploymentManaged !== false)
+    .filter((entry) =>
+      entry.deploymentManaged !== false &&
+      entry.repositoryUrl &&
+      entry.productionPath &&
+      (entry.service || entry.services?.[0])
+    )
     .map((entry) => entry.id);
 
   assert.equal(sites.length, managedIds.length);
@@ -138,7 +143,7 @@ test("canonical server mappings include only VPS-managed platform services", () 
   assert.deepEqual(sites.map((site) => site.appId).sort(), managedIds.sort());
   assert.deepEqual(
     sites.map((site) => site.appId).sort(),
-    ["goodbase", "goodid"]
+    ["goodadmin", "goodbase", "goodid"]
   );
   assert.equal(
     sites.some((site) => site.appId === "goodvoice"),
@@ -162,7 +167,7 @@ test("canonical server mappings include only VPS-managed platform services", () 
   assert.equal(sitesHostedIds.includes("goodbase"), false);
 });
 
-test("deployment reconciliation retires stale Sites rows and canonical duplicates", () => {
+test("deployment reconciliation protects Sites rows while the dashboard shows the unified inventory", () => {
   const service = fs.readFileSync(
     path.join(__dirname, "..", "src", "services", "site-deployment.service.js"),
     "utf8"
@@ -181,8 +186,8 @@ test("deployment reconciliation retires stale Sites rows and canonical duplicate
   assert.match(service, /WHERE app_id = ANY\(\$1::text\[\]\)/);
   assert.match(service, /WHERE app_id IS NULL/);
   assert.match(routes, /WHERE site\.status <> 'retired'/);
-  assert.match(page, /VPS-managed Deployments/);
-  assert.doesNotMatch(page, /Registered Sites and Subdomains/);
+  assert.match(page, /Application Deployments/);
+  assert.match(routes, /applicationInventory/);
 });
 
 test("deployment center exits loading state and preserves the return path through sign-in", () => {
