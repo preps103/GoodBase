@@ -449,6 +449,8 @@ router.get("/connections/:platform/authorize", (req, res) => social.beginAuthori
   context: req.tenantContext,
   userId: req.user.id,
   returnOrigin: "https://ads.goodos.app",
+  connectionOwner: req.query.connectionOwner,
+  clientName: req.query.clientName,
 }).then((url) => res.redirect(302, url)).catch((requestError) => {
   console.error("GoodAds OAuth start failed:", requestError.message);
   return res.status(requestError.statusCode || 500).json({

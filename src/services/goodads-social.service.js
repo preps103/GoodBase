@@ -359,6 +359,8 @@ function publicConnection(connection) {
     status: connection.status,
     connectedAt: connection.connectedAt || connection.connected_at,
     lastSyncAt: connection.lastSyncAt || connection.last_verified_at || null,
+    connectionOwner: connection.metadata?.connectionContext?.connectionOwner === "client" ? "client" : "workspace",
+    clientName: connection.metadata?.connectionContext?.clientName || null,
     updatedAt: connection.updatedAt || connection.updated_at,
   };
 }
@@ -476,12 +478,15 @@ async function oauth1FormRequest(config, url, { data = {}, token, tokenSecret } 
   return payload;
 }
 
-async function beginAuthorization({ provider, context, userId, returnOrigin = "https://ads.goodos.app" }) {
+async function beginAuthorization({ provider, context, userId, returnOrigin = "https://ads.goodos.app", connectionOwner = "workspace", clientName = "" }) {
   const config = providerConfig(provider);
   if (!config.configured) throw socialError(`${config.label} OAuth credentials are not configured.`, 503, "GOODADS_PROVIDER_NOT_CONFIGURED");
   encryptionKey();
   const state = crypto.randomBytes(32).toString("base64url");
   const verifier = config.pkce ? crypto.randomBytes(48).toString("base64url") : null;
+  const safeConnectionOwner = connectionOwner === "client" ? "client" : "workspace";
+  const safeClientName = safeConnectionOwner === "client" ? String(clientName || "").trim().slice(0, 120) : "";
+  if (safeConnectionOwner === "client" && !safeClientName) throw socialError("A client or business name is required for a client account.", 400, "GOODADS_CLIENT_NAME_REQUIRED");
   let stateVerifier = verifier;
   let authorizationUrl;
   if (config.oauthStyle === "oauth1") {
@@ -502,9 +507,9 @@ async function beginAuthorization({ provider, context, userId, returnOrigin = "h
   }
   await query(
     `INSERT INTO goodads_oauth_states (
-       state_hash, provider, organization_id, user_id, code_verifier, return_origin
-     ) VALUES ($1, $2, $3, $4::uuid, $5, $6)`,
-    [stateHash(state), config.id, context.organizationId, userId, stateVerifier, returnOrigin]
+       state_hash, provider, organization_id, user_id, code_verifier, return_origin, connection_context
+     ) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7::jsonb)`,
+    [stateHash(state), config.id, context.organizationId, userId, stateVerifier, returnOrigin, JSON.stringify({ connectionOwner: safeConnectionOwner, clientName: safeClientName || null })]
   );
   if (authorizationUrl) return authorizationUrl;
   const url = new URL(config.authUrl);
@@ -741,6 +746,7 @@ async function completeAuthorization({ provider, code, state, oauthToken }) {
       refresh?.ciphertext || null, refresh?.iv || null, refresh?.tag || null,
       expiresAt, JSON.stringify({
         identity: identity.raw,
+        connectionContext: stateRow.connection_context || { connectionOwner: "workspace", clientName: null },
         scopeVerification: {
           source: scopeGrant.source,
           verifiedAt: new Date().toISOString(),

@@ -441,3 +441,16 @@ test("publishing workers recover abandoned locks and disconnects erase exact-acc
   assert.match(source, /disconnectConnection\(\{ context, userId, id: row\.id \}\)/);
   assert.doesNotMatch(source, /response\.status === 401 \|\| response\.status === 429/);
 });
+
+test("GoodAds OAuth preserves workspace and client account ownership", () => {
+  const service = fs.readFileSync(path.join(__dirname, "../src/services/goodads-social.service.js"), "utf8");
+  const routes = fs.readFileSync(path.join(__dirname, "../src/routes/goodads.routes.js"), "utf8");
+  const migration = fs.readFileSync(path.join(__dirname, "../migrations/20261007_goodads_connection_ownership.sql"), "utf8");
+
+  assert.match(service, /connectionOwner === "client"/);
+  assert.match(service, /GOODADS_CLIENT_NAME_REQUIRED/);
+  assert.match(service, /connectionContext: stateRow\.connection_context/);
+  assert.match(routes, /connectionOwner: req\.query\.connectionOwner/);
+  assert.match(routes, /clientName: req\.query\.clientName/);
+  assert.match(migration, /connection_context JSONB/);
+});
