@@ -26,6 +26,9 @@ const {
 const { logAudit } = require("../services/audit.service");
 const authRequired = require("../middleware/authRequired");
 const database = require("../config/database");
+const {
+  rateLimitIdentity,
+} = require("../security/rate-limit-identity");
 
 
 function authV2MfaKeyBuffer() {
@@ -342,6 +345,7 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
+  keyGenerator: rateLimitIdentity,
   message: {
     success: false,
     message: "Too many login attempts. Please try again later."

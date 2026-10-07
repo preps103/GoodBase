@@ -6,6 +6,9 @@ const jwt = require("jsonwebtoken");
 const {
   rateLimit
 } = require("express-rate-limit");
+const {
+  rateLimitIdentity
+} = require("../security/rate-limit-identity");
 
 const database =
   require("../security/phase2-db");
@@ -149,9 +152,14 @@ const globalLimiter = rateLimit({
   skip: req =>
     req.method === "OPTIONS" ||
     req.originalUrl.startsWith("/health") ||
+    (
+      req.originalUrl === "/api/auth" ||
+      req.originalUrl.startsWith("/api/auth/")
+    ) ||
     req.originalUrl.startsWith(
       "/api/enterprise/ready"
     ),
+  keyGenerator: rateLimitIdentity,
   handler: (req, res) => {
     audit({
       action: "security.rate_limit.global",
@@ -175,7 +183,13 @@ const authLimiter = rateLimit({
   limit: 30,
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  skip: req => req.method === "OPTIONS",
+  skip: req =>
+    req.method === "OPTIONS" ||
+    (
+      ["GET", "HEAD"].includes(req.method) &&
+      req.path === "/me"
+    ),
+  keyGenerator: rateLimitIdentity,
   skipSuccessfulRequests: true,
   handler: (req, res) => {
     audit({
