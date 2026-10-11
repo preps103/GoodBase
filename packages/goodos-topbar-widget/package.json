@@ -1,6 +1,6 @@
 {
   "name": "@goodos/topbar-widget",
-  "version": "4.11.2",
+  "version": "4.12.1",
   "description": "Canonical GoodOS top-bar and login widgets for React applications.",
   "type": "module",
   "main": "./index.js",
