@@ -11,7 +11,7 @@ widget and mark its appearance trigger with
 `data-goodos-topbar-control="theme"`; do not copy the header or theme dialog
 into product code.
 
-Version 4.15.0 stores one `goodos_appearance_v1` preference, applies Day/Night
+Version 4.15.1 stores one `goodos_appearance_v1` preference, applies Day/Night
 to the application root, publishes the selected accent as shared CSS tokens,
 and emits `goodos:appearance-change`. Its minimal appearance popover is anchored
 directly below the top-bar control, without an overlay or page blur, so users
@@ -31,6 +31,8 @@ The widget also owns the responsive top-bar geometry: a restrained desktop
 search width, icon-only collapsed search at compact widths with focus expansion,
 44px interaction targets, 22px universal visuals, and an application action
 lane immediately to the right of Search for product-specific controls.
+Application actions retain their labels, widths, menus, and behavior on desktop;
+the widget standardizes their alignment and hit targets without replacing them.
 
 Use `GoodOSLoginShell` for the two-panel page structure and
 `GoodOSLoginWidget` for the authentication panel. Do not fork the panel markup
