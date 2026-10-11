@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export const GOODOS_TOPBAR_WIDGET_VERSION = "4.11.1";
+export const GOODOS_TOPBAR_WIDGET_VERSION = "4.11.2";
 export const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
@@ -360,15 +360,15 @@ export function GoodOSTopBarWidget(props) {
 }
 
 const appearanceCss = String.raw`
-.goodos-appearance-backdrop{position:fixed;z-index:2147483003;inset:0;display:grid;place-items:start center;padding:92px 16px 24px;background:rgba(2,6,23,.58);backdrop-filter:blur(12px);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-.goodos-appearance{width:min(680px,100%);max-height:calc(100dvh - 116px);overflow:auto;padding:28px;border:1px solid color-mix(in srgb,var(--goodos-accent) 30%,#cbd5e1);border-radius:28px;background:#f8fafc;color:#0f172a;box-shadow:0 32px 90px rgba(2,6,23,.4)}
-.dark .goodos-appearance{background:#111827;color:#f8fafc}.goodos-appearance__head{display:flex;align-items:start;justify-content:space-between;gap:20px}.goodos-appearance__eyebrow{margin:0;color:#64748b;font-size:12px;font-weight:850;letter-spacing:.22em;text-transform:uppercase}.goodos-appearance h2{margin:9px 0 0;font-size:28px;letter-spacing:-.035em}.goodos-appearance__copy{margin:10px 0 0;color:#64748b;line-height:1.55}.goodos-appearance__close{display:grid;width:42px;height:42px;flex:0 0 42px;place-items:center;border:1px solid #cbd5e1;border-radius:13px;background:transparent;color:inherit;cursor:pointer;font-size:24px}.goodos-appearance__label{margin:24px 0 10px;color:#64748b;font-size:11px;font-weight:850;letter-spacing:.2em;text-transform:uppercase}.goodos-appearance__modes{display:grid;grid-template-columns:1fr 1fr;gap:12px}.goodos-appearance__choice{display:flex;min-height:92px;align-items:center;gap:14px;padding:16px;border:1px solid #dbe3ee;border-radius:20px;background:#fff;color:#0f172a;cursor:pointer;text-align:left}.dark .goodos-appearance__choice{border-color:#334155;background:#1e293b;color:#f8fafc}.goodos-appearance__choice[aria-pressed=true]{border-color:var(--goodos-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-accent) 18%,transparent)}.goodos-appearance__choice-icon{display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;border-radius:14px;background:color-mix(in srgb,var(--goodos-accent) 9%,#f1f5f9);font-size:23px}.goodos-appearance__choice strong,.goodos-appearance__choice small{display:block}.goodos-appearance__choice strong{font-size:17px}.goodos-appearance__choice small{margin-top:4px;color:#64748b;font-size:13px}.goodos-appearance__schemes{display:grid;gap:10px}.goodos-appearance__scheme{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:16px;min-height:84px;padding:13px 16px;border:1px solid #dbe3ee;border-radius:20px;background:#fff;color:#0f172a;cursor:pointer;text-align:left}.dark .goodos-appearance__scheme{border-color:#334155;background:#1e293b;color:#f8fafc}.goodos-appearance__scheme[aria-pressed=true]{border-color:var(--goodos-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--goodos-accent) 18%,transparent)}.goodos-appearance__swatches{display:flex}.goodos-appearance__swatches i{width:42px;height:42px;margin-left:-8px;border:2px solid #fff;border-radius:50%}.goodos-appearance__swatches i:first-child{margin-left:0}.goodos-appearance__scheme strong,.goodos-appearance__scheme small{display:block}.goodos-appearance__scheme strong{font-size:16px}.goodos-appearance__scheme small{margin-top:4px;color:#64748b;font-size:13px}.goodos-appearance__check{display:grid;width:36px;height:36px;place-items:center;border:1px solid #cbd5e1;border-radius:50%;font-weight:900}.goodos-appearance__scheme[aria-pressed=true] .goodos-appearance__check{border-color:var(--goodos-accent);background:var(--goodos-accent);color:#fff}
-@media(max-width:620px){.goodos-appearance-backdrop{padding:72px 8px 8px}.goodos-appearance{max-height:calc(100dvh - 80px);padding:20px;border-radius:24px}.goodos-appearance h2{font-size:24px}.goodos-appearance__modes{grid-template-columns:1fr}.goodos-appearance__choice{min-height:74px}.goodos-appearance__scheme{grid-template-columns:auto minmax(0,1fr);min-height:76px}.goodos-appearance__check{display:none}.goodos-appearance__swatches i{width:34px;height:34px}}
+.goodos-appearance{position:fixed;z-index:2147483003;width:min(380px,calc(100vw - 16px));max-height:calc(100dvh - var(--goodos-appearance-top,72px) - 8px);overflow:auto;padding:16px;border:1px solid color-mix(in srgb,var(--goodos-accent) 30%,#cbd5e1);border-radius:18px;background:rgba(248,250,252,.98);color:#0f172a;box-shadow:0 18px 48px rgba(2,6,23,.24);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.dark .goodos-appearance{background:rgba(17,24,39,.98);color:#f8fafc}.goodos-appearance__head{display:flex;align-items:start;justify-content:space-between;gap:12px}.goodos-appearance__eyebrow{margin:0;color:#64748b;font-size:9px;font-weight:850;letter-spacing:.2em;text-transform:uppercase}.goodos-appearance h2{margin:5px 0 0;font-size:17px;letter-spacing:-.025em}.goodos-appearance__copy{margin:5px 0 0;color:#64748b;font-size:11px;line-height:1.4}.goodos-appearance__close{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border:1px solid #cbd5e1;border-radius:9px;background:transparent;color:inherit;cursor:pointer;font-size:18px}.goodos-appearance__label{margin:14px 0 7px;color:#64748b;font-size:9px;font-weight:850;letter-spacing:.17em;text-transform:uppercase}.goodos-appearance__modes{display:grid;grid-template-columns:1fr 1fr;gap:8px}.goodos-appearance__choice{display:flex;min-height:58px;align-items:center;gap:9px;padding:9px;border:1px solid #dbe3ee;border-radius:13px;background:#fff;color:#0f172a;cursor:pointer;text-align:left}.dark .goodos-appearance__choice{border-color:#334155;background:#1e293b;color:#f8fafc}.goodos-appearance__choice[aria-pressed=true]{border-color:var(--goodos-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--goodos-accent) 15%,transparent)}.goodos-appearance__choice-icon{display:grid;width:34px;height:34px;flex:0 0 34px;place-items:center;border-radius:10px;background:color-mix(in srgb,var(--goodos-accent) 9%,#f1f5f9);font-size:18px}.goodos-appearance__choice strong,.goodos-appearance__choice small{display:block}.goodos-appearance__choice strong{font-size:13px}.goodos-appearance__choice small{margin-top:2px;color:#64748b;font-size:10px}.goodos-appearance__schemes{display:grid;gap:6px}.goodos-appearance__scheme{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:52px;padding:8px 10px;border:1px solid #dbe3ee;border-radius:13px;background:#fff;color:#0f172a;cursor:pointer;text-align:left}.dark .goodos-appearance__scheme{border-color:#334155;background:#1e293b;color:#f8fafc}.goodos-appearance__scheme[aria-pressed=true]{border-color:var(--goodos-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--goodos-accent) 15%,transparent)}.goodos-appearance__swatches{display:flex}.goodos-appearance__swatches i{width:26px;height:26px;margin-left:-6px;border:2px solid #fff;border-radius:50%}.goodos-appearance__swatches i:first-child{margin-left:0}.goodos-appearance__scheme strong,.goodos-appearance__scheme small{display:block}.goodos-appearance__scheme strong{font-size:12px}.goodos-appearance__scheme small{margin-top:2px;color:#64748b;font-size:9px}.goodos-appearance__check{display:grid;width:24px;height:24px;place-items:center;border:1px solid #cbd5e1;border-radius:50%;font-size:11px;font-weight:900}.goodos-appearance__scheme[aria-pressed=true] .goodos-appearance__check{border-color:var(--goodos-accent);background:var(--goodos-accent);color:#fff}
+@media(max-width:480px){.goodos-appearance{right:8px!important;left:8px!important;width:auto;max-height:calc(100dvh - var(--goodos-appearance-top,64px) - 8px)}.goodos-appearance__copy,.goodos-appearance__scheme small{display:none}}
 `;
 
 function UniversalAppearanceMenu({ appName }) {
   const [open, setOpen] = useState(false);
   const [appearance, setAppearance] = useState(() => readGoodOSAppearance());
+  const [position, setPosition] = useState({ top: 72, right: 16 });
 
   useEffect(() => {
     applyGoodOSAppearance(appearance, { persist: false });
@@ -380,6 +380,11 @@ function UniversalAppearanceMenu({ appName }) {
       if (!trigger) return;
       event.preventDefault();
       event.stopPropagation();
+      const rect = trigger.getBoundingClientRect();
+      setPosition({
+        top: Math.round(rect.bottom + 8),
+        right: Math.max(8, Math.round(window.innerWidth - rect.right)),
+      });
       setOpen(true);
     };
     document.addEventListener("click", openFromTopbar, true);
@@ -389,8 +394,18 @@ function UniversalAppearanceMenu({ appName }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => event.key === "Escape" && setOpen(false);
+    const onPointer = (event) => {
+      if (!event.target?.closest?.(".goodos-appearance") && !event.target?.closest?.('[data-goodos-topbar-control="theme"]')) setOpen(false);
+    };
+    const onResize = () => setOpen(false);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    document.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("pointerdown", onPointer, true);
+    };
   }, [open]);
 
   const choose = (next) => {
@@ -400,12 +415,12 @@ function UniversalAppearanceMenu({ appName }) {
 
   if (!open) return createElement("style", { "data-goodos-appearance-styles": "" }, appearanceCss);
   return createElement(
-    "div",
-    { className: "goodos-appearance-backdrop", role: "presentation", onMouseDown: (event) => event.target === event.currentTarget && setOpen(false) },
+    Fragment,
+    null,
     createElement("style", { "data-goodos-appearance-styles": "" }, appearanceCss),
     createElement(
       "section",
-      { className: "goodos-appearance", role: "dialog", "aria-modal": "true", "aria-labelledby": "goodos-appearance-title" },
+      { className: "goodos-appearance", role: "dialog", "aria-modal": "false", "aria-labelledby": "goodos-appearance-title", style: { top: position.top, right: position.right, "--goodos-appearance-top": `${position.top}px` } },
       createElement("div", { className: "goodos-appearance__head" },
         createElement("div", null,
           createElement("p", { className: "goodos-appearance__eyebrow" }, "Appearance"),

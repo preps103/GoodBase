@@ -5,7 +5,7 @@ import type {
   ReactNode,
 } from "react";
 
-export declare const GOODOS_TOPBAR_WIDGET_VERSION = "4.11.1";
+export declare const GOODOS_TOPBAR_WIDGET_VERSION = "4.11.2";
 export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";

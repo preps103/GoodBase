@@ -11,10 +11,12 @@ widget and mark its appearance trigger with
 `data-goodos-topbar-control="theme"`; do not copy the header or theme dialog
 into product code.
 
-Version 4.11.1 stores one `goodos_appearance_v1` preference, applies Day/Night
+Version 4.11.2 stores one `goodos_appearance_v1` preference, applies Day/Night
 to the application root, publishes the selected accent as shared CSS tokens,
-and emits `goodos:appearance-change`. The five standard schemes are Graphite
-Blue, Deep Ocean, Evergreen, Carbon Ember, and Purple Pulse.
+and emits `goodos:appearance-change`. Its minimal appearance popover is anchored
+directly below the top-bar control, without an overlay or page blur, so users
+see every change live. The five standard schemes are Graphite Blue, Deep Ocean,
+Evergreen, Carbon Ember, and Purple Pulse.
 
 Use `GoodOSLoginShell` for the two-panel page structure and
 `GoodOSLoginWidget` for the authentication panel. Do not fork the panel markup
