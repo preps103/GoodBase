@@ -1,0 +1,146 @@
+import type {
+  CSSProperties,
+  ChangeEvent,
+  FormEvent,
+  ReactNode,
+} from "react";
+
+export declare const GOODOS_TOPBAR_WIDGET_VERSION = "4.11.1";
+export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
+export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
+export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
+export declare const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
+export declare const GOODOS_APPEARANCE_STORAGE_KEY = "goodos_appearance_v1";
+export interface GoodOSAppearance { mode: "light" | "dark"; scheme: string; }
+export interface GoodOSColorScheme { id: string; name: string; description: string; colors: string[]; }
+export declare const GOODOS_COLOR_SCHEMES: GoodOSColorScheme[];
+export declare function readGoodOSAppearance(): GoodOSAppearance;
+export declare function applyGoodOSAppearance(value: Partial<GoodOSAppearance>, options?: { persist?: boolean }): GoodOSAppearance;
+
+export interface GoodOSIdentityProviderRecord {
+  id: string;
+  provider_type: string;
+  display_name?: string;
+  available: boolean;
+}
+
+export declare function loadGoodOSIdentityProviders(
+  origin?: string,
+): Promise<GoodOSIdentityProviderRecord[]>;
+
+export declare function goodOSIdentityProviderUrl(
+  providerId: string,
+  redirect: string,
+  origin?: string,
+): string;
+
+export declare function goodOSAccountUrl(
+  mode: "login" | "register" | "forgot",
+  redirect: string,
+  origin?: string,
+): string;
+
+export declare function goodOSPasskeyHandoffUrl(
+  redirect: string,
+  origin?: string,
+): string;
+
+export declare function goodOSPasskeysSupported(): boolean;
+
+export declare function authenticateWithGoodOSPasskey(options?: {
+  conditional?: boolean;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>>;
+
+interface SharedProps {
+  className?: string;
+  style?: CSSProperties;
+}
+
+export interface GoodOSTopBarChildrenProps extends SharedProps {
+  children: ReactNode;
+  appName?: never;
+  workspaceLabel?: never;
+  brandIcon?: never;
+  leadingControl?: never;
+  search?: never;
+  actions?: never;
+  controls?: never;
+  onBrandClick?: never;
+  brandClassName?: never;
+  brandMarkClassName?: never;
+  workspaceClassName?: never;
+  searchClassName?: never;
+}
+
+export interface GoodOSTopBarStructuredProps extends SharedProps {
+  children?: never;
+  appName: string;
+  workspaceLabel: string;
+  brandIcon: ReactNode;
+  leadingControl?: ReactNode;
+  search: ReactNode;
+  actions?: ReactNode;
+  controls: ReactNode;
+  onBrandClick?: () => void;
+  brandClassName?: string;
+  brandMarkClassName?: string;
+  workspaceClassName?: string;
+  searchClassName?: string;
+}
+
+export declare function GoodOSTopBarWidget(
+  props: GoodOSTopBarChildrenProps | GoodOSTopBarStructuredProps,
+): ReactNode;
+
+export type GoodOSIdentityProvider = "google" | "apple" | "microsoft";
+
+export interface GoodOSLoginWidgetProps extends SharedProps {
+  appName: string;
+  subtitle: string;
+  accent?: string;
+  accentInk?: string;
+  email: string;
+  password: string;
+  onEmailChange?: (value: string, event: ChangeEvent<HTMLInputElement>) => void;
+  onPasswordChange?: (value: string, event: ChangeEvent<HTMLInputElement>) => void;
+  onSubmit?: (event: FormEvent<HTMLFormElement>) => void;
+  onProviderSignIn?: (provider: GoodOSIdentityProvider) => void;
+  onGoodOSSignIn?: () => void;
+  passkeyAvailable?: boolean;
+  passkeyLoading?: boolean;
+  onPasskeySignIn?: () => void;
+  setupPasskeyAfterSignIn?: boolean;
+  onSetupPasskeyAfterSignInChange?: (value: boolean, event: ChangeEvent<HTMLInputElement>) => void;
+  passkeyEnrollmentAvailable?: boolean;
+  passkeyEnrollmentLoading?: boolean;
+  passkeyEnrollmentLabel?: string;
+  onPasskeyEnroll?: () => void;
+  providerAvailability?: Partial<Record<GoodOSIdentityProvider, boolean>>;
+  onForgotPassword?: () => void;
+  onCreateAccount?: () => void;
+  loading?: boolean;
+  error?: string;
+  homeHref?: string;
+  initialMode?: "dark" | "light";
+  mobileBrand?: ReactNode;
+  emailPlaceholder?: string;
+  passwordPlaceholder?: string;
+  termsHref?: string;
+  privacyHref?: string;
+}
+
+export declare function GoodOSLoginWidget(
+  props: GoodOSLoginWidgetProps,
+): ReactNode;
+
+export interface GoodOSLoginShellProps extends SharedProps {
+  brandPanel: ReactNode;
+  children: ReactNode;
+  brandClassName?: string;
+  authClassName?: string;
+}
+
+export declare function GoodOSLoginShell(
+  props: GoodOSLoginShellProps,
+): ReactNode;

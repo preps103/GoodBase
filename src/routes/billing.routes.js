@@ -62,6 +62,42 @@ router.get(
   }
 );
 
+router.post(
+  "/checkout",
+  async (req, res) => {
+    try {
+      const checkout = await billingService.createCheckoutForUser(
+        req.user.id,
+        req.body,
+        { ipAddress: req.ip }
+      );
+      return success(res, checkout);
+    } catch (err) {
+      return requestError(res, "checkout", err);
+    }
+  }
+);
+
+router.get(
+  "/checkout/return",
+  async (req, res) => {
+    try {
+      const confirmation = await billingService.confirmCheckoutForUser(
+        req.user.id,
+        {
+          provider: req.query.provider,
+          local: req.query.local,
+          sessionId: req.query.session_id,
+        }
+      );
+      return res.redirect(303, confirmation.redirectUrl);
+    } catch (err) {
+      console.error("Billing checkout confirmation failed:", err);
+      return res.redirect(303, "https://goodos.app/?pricing=1&checkout=failed");
+    }
+  }
+);
+
 router.get(
   "/overview",
   async (req, res) => {
