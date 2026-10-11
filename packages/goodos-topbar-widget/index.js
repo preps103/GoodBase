@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export const GOODOS_TOPBAR_WIDGET_VERSION = "4.14.0";
+export const GOODOS_TOPBAR_WIDGET_VERSION = "4.15.0";
 export const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
@@ -352,6 +352,7 @@ export function GoodOSTopBarWidget(props) {
   return createElement(
     Fragment,
     null,
+    createElement("style", { "data-goodos-topbar-layout-styles": "" }, topbarCss),
     createElement("div", {
       className: "goodos-topbar-widget__spacer",
       "data-goodos-topbar-spacer": "",
@@ -363,6 +364,19 @@ export function GoodOSTopBarWidget(props) {
     mountedProfile,
   );
 }
+
+const topbarCss = String.raw`
+:root{--goodos-topbar-height:72px;--goodos-topbar-gutter:24px;--goodos-topbar-control-size:44px;--goodos-topbar-icon-size:22px}
+.goodos-topbar-widget__spacer{display:block;height:var(--goodos-topbar-height);flex:0 0 var(--goodos-topbar-height)}
+.goodos-topbar[data-goodos-topbar]{position:fixed!important;z-index:2147483000!important;inset:0 0 auto!important;display:grid!important;grid-template-columns:auto minmax(180px,360px) minmax(0,1fr) auto!important;align-items:center!important;gap:16px!important;width:100%!important;min-height:var(--goodos-topbar-height)!important;padding:0 var(--goodos-topbar-gutter)!important;box-sizing:border-box!important;border-bottom:1px solid color-mix(in srgb,currentColor 10%,transparent)!important}
+.goodos-topbar__identity{display:flex;min-width:0;align-items:center;gap:10px}.goodos-topbar__brand{display:flex;min-width:0;align-items:center;gap:10px;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;font-weight:750;white-space:nowrap}.goodos-topbar__brand-mark{display:grid;width:40px;height:40px;flex:0 0 40px;place-items:center;border-radius:12px}.goodos-topbar__workspace{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goodos-topbar__search{position:relative;display:flex;width:100%;max-width:360px;min-width:0;align-items:center;justify-self:start;transition:width 180ms ease,max-width 180ms ease,box-shadow 180ms ease}.goodos-topbar__search input{width:100%;min-width:0}.goodos-topbar__actions{display:flex;min-width:0;align-items:center;justify-content:flex-start;gap:8px;overflow:hidden}.goodos-topbar__controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;white-space:nowrap}
+.goodos-topbar [data-goodos-topbar-control],.goodos-topbar__actions>button,.goodos-topbar__actions>a{display:inline-grid!important;width:var(--goodos-topbar-control-size)!important;min-width:var(--goodos-topbar-control-size)!important;height:var(--goodos-topbar-control-size)!important;min-height:var(--goodos-topbar-control-size)!important;place-items:center!important;padding:0!important;border-radius:12px!important;box-sizing:border-box!important}
+.goodos-topbar [data-goodos-topbar-control] svg,.goodos-topbar__actions>button svg,.goodos-topbar__actions>a svg{width:var(--goodos-topbar-icon-size)!important;height:var(--goodos-topbar-icon-size)!important;stroke-width:2!important}.goodos-topbar [data-goodos-topbar-control="account"] img{width:32px!important;height:32px!important;border-radius:50%!important;object-fit:cover!important}
+@media(max-width:1120px){:root{--goodos-topbar-gutter:16px}.goodos-topbar[data-goodos-topbar]{grid-template-columns:auto minmax(160px,280px) minmax(0,1fr) auto!important;gap:10px!important}.goodos-topbar__workspace{display:none}}
+@media(max-width:820px){.goodos-topbar[data-goodos-topbar]{grid-template-columns:auto var(--goodos-topbar-control-size) minmax(0,1fr) auto!important}.goodos-topbar__search{width:var(--goodos-topbar-control-size);height:var(--goodos-topbar-control-size);overflow:hidden;border-radius:12px;justify-self:end}.goodos-topbar__search input{width:0!important;min-width:0!important;padding-right:0!important;opacity:0!important;pointer-events:none!important}.goodos-topbar__search:focus-within{position:absolute;z-index:4;right:calc(var(--goodos-topbar-gutter) + 190px);width:min(340px,calc(100vw - 210px));max-width:none;height:var(--goodos-topbar-control-size);overflow:visible;box-shadow:0 12px 36px rgba(15,23,42,.18)}.goodos-topbar__search:focus-within input{width:100%!important;padding-right:12px!important;opacity:1!important;pointer-events:auto!important}.goodos-topbar__actions{gap:4px}}
+@media(max-width:600px){:root{--goodos-topbar-height:64px;--goodos-topbar-gutter:10px;--goodos-topbar-control-size:42px}.goodos-topbar[data-goodos-topbar]{grid-template-columns:auto var(--goodos-topbar-control-size) minmax(0,1fr) auto!important;gap:4px!important}.goodos-topbar__brand>span:last-child{display:none}.goodos-topbar__brand-mark{width:40px;height:40px}.goodos-topbar__controls{gap:2px}.goodos-topbar__actions{overflow-x:auto;scrollbar-width:none}.goodos-topbar__actions::-webkit-scrollbar{display:none}.goodos-topbar__search:focus-within{right:calc(var(--goodos-topbar-gutter) + 136px);width:calc(100vw - 158px)}}
+`;
 
 const appearanceCss = String.raw`
 .goodos-appearance{position:fixed;z-index:2147483003;width:min(380px,calc(100vw - 16px));max-height:calc(100dvh - var(--goodos-appearance-top,72px) - 8px);overflow:auto;padding:16px;border:1px solid color-mix(in srgb,var(--goodos-tone-2) 38%,#cbd5e1);border-radius:18px;background:radial-gradient(circle at 95% 0,color-mix(in srgb,var(--goodos-tone-3) 14%,transparent),transparent 34%),radial-gradient(circle at 0 100%,color-mix(in srgb,var(--goodos-tone-2) 10%,transparent),transparent 38%),rgba(248,250,252,.98);color:#0f172a;box-shadow:0 18px 48px color-mix(in srgb,var(--goodos-tone-1) 28%,rgba(2,6,23,.24));font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
