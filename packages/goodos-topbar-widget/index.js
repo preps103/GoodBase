@@ -9,12 +9,40 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export const GOODOS_TOPBAR_WIDGET_VERSION = "4.15.1";
+export const GOODOS_TOPBAR_WIDGET_VERSION = "4.19.0";
 export const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
 export const GOODOS_APPEARANCE_STORAGE_KEY = "goodos_appearance_v1";
+export const GOODOS_ACCESSIBILITY_STORAGE_KEY = "goodos_accessibility_v1";
+const GOODOS_SUPPORT_BAR_STORAGE_KEY = "goodos_support_bar_v1";
+const GOODOS_SUPPORT_VIEWPORT_MARGIN = 14;
+const GOODOS_SUPPORT_EXPANDED_SIZE = { width: 208, height: 58 };
+const GOODOS_SUPPORT_MINIMIZED_SIZE = { width: 56, height: 56 };
+
+function supportViewportBounds() {
+  if (typeof window === "undefined") return { left: 0, top: 0, width: 0, height: 0 };
+  const viewport = window.visualViewport;
+  return {
+    left: viewport?.offsetLeft || 0,
+    top: viewport?.offsetTop || 0,
+    width: viewport?.width || window.innerWidth,
+    height: viewport?.height || window.innerHeight,
+  };
+}
+
+function clampSupportPosition(position, width, height) {
+  const viewport = supportViewportBounds();
+  const minX = viewport.left + GOODOS_SUPPORT_VIEWPORT_MARGIN;
+  const minY = viewport.top + GOODOS_SUPPORT_VIEWPORT_MARGIN;
+  const maxX = Math.max(minX, viewport.left + viewport.width - width - GOODOS_SUPPORT_VIEWPORT_MARGIN);
+  const maxY = Math.max(minY, viewport.top + viewport.height - height - GOODOS_SUPPORT_VIEWPORT_MARGIN);
+  return {
+    x: Math.max(minX, Math.min(Number(position?.x) || minX, maxX)),
+    y: Math.max(minY, Math.min(Number(position?.y) || minY, maxY)),
+  };
+}
 
 export const GOODOS_COLOR_SCHEMES = [
   { id: "graphite-blue", name: "Graphite Blue", description: "Modern, sharp, and understated", colors: ["#07111f", "#2563eb", "#38bdf8"] },
@@ -348,6 +376,15 @@ export function GoodOSTopBarWidget(props) {
           }),
           document.body,
         );
+  const mountedSupport =
+    typeof document === "undefined"
+      ? null
+      : createPortal(
+          createElement(GoodOSFloatingSupportBar, {
+            appName: props.appName || "GoodOS",
+          }),
+          document.body,
+        );
 
   return createElement(
     Fragment,
@@ -362,6 +399,258 @@ export function GoodOSTopBarWidget(props) {
     mountedBar,
     mountedAppearance,
     mountedProfile,
+    mountedSupport,
+  );
+}
+
+function supportIcon(name) {
+  const common = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" };
+  if (name === "ada") return createElement("svg", common, createElement("circle", { cx: 10, cy: 4.5, r: 1.7 }), createElement("path", { d: "M10 7v5m0-3h5m-5 3-3 7m3-7 4 7m-8-5H3m12 2h4" }));
+  if (name === "chat") return createElement("svg", common, createElement("path", { d: "M6 7h12a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H9l-5 3v-5a3 3 0 0 1-1-2.2V10a3 3 0 0 1 3-3Z" }), createElement("path", { d: "M9 12h.01M13 12h.01M17 12h.01" }));
+  if (name === "live") return createElement("svg", common, createElement("path", { d: "M4 14v-3a8 8 0 0 1 16 0v3" }), createElement("path", { d: "M4 13h3v6H5a2 2 0 0 1-2-2v-2a2 2 0 0 1 1-2Zm16 0h-3v6h2a2 2 0 0 0 2-2v-2a2 2 0 0 0-1-2ZM17 19c0 1.1-.9 2-2 2h-3" }));
+  if (name === "restore") return createElement("svg", common, createElement("circle", { cx: 7, cy: 8, r: 1 }), createElement("circle", { cx: 12, cy: 8, r: 1 }), createElement("circle", { cx: 17, cy: 8, r: 1 }), createElement("circle", { cx: 7, cy: 16, r: 1 }), createElement("circle", { cx: 12, cy: 16, r: 1 }), createElement("circle", { cx: 17, cy: 16, r: 1 }));
+  return createElement("svg", common, createElement("rect", { x: 3, y: 5, width: 18, height: 14, rx: 2.5 }), createElement("path", { d: "m4 7 8 6 8-6" }));
+}
+
+export function GoodOSFloatingSupportBar({ appName = "GoodOS" } = {}) {
+  const [accessibilityOpen, setAccessibilityOpen] = useState(false);
+  const [accessibilityTab, setAccessibilityTab] = useState("vision");
+  const [pointer, setPointer] = useState({ x: 0, y: 0 });
+  const barRef = useRef(null);
+  const dragRef = useRef(null);
+  const [barState, setBarState] = useState(() => {
+    if (typeof window === "undefined") return { minimized: false, position: null };
+    try { return { minimized: false, position: null, ...JSON.parse(localStorage.getItem(GOODOS_SUPPORT_BAR_STORAGE_KEY) || "{}") }; } catch { return { minimized: false, position: null }; }
+  });
+  const defaults = {
+    textSize: "default",
+    lineHeight: 1.5,
+    letterSpacing: 0,
+    wordSpacing: 0,
+    contrast: false,
+    grayscale: false,
+    invertColors: false,
+    colorProfile: "none",
+    reduceMotion: false,
+    readableFont: false,
+    underlineLinks: false,
+    focusIndicators: true,
+    oversizedPointer: false,
+    speechAssistant: false,
+    focusSpeaker: false,
+    mouseSpotlight: false,
+    concentrationMask: false,
+    readingBar: false,
+    magnifierLens: false,
+  };
+  const [accessibility, setAccessibility] = useState(() => {
+    if (typeof window === "undefined") return defaults;
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem(GOODOS_ACCESSIBILITY_STORAGE_KEY) || "{}") }; } catch { return defaults; }
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.goodosTextSize = accessibility.textSize;
+    root.style.setProperty("--goodos-ada-line-height", String(accessibility.lineHeight));
+    root.style.setProperty("--goodos-ada-letter-spacing", `${accessibility.letterSpacing}px`);
+    root.style.setProperty("--goodos-ada-word-spacing", `${accessibility.wordSpacing}px`);
+    root.dataset.goodosHighContrast = String(accessibility.contrast);
+    root.dataset.goodosGrayscale = String(accessibility.grayscale);
+    root.dataset.goodosInvertColors = String(accessibility.invertColors);
+    root.dataset.goodosColorProfile = accessibility.colorProfile;
+    root.dataset.goodosReduceMotion = String(accessibility.reduceMotion);
+    root.dataset.goodosReadableFont = String(accessibility.readableFont);
+    root.dataset.goodosUnderlineLinks = String(accessibility.underlineLinks);
+    root.dataset.goodosFocusIndicators = String(accessibility.focusIndicators);
+    root.dataset.goodosOversizedPointer = String(accessibility.oversizedPointer);
+    localStorage.setItem(GOODOS_ACCESSIBILITY_STORAGE_KEY, JSON.stringify(accessibility));
+    window.dispatchEvent(new CustomEvent("goodos:accessibility-change", { detail: accessibility }));
+  }, [accessibility]);
+  useEffect(() => {
+    if (!accessibility.mouseSpotlight && !accessibility.concentrationMask && !accessibility.readingBar && !accessibility.magnifierLens) return undefined;
+    const trackPointer = (event) => setPointer({ x: event.clientX, y: event.clientY });
+    window.addEventListener("pointermove", trackPointer, { passive: true });
+    return () => window.removeEventListener("pointermove", trackPointer);
+  }, [accessibility.mouseSpotlight, accessibility.concentrationMask, accessibility.readingBar, accessibility.magnifierLens]);
+  useEffect(() => {
+    if (!accessibility.focusSpeaker || !("speechSynthesis" in window)) return undefined;
+    const speakFocused = (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || target.closest(".goodos-accessibility,.goodos-support-bar")) return;
+      const text = target.getAttribute("aria-label") || target.innerText?.trim();
+      if (!text || text.length > 220) return;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    };
+    document.addEventListener("focusin", speakFocused);
+    return () => { document.removeEventListener("focusin", speakFocused); window.speechSynthesis.cancel(); };
+  }, [accessibility.focusSpeaker]);
+  useEffect(() => {
+    if (!accessibility.speechAssistant || !("speechSynthesis" in window)) return undefined;
+    let lastText = "";
+    const speakHovered = (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || target.closest(".goodos-accessibility,.goodos-support-bar")) return;
+      const text = target.getAttribute("aria-label") || target.innerText?.trim();
+      if (!text || text === lastText || text.length > 220) return;
+      lastText = text;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    };
+    document.addEventListener("mouseover", speakHovered);
+    return () => { document.removeEventListener("mouseover", speakHovered); window.speechSynthesis.cancel(); };
+  }, [accessibility.speechAssistant]);
+  useEffect(() => {
+    if (!accessibilityOpen) return undefined;
+    const close = (event) => { if (event.key === "Escape") setAccessibilityOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [accessibilityOpen]);
+  useEffect(() => {
+    const keepVisible = () => setBarState((current) => {
+      if (!current.position || !barRef.current) return current;
+      const rect = barRef.current.getBoundingClientRect();
+      const position = clampSupportPosition(current.position, rect.width, rect.height);
+      if (position.x === current.position.x && position.y === current.position.y) return current;
+      const next = { ...current, position };
+      localStorage.setItem(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+    keepVisible();
+    window.addEventListener("resize", keepVisible);
+    window.visualViewport?.addEventListener("resize", keepVisible);
+    window.visualViewport?.addEventListener("scroll", keepVisible);
+    return () => {
+      window.removeEventListener("resize", keepVisible);
+      window.visualViewport?.removeEventListener("resize", keepVisible);
+      window.visualViewport?.removeEventListener("scroll", keepVisible);
+    };
+  }, [barState.minimized]);
+  const saveBarState = (next) => {
+    setBarState(next);
+    localStorage.setItem(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(next));
+  };
+  const onPointerDown = (event) => {
+    if (event.target.closest("a,button")) return;
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setBarState((current) => ({ ...current, position: { x: rect.left, y: rect.top } }));
+  };
+  const onPointerMove = (event) => {
+    const drag = dragRef.current;
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!drag || drag.pointerId !== event.pointerId || !rect) return;
+    setBarState((current) => ({ ...current, position: clampSupportPosition({ x: event.clientX - drag.offsetX, y: event.clientY - drag.offsetY }, rect.width, rect.height) }));
+  };
+  const onPointerUp = (event) => {
+    if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setBarState((current) => { localStorage.setItem(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(current)); return current; });
+  };
+  const moveWithKeyboard = (event) => {
+    if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const amount = event.shiftKey ? 24 : 8;
+    const dx = event.key === "ArrowLeft" ? -amount : event.key === "ArrowRight" ? amount : 0;
+    const dy = event.key === "ArrowUp" ? -amount : event.key === "ArrowDown" ? amount : 0;
+    saveBarState({ ...barState, position: clampSupportPosition({ x: rect.left + dx, y: rect.top + dy }, rect.width, rect.height) });
+  };
+  const updateAccessibility = (name, value) => setAccessibility((current) => ({ ...current, [name]: value }));
+  const dispatch = (name, fallbackSelector, fallbackUrl) => {
+    const localTrigger = fallbackSelector && document.querySelector(`${fallbackSelector}:not([data-goodos-support-action])`);
+    if (localTrigger) {
+      localTrigger.click();
+      return;
+    }
+    const event = new CustomEvent(`goodos:open-${name}`, { detail: { appName }, cancelable: true });
+    const handled = !window.dispatchEvent(event);
+    if (!handled && fallbackUrl) window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+  };
+  const actions = [
+    { id: "ada", label: "Accessibility controls", onClick: () => setAccessibilityOpen((open) => !open) },
+    { id: "chat", label: "Open assistant chat", onClick: () => dispatch("chat", '[data-goodos-chat-launcher]', "https://goodos.app/?support=chat") },
+    { id: "live", label: "Open live support", onClick: () => dispatch("live-support", '[data-goodos-live-support]', "https://goodos.app/?support=live") },
+    { id: "email", label: "Email support", href: "mailto:support@goodos.app" },
+  ];
+  const toggle = (id, label, description) => createElement("button", { type: "button", className: "goodos-accessibility__toggle", "aria-pressed": accessibility[id], onClick: () => updateAccessibility(id, !accessibility[id]) }, createElement("span", null, createElement("strong", null, label), createElement("small", null, description)), createElement("span", { "aria-hidden": "true" }, accessibility[id] ? "On" : "Off"));
+  const choice = (id, value, label) => createElement("button", { type: "button", className: "goodos-accessibility__choice", "aria-pressed": accessibility[id] === value, onClick: () => updateAccessibility(id, value) }, label);
+  const slider = (id, label, min, max, step, unit = "") => createElement("label", { className: "goodos-accessibility__slider" }, createElement("span", null, createElement("strong", null, label), createElement("output", null, `${accessibility[id]}${unit}`)), createElement("input", { type: "range", min, max, step, value: accessibility[id], onChange: (event) => updateAccessibility(id, Number(event.target.value)) }));
+  const tabButton = (id, label) => createElement("button", { type: "button", role: "tab", "aria-selected": accessibilityTab === id, onClick: () => setAccessibilityTab(id) }, label);
+  let accessibilityPanelContent;
+  if (accessibilityTab === "vision") {
+    accessibilityPanelContent = createElement(Fragment, null,
+      createElement("fieldset", null,
+        createElement("legend", null, "Visual filters"),
+        createElement("div", { className: "goodos-accessibility__choices" },
+          choice("contrast", false, "Standard"),
+          choice("contrast", true, "High contrast"),
+          toggle("grayscale", "Grayscale", "Remove decorative color from the application"),
+          toggle("invertColors", "Invert colors", "Reverse the display palette for stronger separation"),
+        ),
+      ),
+      createElement("fieldset", null,
+        createElement("legend", null, "Color vision profiles"),
+        createElement("div", { className: "goodos-accessibility__choices goodos-accessibility__choices--two" },
+          choice("colorProfile", "none", "Standard"),
+          choice("colorProfile", "protanopia", "Protanopia"),
+          choice("colorProfile", "deuteranopia", "Deuteranopia"),
+          choice("colorProfile", "tritanopia", "Tritanopia"),
+        ),
+      ),
+    );
+  } else if (accessibilityTab === "reading") {
+    accessibilityPanelContent = createElement(Fragment, null,
+      createElement("fieldset", null,
+        createElement("legend", null, "Text size"),
+        createElement("div", { className: "goodos-accessibility__sizes" }, ["default", "large", "larger"].map((size) => createElement("button", { key: size, type: "button", "aria-pressed": accessibility.textSize === size, onClick: () => updateAccessibility("textSize", size) }, size === "default" ? "100%" : size === "large" ? "112%" : "125%"))),
+      ),
+      slider("lineHeight", "Line height", 1.2, 2.2, .1, "×"),
+      slider("letterSpacing", "Letter spacing", 0, 4, .5, "px"),
+      slider("wordSpacing", "Word spacing", 0, 10, 1, "px"),
+      toggle("readableFont", "Readable typeface", "Use a clearer, weighted font across the application"),
+    );
+  } else if (accessibilityTab === "browse") {
+    accessibilityPanelContent = createElement(Fragment, null,
+      toggle("speechAssistant", "Speech assistant", "Read interface text aloud when it is hovered"),
+      toggle("focusSpeaker", "Focus speaker", "Announce controls as keyboard focus moves"),
+      toggle("oversizedPointer", "Oversized pointer", "Use a larger, high-visibility cursor"),
+      toggle("reduceMotion", "Reduce motion", "Stop nonessential animation and movement"),
+      toggle("underlineLinks", "Highlight controls", "Underline links and outline interactive controls"),
+      toggle("focusIndicators", "Focus indicators", "Show stronger outlines during keyboard navigation"),
+    );
+  } else {
+    accessibilityPanelContent = createElement(Fragment, null,
+      toggle("mouseSpotlight", "Mouse spotlight", "Create a visible halo around the pointer"),
+      toggle("concentrationMask", "Concentration mask", "Shade content outside the current pointer area"),
+      toggle("readingBar", "Visual reading bar", "Track the current line with a horizontal guide"),
+      toggle("magnifierLens", "Magnifier lens", "Increase contrast around the pointer area"),
+    );
+  }
+  return createElement(
+    Fragment,
+    null,
+    createElement("style", { "data-goodos-support-styles": "" }, topbarCss),
+    (accessibility.mouseSpotlight || accessibility.concentrationMask) && createElement("div", { className: "goodos-accessibility-effect goodos-accessibility-effect--spotlight", style: { "--goodos-pointer-x": `${pointer.x}px`, "--goodos-pointer-y": `${pointer.y}px`, "--goodos-mask-opacity": accessibility.concentrationMask ? ".76" : ".5", "--goodos-mask-radius": accessibility.concentrationMask ? "160px" : "95px" }, "aria-hidden": "true" }),
+    accessibility.readingBar && createElement("div", { className: "goodos-accessibility-effect goodos-accessibility-effect--reading-bar", style: { top: `${pointer.y - 24}px` }, "aria-hidden": "true" }),
+    accessibility.magnifierLens && createElement("div", { className: "goodos-accessibility-effect goodos-accessibility-effect--magnifier", style: { left: `${pointer.x - 72}px`, top: `${pointer.y - 72}px` }, "aria-hidden": "true" }),
+    accessibilityOpen && createElement("section", { className: "goodos-accessibility", role: "dialog", "aria-modal": "false", "aria-label": `${appName} accessibility settings` },
+      createElement("div", { className: "goodos-accessibility__header" }, createElement("div", null, createElement("strong", null, "Accessibility"), createElement("span", null, `Adjust ${appName} in real time.`)), createElement("button", { type: "button", onClick: () => setAccessibilityOpen(false), "aria-label": "Close accessibility settings" }, "×")),
+      createElement("div", { className: "goodos-accessibility__tabs", role: "tablist", "aria-label": "Accessibility feature categories" }, tabButton("vision", "Vision"), tabButton("reading", "Reading"), tabButton("browse", "Browse"), tabButton("focus", "Focus")),
+      createElement("div", { className: "goodos-accessibility__content" }, accessibilityPanelContent),
+      createElement("div", { className: "goodos-accessibility__footer" }, createElement("span", null, "Changes are saved on this device."), createElement("button", { type: "button", className: "goodos-accessibility__reset", onClick: () => setAccessibility(defaults) }, "Reset"))
+    ),
+    createElement("nav", { ref: barRef, className: `goodos-support-bar${barState.minimized ? " goodos-support-bar--minimized" : ""}`, "data-goodos-support-bar": "", "aria-label": `${appName} support. Drag the empty edge to move, or use Alt plus arrow keys.`, tabIndex: 0, style: barState.position ? { left: `${barState.position.x}px`, top: `${barState.position.y}px`, right: "auto", bottom: "auto", transform: "none" } : undefined, onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onKeyDown: moveWithKeyboard },
+      barState.minimized
+        ? createElement("button", { type: "button", className: "goodos-support-bar__action goodos-support-bar__restore", onClick: () => saveBarState({ ...barState, minimized: false, position: barState.position ? clampSupportPosition(barState.position, GOODOS_SUPPORT_EXPANDED_SIZE.width, GOODOS_SUPPORT_EXPANDED_SIZE.height) : null }), "aria-label": "Show support tools", title: "Show support tools" }, supportIcon("restore"))
+        : createElement(Fragment, null,
+          createElement("button", { type: "button", className: "goodos-support-bar__minimize", onClick: () => { setAccessibilityOpen(false); saveBarState({ ...barState, minimized: true, position: barState.position ? clampSupportPosition(barState.position, GOODOS_SUPPORT_MINIMIZED_SIZE.width, GOODOS_SUPPORT_MINIMIZED_SIZE.height) : null }); }, "aria-label": "Hide support tools", title: "Hide support tools" }, "−"),
+          actions.map((action) => createElement(action.href ? "a" : "button", { key: action.id, className: "goodos-support-bar__action", "data-goodos-support-action": action.id, "aria-label": action.label, title: action.label, ...(action.href ? { href: action.href } : { type: "button", onClick: action.onClick }), ...(action.id === "ada" ? { "aria-expanded": accessibilityOpen } : {}) }, supportIcon(action.id), createElement("span", { className: "goodos-support-bar__label" }, action.label)))
+        )
+    )
   );
 }
 
@@ -376,6 +665,17 @@ const topbarCss = String.raw`
 @media(max-width:1120px){:root{--goodos-topbar-gutter:16px}.goodos-topbar[data-goodos-topbar]{grid-template-columns:auto minmax(160px,280px) minmax(0,1fr) auto!important;gap:10px!important}.goodos-topbar__workspace{display:none}}
 @media(max-width:820px){.goodos-topbar[data-goodos-topbar]{grid-template-columns:auto var(--goodos-topbar-control-size) minmax(0,1fr) auto!important}.goodos-topbar__search{width:var(--goodos-topbar-control-size);height:var(--goodos-topbar-control-size);overflow:hidden;border-radius:12px;justify-self:end}.goodos-topbar__search input{width:0!important;min-width:0!important;padding-right:0!important;opacity:0!important;pointer-events:none!important}.goodos-topbar__search:focus-within{position:absolute;z-index:4;right:calc(var(--goodos-topbar-gutter) + 190px);width:min(340px,calc(100vw - 210px));max-width:none;height:var(--goodos-topbar-control-size);overflow:visible;box-shadow:0 12px 36px rgba(15,23,42,.18)}.goodos-topbar__search:focus-within input{width:100%!important;padding-right:12px!important;opacity:1!important;pointer-events:auto!important}.goodos-topbar__actions{gap:4px}}
 @media(max-width:600px){:root{--goodos-topbar-height:64px;--goodos-topbar-gutter:10px;--goodos-topbar-control-size:42px}.goodos-topbar[data-goodos-topbar]{grid-template-columns:auto var(--goodos-topbar-control-size) minmax(0,1fr) auto!important;gap:4px!important}.goodos-topbar__brand>span:last-child{display:none}.goodos-topbar__brand-mark{width:40px;height:40px}.goodos-topbar__controls{gap:2px}.goodos-topbar__actions{overflow-x:auto;scrollbar-width:none}.goodos-topbar__actions::-webkit-scrollbar{display:none}.goodos-topbar__search:focus-within{right:calc(var(--goodos-topbar-gutter) + 136px);width:calc(100vw - 158px)}}
+.goodos-support-bar{max-width:calc(100vw - 28px);box-sizing:border-box}
+.goodos-support-bar{position:fixed;z-index:2147482999;right:max(18px,env(safe-area-inset-right));bottom:max(18px,env(safe-area-inset-bottom));display:flex;align-items:center;gap:6px;padding:6px;border:1px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 42%,rgba(255,255,255,.32));border-radius:20px;background:linear-gradient(135deg,color-mix(in srgb,var(--goodos-tone-1,#07111f) 18%,var(--goodos-tone-2,#2563eb)),var(--goodos-tone-2,#2563eb) 52%,var(--goodos-tone-3,#38bdf8));box-shadow:0 14px 32px color-mix(in srgb,var(--goodos-tone-1,#07111f) 32%,transparent),inset 0 1px rgba(255,255,255,.28);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;touch-action:none;user-select:none;cursor:grab;transition:background 180ms ease,border-color 180ms ease,box-shadow 180ms ease}.goodos-support-bar:active{cursor:grabbing}.goodos-support-bar:focus-visible{outline:3px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 72%,white);outline-offset:3px}.goodos-support-bar--minimized{gap:0;padding:5px;border-radius:17px}.goodos-support-bar__minimize{position:absolute;z-index:2;top:-9px;right:-9px;display:grid;width:22px;height:22px;place-items:center;padding:0;border:1px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 45%,#64748b);border-radius:50%;background:color-mix(in srgb,var(--goodos-tone-1,#07111f) 92%,#020617);color:#fff;cursor:pointer;font:700 16px/1 sans-serif;box-shadow:0 4px 10px rgba(2,6,23,.24)}.goodos-support-bar__action{position:relative;display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;padding:0;border:1px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 34%,#64748b);border-radius:14px;background:color-mix(in srgb,var(--goodos-tone-1,#07111f) 88%,#020617);color:#fff;text-decoration:none;cursor:pointer;box-shadow:inset 0 1px rgba(255,255,255,.08),0 5px 12px rgba(2,6,23,.22);transition:transform 150ms ease,border-color 150ms ease,background 150ms ease}.goodos-support-bar__action:hover{transform:translateY(-2px);border-color:var(--goodos-tone-3,#38bdf8);background:color-mix(in srgb,var(--goodos-tone-1,#07111f) 78%,var(--goodos-tone-2,#2563eb))}.goodos-support-bar__action:focus-visible{outline:3px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 70%,white);outline-offset:3px}.goodos-support-bar__action svg{width:22px;height:22px}.goodos-support-bar__label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+body:has(.goodos-support-bar) [data-goodos-ada-trigger]:not([data-goodos-support-action]),body:has(.goodos-support-bar) [data-goodos-chat-launcher]:not([data-goodos-support-action]),body:has(.goodos-support-bar) [data-goodos-live-support]:not([data-goodos-support-action]),body:has(.goodos-support-bar) .ada-control,body:has(.goodos-support-bar) .ada-button,body:has(.goodos-support-bar) button[aria-label*="accessibility" i]:not([data-goodos-support-action]),body:has(.goodos-support-bar) button[aria-label*="ADA" i]:not([data-goodos-support-action]){position:fixed!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;clip-path:inset(50%)!important;white-space:nowrap!important;opacity:0!important;pointer-events:none!important}
+.goodos-accessibility{position:fixed;z-index:2147483002;right:max(18px,env(safe-area-inset-right));bottom:100px;width:min(340px,calc(100vw - 24px));padding:16px;border:1px solid color-mix(in srgb,var(--goodos-tone-2,#2563eb) 35%,#cbd5e1);border-radius:20px;background:color-mix(in srgb,Canvas 96%,var(--goodos-tone-3,#38bdf8));color:CanvasText;box-shadow:0 22px 60px rgba(2,6,23,.26);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.goodos-accessibility__header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.goodos-accessibility__header strong,.goodos-accessibility__header span{display:block}.goodos-accessibility__header strong{font-size:18px}.goodos-accessibility__header span{margin-top:3px;font-size:13px;opacity:.7}.goodos-accessibility__header button{width:36px;height:36px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:11px;background:transparent;color:inherit;font-size:24px;cursor:pointer}.goodos-accessibility fieldset{margin:0 0 10px;padding:0;border:0}.goodos-accessibility legend{margin-bottom:7px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.goodos-accessibility__sizes{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.goodos-accessibility__sizes button,.goodos-accessibility__toggle,.goodos-accessibility__reset{min-height:42px;border:1px solid color-mix(in srgb,currentColor 16%,transparent);border-radius:12px;background:color-mix(in srgb,Canvas 92%,var(--goodos-tone-2,#2563eb));color:inherit;font:inherit;cursor:pointer}.goodos-accessibility__sizes button[aria-pressed="true"],.goodos-accessibility__toggle[aria-pressed="true"]{border-color:var(--goodos-tone-2,#2563eb);box-shadow:inset 0 0 0 1px var(--goodos-tone-2,#2563eb);background:color-mix(in srgb,var(--goodos-tone-2,#2563eb) 14%,Canvas)}.goodos-accessibility__toggle{display:flex;width:100%;align-items:center;justify-content:space-between;margin-top:7px;padding:0 12px;text-align:left}.goodos-accessibility__toggle span:last-child{font-size:12px;font-weight:800;color:var(--goodos-tone-2,#2563eb)}.goodos-accessibility__reset{width:100%;margin-top:12px;padding:0 12px;font-weight:750}.goodos-accessibility button:focus-visible{outline:3px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 72%,white);outline-offset:2px}
+.goodos-accessibility{display:flex;width:min(420px,calc(100vw - 24px));max-height:min(760px,calc(100dvh - 124px));padding:0;overflow:hidden;flex-direction:column}.goodos-accessibility__header{padding:16px 16px 0}.goodos-accessibility__tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:0 16px 14px;padding:4px;border-radius:13px;background:color-mix(in srgb,CanvasText 7%,Canvas)}.goodos-accessibility__tabs button,.goodos-accessibility__choice{min-height:38px;border:1px solid transparent;border-radius:10px;background:transparent;color:inherit;font:700 12px/1 sans-serif;cursor:pointer}.goodos-accessibility__tabs button[aria-selected="true"],.goodos-accessibility__choice[aria-pressed="true"]{border-color:color-mix(in srgb,var(--goodos-tone-2,#2563eb) 48%,transparent);background:color-mix(in srgb,var(--goodos-tone-2,#2563eb) 17%,Canvas);color:var(--goodos-tone-2,#2563eb)}.goodos-accessibility__content{min-height:0;padding:0 16px 16px;overflow-y:auto;overscroll-behavior:contain}.goodos-accessibility__content fieldset+fieldset{margin-top:18px}.goodos-accessibility__choices{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.goodos-accessibility__choices--two{grid-template-columns:repeat(2,1fr)}.goodos-accessibility__choices .goodos-accessibility__toggle{grid-column:1/-1}.goodos-accessibility__toggle{gap:12px;min-height:54px;padding:8px 12px}.goodos-accessibility__toggle span:first-child{min-width:0}.goodos-accessibility__toggle strong,.goodos-accessibility__toggle small{display:block}.goodos-accessibility__toggle strong{font-size:14px}.goodos-accessibility__toggle small{margin-top:3px;font-size:11px;font-weight:500;line-height:1.3;opacity:.68}.goodos-accessibility__slider{display:block;margin-top:8px;padding:12px;border:1px solid color-mix(in srgb,currentColor 16%,transparent);border-radius:12px;background:color-mix(in srgb,Canvas 92%,var(--goodos-tone-2,#2563eb))}.goodos-accessibility__slider>span{display:flex;align-items:center;justify-content:space-between;gap:12px}.goodos-accessibility__slider strong{font-size:13px}.goodos-accessibility__slider output{font-size:12px;font-weight:800;color:var(--goodos-tone-2,#2563eb)}.goodos-accessibility__slider input{width:100%;margin-top:10px;accent-color:var(--goodos-tone-2,#2563eb)}.goodos-accessibility__footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid color-mix(in srgb,currentColor 12%,transparent)}.goodos-accessibility__footer>span{font-size:11px;opacity:.65}.goodos-accessibility__footer .goodos-accessibility__reset{width:auto;min-width:86px;margin:0}.goodos-accessibility-effect{position:fixed;z-index:2147482997;pointer-events:none}.goodos-accessibility-effect--spotlight{inset:0;background:radial-gradient(circle var(--goodos-mask-radius) at var(--goodos-pointer-x) var(--goodos-pointer-y),transparent 0,transparent 68%,rgba(2,6,23,var(--goodos-mask-opacity)) 100%)}.goodos-accessibility-effect--reading-bar{right:0;left:0;height:48px;border-top:2px solid var(--goodos-tone-3,#38bdf8);border-bottom:2px solid var(--goodos-tone-3,#38bdf8);background:color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 10%,transparent)}.goodos-accessibility-effect--magnifier{width:144px;height:144px;border:4px solid color-mix(in srgb,var(--goodos-tone-3,#38bdf8) 80%,white);border-radius:50%;background:rgba(255,255,255,.08);box-shadow:0 18px 48px rgba(2,6,23,.28);backdrop-filter:contrast(1.5) saturate(1.2)}
+html[data-goodos-grayscale="true"] body>*:not(.goodos-support-bar):not(.goodos-accessibility):not(.goodos-accessibility-effect){filter:grayscale(1)}html[data-goodos-invert-colors="true"] body>*:not(.goodos-support-bar):not(.goodos-accessibility):not(.goodos-accessibility-effect){filter:invert(1) hue-rotate(180deg)}html[data-goodos-color-profile="protanopia"] body>*:not(.goodos-support-bar):not(.goodos-accessibility):not(.goodos-accessibility-effect){filter:saturate(.65) sepia(.12)}html[data-goodos-color-profile="deuteranopia"] body>*:not(.goodos-support-bar):not(.goodos-accessibility):not(.goodos-accessibility-effect){filter:saturate(.62) hue-rotate(-8deg)}html[data-goodos-color-profile="tritanopia"] body>*:not(.goodos-support-bar):not(.goodos-accessibility):not(.goodos-accessibility-effect){filter:saturate(.7) hue-rotate(18deg)}html body{line-height:var(--goodos-ada-line-height,normal);letter-spacing:var(--goodos-ada-letter-spacing,normal);word-spacing:var(--goodos-ada-word-spacing,normal)}html[data-goodos-focus-indicators="true"] :focus-visible{outline:3px solid var(--goodos-tone-3,#38bdf8)!important;outline-offset:3px!important}html[data-goodos-oversized-pointer="true"],html[data-goodos-oversized-pointer="true"] *{cursor:crosshair!important}
+html[data-goodos-text-size="large"]{font-size:112.5%!important}html[data-goodos-text-size="larger"]{font-size:125%!important}html[data-goodos-readable-font="true"] body,html[data-goodos-readable-font="true"] button,html[data-goodos-readable-font="true"] input,html[data-goodos-readable-font="true"] select,html[data-goodos-readable-font="true"] textarea{font-family:Arial,Verdana,sans-serif!important;letter-spacing:.02em!important}html[data-goodos-underline-links="true"] a{text-decoration:underline!important;text-decoration-thickness:2px!important;text-underline-offset:3px!important}html[data-goodos-high-contrast="true"]{filter:contrast(1.2)}html[data-goodos-reduce-motion="true"] *,html[data-goodos-reduce-motion="true"] *::before,html[data-goodos-reduce-motion="true"] *::after{scroll-behavior:auto!important;animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+@media(max-width:600px){.goodos-support-bar{right:50%;bottom:max(10px,env(safe-area-inset-bottom));transform:translateX(50%);gap:5px;padding:5px;border-radius:18px}.goodos-support-bar__action{width:42px;height:42px;flex-basis:42px;border-radius:13px}.goodos-support-bar__action svg{width:21px;height:21px}}
+@media(max-width:600px){.goodos-accessibility{right:50%;bottom:76px;transform:translateX(50%)}}
+@media(max-width:360px){.goodos-support-bar__action{width:40px;height:40px;flex-basis:40px}.goodos-support-bar__action svg{width:20px;height:20px}}
+@media(prefers-reduced-motion:reduce){.goodos-support-bar,.goodos-support-bar__action{transition:none}.goodos-support-bar__action:hover{transform:none}}
 `;
 
 const appearanceCss = String.raw`
@@ -543,7 +843,7 @@ function UniversalProfileMenu({ appName }) {
 
   const displayName = profile?.displayName || [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.email || appName;
   const initials = String(displayName || "G").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
-  const rawAvatarUrl = profile?.avatarUrl || profile?.avatar_url || null;
+  const rawAvatarUrl = profile?.avatarUrl || profile?.avatar_url || profile?.picture || profile?.photoURL || null;
   const avatarUrl = rawAvatarUrl && !/^(?:https?:|data:|blob:)/i.test(rawAvatarUrl)
     ? `${GOODOS_AUTH_ORIGIN}${rawAvatarUrl.startsWith("/") ? "" : "/"}${rawAvatarUrl}`
     : rawAvatarUrl;
@@ -583,7 +883,14 @@ function UniversalProfileMenu({ appName }) {
     createElement(
       "button",
       { type: "button", className: "goodos-universal-profile__trigger", onClick: () => setOpen((value) => !value), "aria-label": `Open ${displayName} profile menu`, "aria-expanded": open, "data-goodos-topbar-control": "account" },
-      avatarUrl && !avatarFailed ? createElement("img", { src: avatarUrl, alt: "", onError: () => setAvatarFailed(true) }) : initials,
+      avatarUrl && !avatarFailed ? createElement("img", {
+        src: avatarUrl,
+        alt: "",
+        decoding: "async",
+        referrerPolicy: "no-referrer",
+        onLoad: () => setAvatarLoaded(true),
+        onError: () => setAvatarFailed(true),
+      }) : initials,
     ),
     open && createElement(
       "div",

@@ -11,7 +11,13 @@ widget and mark its appearance trigger with
 `data-goodos-topbar-control="theme"`; do not copy the header or theme dialog
 into product code.
 
-Version 4.15.1 stores one `goodos_appearance_v1` preference, applies Day/Night
+The shared floating support bar includes the full GoodOS accessibility suite:
+display filters and color-vision profiles, text scale and spacing controls,
+speech and keyboard-navigation assistance, motion and pointer controls, and
+reading/focus aids. Preferences persist in `goodos_accessibility_v1` and apply
+immediately without changing the standardized four-action floating bar.
+
+Version 4.19.0 stores one `goodos_appearance_v1` preference, applies Day/Night
 to the application root, publishes the selected accent as shared CSS tokens,
 and emits `goodos:appearance-change`. Its minimal appearance popover is anchored
 directly below the top-bar control, without an overlay or page blur, so users
@@ -19,6 +25,16 @@ see every change live. The shared tokens now drive the application canvas, top
 bar, brand mark, sidebar, active navigation, cards, borders, buttons, focus
 states, and ambient surfaces. The five standard schemes are Graphite Blue, Deep
 Ocean, Evergreen, Carbon Ember, and Purple Pulse.
+
+The widget also mounts the canonical floating support bar with ADA, assistant
+chat, live support, and email actions. Its shell, focus treatment, and hover
+states use the active GoodOS appearance tokens, so the bar updates immediately
+when the user changes color scheme.
+
+The ADA action now owns the shared accessibility panel. Text sizing, high
+contrast, reduced motion, readable type, and underlined links apply immediately
+across the complete application and persist on the device. Product-specific
+legacy ADA launchers must be retired rather than displayed beside this control.
 
 Each scheme uses its complete three-tone palette for layered gradients across
 the popover, top bar, sidebar, selected controls, and featured surfaces. Subtle
