@@ -5,11 +5,18 @@ import type {
   ReactNode,
 } from "react";
 
-export declare const GOODOS_TOPBAR_WIDGET_VERSION = "3.0.0";
+export declare const GOODOS_TOPBAR_WIDGET_VERSION = "4.19.0";
 export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
 export declare const GOODOS_PASSKEY_ORIGIN = "https://goodos.app";
+export declare const GOODOS_APPEARANCE_STORAGE_KEY = "goodos_appearance_v1";
+export declare const GOODOS_ACCESSIBILITY_STORAGE_KEY = "goodos_accessibility_v1";
+export interface GoodOSAppearance { mode: "light" | "dark"; scheme: string; }
+export interface GoodOSColorScheme { id: string; name: string; description: string; colors: string[]; }
+export declare const GOODOS_COLOR_SCHEMES: GoodOSColorScheme[];
+export declare function readGoodOSAppearance(): GoodOSAppearance;
+export declare function applyGoodOSAppearance(value: Partial<GoodOSAppearance>, options?: { persist?: boolean }): GoodOSAppearance;
 
 export interface GoodOSIdentityProviderRecord {
   id: string;
@@ -86,6 +93,9 @@ export interface GoodOSTopBarStructuredProps extends SharedProps {
 export declare function GoodOSTopBarWidget(
   props: GoodOSTopBarChildrenProps | GoodOSTopBarStructuredProps,
 ): ReactNode;
+
+export interface GoodOSFloatingSupportBarProps { appName?: string; }
+export declare function GoodOSFloatingSupportBar(props?: GoodOSFloatingSupportBarProps): ReactNode;
 
 export type GoodOSIdentityProvider = "google" | "apple" | "microsoft";
 

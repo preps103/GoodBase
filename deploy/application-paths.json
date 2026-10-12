@@ -5,12 +5,13 @@
     "migrations/20260726_goodos_application_registry_expansion.sql",
     "migrations/20260731_goodos_application_registry_sites_expansion.sql",
     "migrations/20260819_rename_supplyguyz_to_goodsupply.sql",
-    "migrations/20260820_align_goodos_application_domains.sql"
+    "migrations/20260820_align_goodos_application_domains.sql",
+    "migrations/20261003_goodos_application_registry_dashboard_expansion.sql"
   ],
   "canonicalLogin": {
     "owner": "goodbase",
     "package": "@goodos/topbar-widget",
-    "version": "4.10.0",
+    "version": "4.19.0",
     "sourceDirectory": "vendor/goodos-topbar-widget",
     "requiredComponents": ["GoodOSLoginShell", "GoodOSLoginWidget"],
     "allowedThemeProps": ["accent", "accentInk", "initialMode", "mobileBrand"]

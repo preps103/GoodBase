@@ -25,8 +25,10 @@ test("master top bar exposes the four ordered integration zones", () => {
   assert.match(styles, /--goodos-topbar-workspace-width:\s*176px\s*;/);
   assert.match(styles, /--goodos-topbar-workspace-height:\s*34px\s*;/);
   assert.match(styles, /--goodos-topbar-search-width:\s*clamp\(360px,\s*34vw,\s*544px\)\s*;/);
-  assert.match(styles, /--goodos-topbar-controls-width:\s*166px\s*;/);
-  assert.match(styles, /--goodos-topbar-profile-controls-width:\s*292px\s*;/);
+  assert.match(styles, /--goodos-topbar-controls-width:\s*190px\s*;/);
+  assert.match(styles, /--goodos-topbar-profile-controls-width:\s*310px\s*;/);
+  assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*--goodos-topbar-gap:\s*6px\s*;[\s\S]*--goodos-topbar-control-gap:\s*6px\s*;/);
+  assert.match(styles, /@media \(max-width:\s*760px\)[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*var\(--goodos-topbar-compact-search-size\)\s*var\(--goodos-topbar-controls-width\)\s*!important\s*;/);
   assert.match(styles, /--goodos-topbar-profile-width:\s*160px\s*;/);
   assert.match(styles, /\[data-goodos-topbar\][\s\S]*width:\s*100vw\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar\][\s\S]*max-width:\s*100vw\s*!important\s*;/);
@@ -45,8 +47,8 @@ test("master top bar supports the standard signed-in profile layout", () => {
 
   assert.match(styles, /data-goodos-topbar-account-layout="profile"/);
   assert.match(styles, /repeat\(3,\s*var\(--goodos-topbar-control-size\)\)/);
-  assert.match(styles, /@media \(max-width:\s*1180px\)/);
-  assert.match(styles, /\.topbar-avatar-wrap\s*\{[\s\S]*width:\s*32px\s*!important\s*;[\s\S]*height:\s*32px\s*!important\s*;[\s\S]*aspect-ratio:\s*1\s*\/\s*1\s*!important\s*;[\s\S]*flex:\s*0\s+0\s+32px\s*!important\s*;/);
+  assert.match(styles, /@media \(max-width:\s*1360px\)/);
+  assert.match(styles, /\.topbar-avatar-wrap\s*\{[\s\S]*width:\s*var\(--goodos-topbar-visual-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-visual-size\)\s*!important\s*;[\s\S]*aspect-ratio:\s*1\s*\/\s*1\s*!important\s*;[\s\S]*flex:\s*0\s+0\s+var\(--goodos-topbar-visual-size\)\s*!important\s*;/);
   assert.match(styles, /\.topbar-avatar-wrap\s+\.account-pill-avatar\s+img,[\s\S]*width:\s*100%\s*!important\s*;[\s\S]*height:\s*100%\s*!important\s*;[\s\S]*border-radius:\s*50%\s*!important\s*;[\s\S]*object-fit:\s*cover\s*!important\s*;/);
   assert.match(consoleHtml, /class="topbar-avatar-wrap"/);
   assert.match(consoleHtml, /backend-topbar\.css\?v=20260819-profile-2/);
@@ -62,7 +64,8 @@ test("master top bar preserves the GoodBase desktop dimensions", () => {
     "--goodos-topbar-workspace-height": "34px",
     "--goodos-topbar-search-width": "clamp\\(360px,\\s*34vw,\\s*544px\\)",
     "--goodos-topbar-search-height": "46px",
-    "--goodos-topbar-control-size": "34px",
+    "--goodos-topbar-visual-size": "22px",
+    "--goodos-topbar-control-size": "40px",
   };
 
   for (const [token, value] of Object.entries(expectedTokens)) {
@@ -72,7 +75,8 @@ test("master top bar preserves the GoodBase desktop dimensions", () => {
   assert.match(styles, /\[data-goodos-notifications\][\s\S]*grid-column:\s*2\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-control="help"\][\s\S]*grid-column:\s*3\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-control="account"\][\s\S]*grid-column:\s*4\s*!important\s*;/);
-  assert.match(styles, /\[data-goodos-topbar-control="account"\]\s+img\s*\{[\s\S]*width:\s*32px\s*!important\s*;[\s\S]*height:\s*32px\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar-control="account"\]\s+img\s*\{[\s\S]*width:\s*var\(--goodos-topbar-visual-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-visual-size\)\s*!important\s*;/);
+  assert.match(styles, /\[data-goodos-topbar-control="theme"\][\s\S]*\[data-goodos-notification-trigger\][\s\S]*\[data-goodos-topbar-control="help"\][\s\S]*\[data-goodos-topbar-control="account"\][\s\S]*width:\s*var\(--goodos-topbar-visual-size\)\s*!important\s*;/);
   assert.match(styles, /\[data-goodos-topbar-controls\][\s\S]*>\s*\[data-goodos-notifications\][\s\S]*\[data-goodos-notification-trigger\]\s*\{[\s\S]*width:\s*var\(--goodos-topbar-control-size\)\s*!important\s*;[\s\S]*height:\s*var\(--goodos-topbar-control-size\)\s*!important\s*;/);
   assert.doesNotMatch(
     styles,
@@ -98,8 +102,9 @@ test("top-bar widget owns viewport placement and preserves application notificat
   assert.match(contract, /GoodOS alone mounts the\s+aggregated master notification center/);
 });
 
-test("master top bar is responsive and themeable without changing structure", () => {
+test("master top bar compacts actions and expands search without changing structure", () => {
   const styles = read("src/public/backend-topbar.css");
+  const widget = read("vendor/goodos-topbar-widget/index.js");
 
   for (const token of [
     "--goodos-topbar-surface",
@@ -114,10 +119,72 @@ test("master top bar is responsive and themeable without changing structure", ()
   }
 
   assert.match(styles, /@media \(max-width:\s*1480px\)/);
+  assert.match(styles, /@media \(max-width:\s*1360px\)/);
   assert.match(styles, /@media \(max-width:\s*1120px\)/);
   assert.match(styles, /@media \(max-width:\s*760px\)/);
   assert.match(styles, /\[data-goodos-topbar-workspace\][\s\S]*font-size:\s*13px\s*!important\s*;/);
-  assert.match(styles, /@media \(max-width:\s*1120px\)[\s\S]*\[data-goodos-topbar-workspace\][\s\S]*display:\s*none\s*!important\s*;/);
+  assert.match(styles, /data-goodos-topbar-action-text-only/);
+  assert.match(styles, /data-goodos-topbar-compact-glyph/);
+  assert.match(styles, /data-goodos-topbar-search-expanded="true"/);
+  assert.match(styles, /--goodos-topbar-compact-search-size/);
+  assert.match(styles, /data-goodos-topbar-search-icon\][\s\S]*display:\s*none\s*!important\s*;/);
+  assert.match(styles, /Keyboard shortcut prompts are not part of the GoodOS top-bar contract/);
+  assert.match(styles, /\[class\*="search-shortcut"\][\s\S]*display:\s*none\s*!important\s*;/);
+  assert.match(styles, /:has\([\s\S]*data-goodos-topbar-search/);
+  assert.match(widget, /GOODOS_TOPBAR_WIDGET_VERSION = "4\.19\.0"/);
+  assert.match(widget, /GOODOS_COLOR_SCHEMES/);
+  assert.match(widget, /applyGoodOSAppearance/);
+  assert.doesNotMatch(widget, /CTRL K|⌘ K/);
+});
+
+test("shared widget mounts one responsive four-action support bar", () => {
+  const widget = read("vendor/goodos-topbar-widget/index.js");
+
+  assert.match(widget, /export function GoodOSFloatingSupportBar/);
+  assert.match(widget, /createElement\(GoodOSFloatingSupportBar/);
+  assert.match(widget, /data-goodos-support-bar/);
+  assert.match(widget, /width:44px;height:44px;flex:0 0 44px/);
+  assert.match(widget, /GOODOS_SUPPORT_BAR_STORAGE_KEY/);
+  assert.match(widget, /onPointerDown/);
+  assert.match(widget, /goodos-support-bar__minimize/);
+  for (const action of ["ada", "chat", "live", "email"]) {
+    assert.match(widget, new RegExp(`id: "${action}"`));
+  }
+  assert.match(widget, /mailto:support@goodos\.app/);
+  assert.match(widget, /GOODOS_ACCESSIBILITY_STORAGE_KEY/);
+  assert.match(widget, /id: "ada"[\s\S]*setAccessibilityOpen/);
+  assert.match(widget, /id: "chat"[\s\S]*dispatch\("chat"/);
+  assert.match(widget, /id: "live"[\s\S]*dispatch\("live-support"/);
+  assert.match(widget, /High contrast/);
+  assert.match(widget, /Reduce motion/);
+  for (const capability of [
+    "Grayscale",
+    "Invert colors",
+    "Protanopia",
+    "Deuteranopia",
+    "Tritanopia",
+    "Line height",
+    "Letter spacing",
+    "Word spacing",
+    "Readable typeface",
+    "Speech assistant",
+    "Focus speaker",
+    "Oversized pointer",
+    "Highlight controls",
+    "Focus indicators",
+    "Mouse spotlight",
+    "Concentration mask",
+    "Visual reading bar",
+    "Magnifier lens",
+  ]) {
+    assert.match(widget, new RegExp(capability));
+  }
+  assert.match(widget, /goodos:accessibility-change/);
+  assert.match(widget, /var\(--goodos-tone-1/);
+  assert.match(widget, /var\(--goodos-tone-2/);
+  assert.match(widget, /var\(--goodos-tone-3/);
+  assert.match(widget, /@media\(max-width:600px\)\{\.goodos-support-bar/);
+  assert.match(widget, /body:has\(\.goodos-support-bar\)[\s\S]*data-goodos-ada-trigger/);
 });
 
 test("master top bar stylesheet is delivered as a cross-origin shared asset", () => {
@@ -131,7 +198,7 @@ test("master top bar stylesheet is delivered as a cross-origin shared asset", ()
 
 test("versioned GoodOS UI widget packages are delivered as immutable shared assets", () => {
   const routes = read("src/routes/index.js");
-  const packagePaths = ["3.0.0", "4.1.0", "4.2.0", "4.3.0", "4.4.0", "4.5.0", "4.6.0", "4.7.0", "4.8.0", "4.9.0", "4.10.0"].map((version) =>
+  const packagePaths = ["3.0.0", "4.1.0", "4.2.0", "4.3.0", "4.4.0", "4.5.0", "4.6.0", "4.7.0", "4.8.0", "4.9.0", "4.10.0", "4.11.0", "4.12.0", "4.13.0", "4.14.0"].map((version) =>
     path.join(
       root,
       `src/public/packages/goodos-topbar-widget-${version}.tgz`,
@@ -150,6 +217,10 @@ test("versioned GoodOS UI widget packages are delivered as immutable shared asse
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.8\.0\.tgz"/);
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.9\.0\.tgz"/);
   assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.10\.0\.tgz"/);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.11\.0\.tgz"/);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.12\.0\.tgz"/);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.13\.0\.tgz"/);
+  assert.match(routes, /router\.get\("\/packages\/goodos-topbar-widget-4\.14\.0\.tgz"/);
   assert.match(routes, /max-age=31536000, immutable/);
   assert.match(routes, /application\/gzip/);
 });
