@@ -131,7 +131,7 @@ test("master top bar compacts actions and expands search without changing struct
   assert.match(styles, /Keyboard shortcut prompts are not part of the GoodOS top-bar contract/);
   assert.match(styles, /\[class\*="search-shortcut"\][\s\S]*display:\s*none\s*!important\s*;/);
   assert.match(styles, /:has\([\s\S]*data-goodos-topbar-search/);
-  assert.match(widget, /GOODOS_TOPBAR_WIDGET_VERSION = "4\.19\.0"/);
+  assert.match(widget, /GOODOS_TOPBAR_WIDGET_VERSION = "4\.20\.1"/);
   assert.match(widget, /GOODOS_COLOR_SCHEMES/);
   assert.match(widget, /applyGoodOSAppearance/);
   assert.doesNotMatch(widget, /CTRL K|⌘ K/);

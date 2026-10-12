@@ -37,7 +37,7 @@ const STAGED_PRESERVE_PATHS = [
 
 function canonicalDeploymentSites() {
   const applications = deploymentManifest.applications
-    .filter((application) => application.deploymentManaged !== false)
+    .filter((application) => application.deploymentManaged !== false && application.deploymentType !== "sites")
     .map((application) => ({
       appId: application.id,
       name: application.name,
@@ -68,8 +68,7 @@ function canonicalDeploymentSites() {
 function sitesHostedApplicationIds() {
   return deploymentManifest.applications
     .filter((application) =>
-      application.deploymentType === "sites" &&
-      application.deploymentManaged === false
+      application.deploymentType === "sites"
     )
     .map((application) => application.id);
 }

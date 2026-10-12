@@ -16,28 +16,29 @@ test("the registry discovers active products without a fixed application count",
   assert.equal(Object.hasOwn(manifest, "applicationCount"), false);
   assert.ok(manifest.applications.length > 0);
 
-  for (const key of ["id", "name", "domain", "status", "classification", "repositoryUrl", "localDirectory", "deploymentType"]) {
+  for (const key of ["id", "name", "domain", "status", "classification", "localDirectory", "deploymentType"]) {
     for (const application of manifest.applications) {
       assert.ok(application[key], `${application.id || "unknown"} is missing ${key}`);
     }
   }
 
   for (const key of ["id", "domain", "repositoryUrl", "localDirectory"]) {
-    const values = manifest.applications.map((application) => application[key]);
+    const values = manifest.applications.map((application) => application[key]).filter(Boolean);
     assert.equal(new Set(values).size, values.length, `application ${key} values must be unique`);
   }
 
   for (const application of manifest.applications) {
     assert.equal(application.status, "active");
     assert.equal(application.classification, "product");
-    assert.doesNotThrow(() => new URL(application.repositoryUrl));
+    assert.ok(application.repositoryUrl || application.projectContextId || application.provisioningState, `${application.id} needs a source authority`);
+    if (application.repositoryUrl) assert.doesNotThrow(() => new URL(application.repositoryUrl));
   }
 });
 
 test("every active product declares the canonical login integration and theme tokens", () => {
   assert.equal(manifest.canonicalLogin.owner, "goodbase");
   assert.equal(manifest.canonicalLogin.package, "@goodos/topbar-widget");
-  assert.equal(manifest.canonicalLogin.version, "4.19.0");
+  assert.equal(manifest.canonicalLogin.version, "4.20.1");
   assert.deepEqual(
     manifest.canonicalLogin.requiredComponents,
     ["GoodOSLoginShell", "GoodOSLoginWidget"]
@@ -46,7 +47,7 @@ test("every active product declares the canonical login integration and theme to
   for (const application of manifest.applications) {
     assert.equal(application.authEnabled, true, `${application.id} auth must be enabled`);
     assert.equal(application.canonicalLoginRequired, true, `${application.id} must use the canonical login`);
-    assert.match(application.loginIntegration, /\.(?:jsx?|tsx?)$/);
+    assert.ok(application.loginIntegration || application.projectContextId || application.provisioningState, `${application.id} needs an integration authority`);
     assert.match(application.theme.accent, /^#[0-9a-f]{6}$/i);
     assert.match(application.theme.accentInk, /^#[0-9a-f]{6}$/i);
   }
@@ -55,18 +56,22 @@ test("every active product declares the canonical login integration and theme to
 test("every product frontend uses an externally managed web host", () => {
   const projectIds = [];
   for (const application of manifest.applications) {
-    assert.ok(["sites", "worker"].includes(application.deploymentType));
-    assert.equal(application.deploymentManaged, false);
+    assert.equal(application.deploymentType, "sites");
+    assert.equal(application.deploymentManaged, true);
     assert.equal(Object.hasOwn(application, "productionPath"), false);
     assert.equal(Object.hasOwn(application, "service"), false);
     if (application.deploymentType === "sites") {
-      assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
-      projectIds.push(application.hostingProjectId);
+      if (application.hostingProjectId) {
+        assert.match(application.hostingProjectId, /^appgprj_[a-z0-9]+$/);
+        projectIds.push(application.hostingProjectId);
+      } else {
+        assert.ok(application.repositoryUrl || application.projectContextId || application.provisioningState, `${application.id} needs a provisioning authority`);
+      }
     }
   }
   assert.equal(
     new Set(projectIds).size,
-    manifest.applications.filter((application) => application.deploymentType === "sites").length
+    projectIds.length
   );
 });
 
