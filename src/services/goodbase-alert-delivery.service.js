@@ -98,9 +98,10 @@ async function receiveAlertmanagerPayload({ payload, body, timestamp, nonce }) {
       const fingerprint = clean(item.fingerprint || crypto.createHash("sha256").update(JSON.stringify(labels)).digest("hex"),128);
       const start = dateOrNull(item.startsAt);
       if (state === "resolved") {
-        await client.query(
+        const resolvedInstances = await client.query(
           `UPDATE goodbase_alert_instances SET status='resolved',resolved_at=NOW(),ends_at=COALESCE($2,ends_at),last_received_at=NOW()
-           WHERE fingerprint=$1 AND status='firing'`,
+           WHERE fingerprint=$1 AND status='firing'
+           RETURNING id`,
           [fingerprint,dateOrNull(item.endsAt)]
         );
         await client.query(
@@ -108,6 +109,17 @@ async function receiveAlertmanagerPayload({ payload, body, timestamp, nonce }) {
            FROM goodbase_alert_instances alert WHERE alert.id=delivery.alert_instance_id AND alert.fingerprint=$1 AND delivery.status IN('pending','retrying')`,
           [fingerprint]
         );
+        const resolvedIds = resolvedInstances.rows.map((row) => String(row.id));
+        if (resolvedIds.length) {
+          await client.query(
+            `UPDATE backend_notifications
+             SET status='archived', archived_at=COALESCE(archived_at,NOW()), updated_at=NOW()
+             WHERE category='observability'
+               AND source_id = ANY($1::text[])
+               AND archived_at IS NULL`,
+            [resolvedIds]
+          );
+        }
       }
       const dedupe = crypto.createHash("sha256").update(`${fingerprint}.${state}.${start?.toISOString() || ""}`).digest("hex");
       const instance = await client.query(
@@ -156,6 +168,14 @@ async function processDueDeliveries(limit=25) {
         payload:{labels:item.labels_json,annotations:item.annotations_json},metadata:{deliveryAttemptId:item.id,escalationStep:item.escalation_step}
       });
       await database.query(`UPDATE goodbase_alert_delivery_attempts SET status=$2,attempt_count=attempt_count+1,notification_id=$3,email_queue_id=$4,updated_at=NOW(),delivered_at=CASE WHEN $2='sent' THEN NOW() END WHERE id=$1`,[item.id,item.channel==="email"?"queued":"sent",notification.id,notification.emailQueue?.id||null]);
+      await database.query(
+        `UPDATE backend_notifications
+         SET status='archived', archived_at=COALESCE(archived_at,NOW()), updated_at=NOW()
+         WHERE source='alert-delivery-monitor'
+           AND source_id=$1
+           AND archived_at IS NULL`,
+        [String(item.alert_instance_id)]
+      );
       processed.push({id:item.id,status:item.channel==="email"?"queued":"sent"});
     } catch(error){
       await database.query(`UPDATE goodbase_alert_delivery_attempts SET attempt_count=attempt_count+1,status=CASE WHEN attempt_count+1>=max_attempts THEN 'failed' ELSE 'retrying' END,next_attempt_at=NOW()+(LEAST(3600,POWER(2,attempt_count+1)*15)::text||' seconds')::interval,last_error=$2,updated_at=NOW() WHERE id=$1`,[item.id,clean(error.message,1000)]);
@@ -169,12 +189,20 @@ async function processDueDeliveries(limit=25) {
      RETURNING id,alert_instance_id,channel,recipient,last_error`
   );
   for(const failure of newlyFailed.rows){
-    await notificationService.createNotification({
-      notificationKey:`observability.delivery.failed.${failure.id}`,title:"Goodbase alert delivery failed",
-      message:`${failure.channel} delivery to ${clean(failure.recipient||"the configured on-call recipient",320)} exhausted its retry budget. ${clean(failure.last_error||"No provider detail was returned.",1000)}`,
-      severity:"critical",category:"observability",channel:"in_app",queueEmail:false,source:"alert-delivery-monitor",sourceId:String(failure.alert_instance_id),
-      metadata:{deliveryAttemptId:failure.id}
-    });
+    const existing = await database.query(
+      `SELECT id FROM backend_notifications
+       WHERE notification_key=$1 AND archived_at IS NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [`observability.delivery.failed.${failure.id}`]
+    );
+    if (!existing.rows[0]) {
+      await notificationService.createNotification({
+        notificationKey:`observability.delivery.failed.${failure.id}`,title:"Goodbase alert delivery failed",
+        message:`${failure.channel} delivery to ${clean(failure.recipient||"the configured on-call recipient",320)} exhausted its retry budget. ${clean(failure.last_error||"No provider detail was returned.",1000)}`,
+        severity:"critical",category:"observability",channel:"in_app",queueEmail:false,source:"alert-delivery-monitor",sourceId:String(failure.alert_instance_id),
+        metadata:{deliveryAttemptId:failure.id}
+      });
+    }
   }
   return {processedCount:processed.length,failedDeliveryAlerts:newlyFailed.rowCount,processed};
 }

@@ -74,8 +74,8 @@ groups:
           summary: "Goodbase outbound alert relay is unavailable"
           description: "Alertmanager cannot reach the signed Goodbase notification receiver."
       - alert: GoodbaseAlertDeliveryFailures
-        expr: increase(goodbase_alert_relay_failed_total[15m]) > 0
-        for: 1m
+        expr: increase(goodbase_alert_relay_failed_total[5m]) > 0 and (time() - goodbase_alert_relay_last_success_timestamp_seconds > 300)
+        for: 2m
         labels:
           severity: critical
         annotations:
