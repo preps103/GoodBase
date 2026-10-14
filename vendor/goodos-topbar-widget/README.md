@@ -11,7 +11,7 @@ widget and mark its appearance trigger with
 `data-goodos-topbar-control="theme"`; do not copy the header or theme dialog
 into product code.
 
-Version 4.22.0 normalizes the four universal controls in one fixed order:
+Version 4.22.1 normalizes the four universal controls in one fixed order:
 appearance, notifications, help, and profile. GoodOS declares
 `notificationMode="master"` and may show the user's combined entitled feed.
 Every product declares `notificationMode="application"` with its fixed

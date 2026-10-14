@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export const GOODOS_TOPBAR_WIDGET_VERSION = "4.22.0";
+export const GOODOS_TOPBAR_WIDGET_VERSION = "4.22.1";
 export const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
@@ -20,6 +20,12 @@ const GOODOS_SUPPORT_BAR_STORAGE_KEY = "goodos_support_bar_v1";
 const GOODOS_SUPPORT_VIEWPORT_MARGIN = 14;
 const GOODOS_SUPPORT_EXPANDED_SIZE = { width: 208, height: 58 };
 const GOODOS_SUPPORT_MINIMIZED_SIZE = { width: 56, height: 56 };
+
+function safeStorageSet(key, value) {
+  try {
+    if (typeof localStorage?.setItem === "function") localStorage.setItem(key, value);
+  } catch {}
+}
 
 function supportViewportBounds() {
   if (typeof window === "undefined") return { left: 0, top: 0, width: 0, height: 0 };
@@ -66,7 +72,10 @@ export function readGoodOSAppearance() {
     const stored = JSON.parse(window.localStorage.getItem(GOODOS_APPEARANCE_STORAGE_KEY) || "null");
     if (stored) return normalizeAppearance(stored);
   } catch {}
-  const legacy = window.localStorage.getItem("theme");
+  let legacy = null;
+  try {
+    legacy = typeof window.localStorage?.getItem === "function" ? window.localStorage.getItem("theme") : null;
+  } catch {}
   const mode = legacy === "dark" || (!legacy && window.matchMedia?.("(prefers-color-scheme: dark)").matches)
     ? "dark"
     : "light";
@@ -95,8 +104,10 @@ export function applyGoodOSAppearance(value, { persist = true } = {}) {
   root.style.setProperty("--color-indigo-600", scheme.colors[1]);
   root.style.setProperty("--color-indigo-700", scheme.colors[0]);
   if (persist && typeof window !== "undefined") {
-    window.localStorage.setItem(GOODOS_APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
-    window.localStorage.setItem("theme", appearance.mode);
+    try {
+      window.localStorage?.setItem?.(GOODOS_APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
+      window.localStorage?.setItem?.("theme", appearance.mode);
+    } catch {}
   }
   window.dispatchEvent(new CustomEvent("goodos:appearance-change", { detail: appearance }));
   return appearance;
@@ -409,6 +420,9 @@ export function GoodOSTopBarWidget(props) {
       : createPortal(
           createElement(UniversalProfileMenu, {
             appName,
+            providedProfile: props.profile,
+            onSettings: props.onSettings,
+            settingsLabel: props.settingsLabel,
           }),
           document.body,
         );
@@ -507,7 +521,7 @@ export function GoodOSFloatingSupportBar({ appName = "GoodOS" } = {}) {
     root.dataset.goodosUnderlineLinks = String(accessibility.underlineLinks);
     root.dataset.goodosFocusIndicators = String(accessibility.focusIndicators);
     root.dataset.goodosOversizedPointer = String(accessibility.oversizedPointer);
-    localStorage.setItem(GOODOS_ACCESSIBILITY_STORAGE_KEY, JSON.stringify(accessibility));
+    safeStorageSet(GOODOS_ACCESSIBILITY_STORAGE_KEY, JSON.stringify(accessibility));
     window.dispatchEvent(new CustomEvent("goodos:accessibility-change", { detail: accessibility }));
   }, [accessibility]);
   useEffect(() => {
@@ -557,7 +571,7 @@ export function GoodOSFloatingSupportBar({ appName = "GoodOS" } = {}) {
       const position = clampSupportPosition(current.position, rect.width, rect.height);
       if (position.x === current.position.x && position.y === current.position.y) return current;
       const next = { ...current, position };
-      localStorage.setItem(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(next));
+      safeStorageSet(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
     keepVisible();
@@ -572,7 +586,7 @@ export function GoodOSFloatingSupportBar({ appName = "GoodOS" } = {}) {
   }, [barState.minimized]);
   const saveBarState = (next) => {
     setBarState(next);
-    localStorage.setItem(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(next));
+    safeStorageSet(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(next));
   };
   const onPointerDown = (event) => {
     if (event.target.closest("a,button")) return;
@@ -592,7 +606,7 @@ export function GoodOSFloatingSupportBar({ appName = "GoodOS" } = {}) {
     if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
     dragRef.current = null;
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    setBarState((current) => { localStorage.setItem(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(current)); return current; });
+    setBarState((current) => { safeStorageSet(GOODOS_SUPPORT_BAR_STORAGE_KEY, JSON.stringify(current)); return current; });
   };
   const moveWithKeyboard = (event) => {
     if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
@@ -849,18 +863,23 @@ const profileMenuCss = String.raw`
 .goodos-universal-profile__menu{position:absolute;top:42px;right:0;width:250px;padding:10px;border:1px solid rgba(148,163,184,.24);border-radius:16px;background:rgba(15,23,42,.98);box-shadow:0 24px 64px rgba(0,0,0,.38);backdrop-filter:blur(18px)}
 .goodos-universal-profile__identity{display:block;padding:10px 10px 12px;border-bottom:1px solid rgba(148,163,184,.16)}
 .goodos-universal-profile__identity strong,.goodos-universal-profile__identity span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.goodos-universal-profile__identity strong{font-size:14px}.goodos-universal-profile__identity span{margin-top:3px;color:#94a3b8;font-size:11px}
+.goodos-universal-profile__settings{display:flex;width:100%;min-height:42px;align-items:center;gap:9px;margin-top:8px;padding:0 11px;border:0;border-radius:10px;background:transparent;color:#e5e7eb;cursor:pointer;font:inherit;font-size:13px;font-weight:700;text-align:left}.goodos-universal-profile__settings:hover,.goodos-universal-profile__settings:focus-visible{background:rgba(148,163,184,.18)}
 .goodos-universal-profile__signout{display:flex;width:100%;min-height:42px;align-items:center;gap:9px;margin-top:8px;padding:0 11px;border:0;border-radius:10px;background:transparent;color:#fca5a5;cursor:pointer;font:inherit;font-size:13px;font-weight:800;text-align:left}.goodos-universal-profile__signout:hover{background:rgba(239,68,68,.12)}.goodos-universal-profile__signout:disabled{cursor:wait;opacity:.6}
 @media(max-width:620px){.goodos-universal-profile{top:15px;right:14px}.goodos-universal-profile__menu{top:42px;width:min(250px,calc(100vw - 28px))}}
 `;
 
-function UniversalProfileMenu({ appName }) {
+function UniversalProfileMenu({ appName, providedProfile, onSettings, settingsLabel }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(providedProfile ?? null);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (providedProfile !== undefined) {
+      setProfile(providedProfile);
+      return;
+    }
     let cached = null;
     for (const key of ["goodos_current_user", "goodtrusts_user"]) {
       try {
@@ -885,9 +904,9 @@ function UniversalProfileMenu({ appName }) {
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => payload?.user && setProfile(payload.user))
       .catch(() => {});
-  }, []);
+  }, [providedProfile]);
 
-  const displayName = profile?.displayName || [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.email || appName;
+  const displayName = profile?.displayName || [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.email || (providedProfile === null ? "Local workspace" : appName);
   const initials = String(displayName || "G").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const rawAvatarUrl = profile?.avatarUrl || profile?.avatar_url || null;
   const avatarUrl = rawAvatarUrl && !/^(?:https?:|data:|blob:)/i.test(rawAvatarUrl)
@@ -934,8 +953,9 @@ function UniversalProfileMenu({ appName }) {
     open && createElement(
       "div",
       { className: "goodos-universal-profile__menu", role: "menu" },
-      createElement("span", { className: "goodos-universal-profile__identity" }, createElement("strong", null, displayName), createElement("span", null, profile?.email || "GoodOS account")),
-      createElement("button", { type: "button", role: "menuitem", className: "goodos-universal-profile__signout", disabled: busy, onClick: signOut }, createElement("span", { "aria-hidden": "true" }, "↪"), busy ? "Signing out…" : "Sign out"),
+      createElement("span", { className: "goodos-universal-profile__identity" }, createElement("strong", null, displayName), createElement("span", null, profile?.email || (providedProfile === null ? "Projects stay on this device" : "GoodOS account"))),
+      onSettings && createElement("button", { type: "button", role: "menuitem", className: "goodos-universal-profile__settings", onClick: () => { setOpen(false); onSettings(); } }, createElement("span", { "aria-hidden": "true" }, "⚙"), settingsLabel || "Settings"),
+      providedProfile !== null && createElement("button", { type: "button", role: "menuitem", className: "goodos-universal-profile__signout", disabled: busy, onClick: signOut }, createElement("span", { "aria-hidden": "true" }, "↪"), busy ? "Signing out…" : "Sign out"),
     ),
   );
 }

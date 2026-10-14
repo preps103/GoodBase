@@ -5,7 +5,7 @@ import type {
   ReactNode,
 } from "react";
 
-export declare const GOODOS_TOPBAR_WIDGET_VERSION = "4.22.0";
+export declare const GOODOS_TOPBAR_WIDGET_VERSION = "4.22.1";
 export declare const GOODOS_LOGIN_WIDGET_VERSION = "1.9.0";
 export declare const GOODOS_LOGIN_SHELL_VERSION = "1.2.0";
 export declare const GOODOS_AUTH_ORIGIN = "https://base.goodos.app";
@@ -57,6 +57,9 @@ interface SharedProps {
   portal?: boolean;
   className?: string;
   style?: CSSProperties;
+  profile?: { id?: string; email?: string | null; firstName?: string | null; lastName?: string | null; displayName?: string | null; avatarUrl?: string | null } | null;
+  onSettings?: () => void;
+  settingsLabel?: string;
 }
 
 export interface GoodOSTopBarChildrenProps extends SharedProps {
