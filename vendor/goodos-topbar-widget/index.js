@@ -565,6 +565,19 @@ export function GoodOSFloatingSupportBar({ appName = "GoodOS" } = {}) {
     return () => window.removeEventListener("keydown", close);
   }, [accessibilityOpen]);
   useEffect(() => {
+    const open = () => setAccessibilityOpen(true);
+    const close = () => setAccessibilityOpen(false);
+    const toggle = () => setAccessibilityOpen((current) => !current);
+    window.addEventListener("goodos:accessibility:open", open);
+    window.addEventListener("goodos:accessibility:close", close);
+    window.addEventListener("goodos:accessibility:toggle", toggle);
+    return () => {
+      window.removeEventListener("goodos:accessibility:open", open);
+      window.removeEventListener("goodos:accessibility:close", close);
+      window.removeEventListener("goodos:accessibility:toggle", toggle);
+    };
+  }, []);
+  useEffect(() => {
     const keepVisible = () => setBarState((current) => {
       if (!current.position || !barRef.current) return current;
       const rect = barRef.current.getBoundingClientRect();
