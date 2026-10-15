@@ -1739,7 +1739,10 @@ async function teamProductionApplyActiveMember({
           NOW()
     `,
     [
-      teamProductionId("membership"),
+      // app_memberships.id is a PostgreSQL UUID. The other team tables use
+      // prefixed text identifiers, so reusing teamProductionId here caused
+      // every existing-user invitation to roll back with an invalid UUID.
+      crypto.randomUUID(),
       userId,
       teamProductionAppRole(
         role.name
