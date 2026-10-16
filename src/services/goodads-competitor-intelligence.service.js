@@ -1085,29 +1085,35 @@ async function overview({ context }) {
       [context.organizationId]
     ),
     query(
-      `SELECT channel AS label, COUNT(*)::integer AS value
-       FROM goodads_competitor_creatives
-       WHERE organization_id=$1 AND archived_at IS NULL GROUP BY channel ORDER BY value DESC`,
+      `SELECT creative.channel AS label, COUNT(*)::integer AS value
+       FROM goodads_competitor_creatives creative
+       JOIN goodads_competitors competitor ON competitor.id=creative.competitor_id
+       WHERE creative.organization_id=$1 AND creative.archived_at IS NULL AND competitor.archived_at IS NULL
+       GROUP BY creative.channel ORDER BY value DESC`,
       [context.organizationId]
     ),
     query(
-      `SELECT ad_format AS label, COUNT(*)::integer AS value
-       FROM goodads_competitor_creatives
-       WHERE organization_id=$1 AND archived_at IS NULL GROUP BY ad_format ORDER BY value DESC`,
+      `SELECT creative.ad_format AS label, COUNT(*)::integer AS value
+       FROM goodads_competitor_creatives creative
+       JOIN goodads_competitors competitor ON competitor.id=creative.competitor_id
+       WHERE creative.organization_id=$1 AND creative.archived_at IS NULL AND competitor.archived_at IS NULL
+       GROUP BY creative.ad_format ORDER BY value DESC`,
       [context.organizationId]
     ),
     query(
-      `SELECT call_to_action AS label, COUNT(*)::integer AS value
-       FROM goodads_competitor_creatives
-       WHERE organization_id=$1 AND archived_at IS NULL AND call_to_action <> ''
-       GROUP BY call_to_action ORDER BY value DESC LIMIT 10`,
+      `SELECT creative.call_to_action AS label, COUNT(*)::integer AS value
+       FROM goodads_competitor_creatives creative
+       JOIN goodads_competitors competitor ON competitor.id=creative.competitor_id
+       WHERE creative.organization_id=$1 AND creative.archived_at IS NULL AND competitor.archived_at IS NULL AND creative.call_to_action <> ''
+       GROUP BY creative.call_to_action ORDER BY value DESC LIMIT 10`,
       [context.organizationId]
     ),
     query(
-      `SELECT LOWER(SPLIT_PART(REGEXP_REPLACE(landing_url, '^https?://', ''), '/', 1)) AS label,
+      `SELECT LOWER(SPLIT_PART(REGEXP_REPLACE(creative.landing_url, '^https?://', ''), '/', 1)) AS label,
          COUNT(*)::integer AS value
-       FROM goodads_competitor_creatives
-       WHERE organization_id=$1 AND archived_at IS NULL AND landing_url IS NOT NULL
+       FROM goodads_competitor_creatives creative
+       JOIN goodads_competitors competitor ON competitor.id=creative.competitor_id
+       WHERE creative.organization_id=$1 AND creative.archived_at IS NULL AND competitor.archived_at IS NULL AND creative.landing_url IS NOT NULL
        GROUP BY 1 ORDER BY value DESC LIMIT 10`,
       [context.organizationId]
     ),
@@ -1115,7 +1121,7 @@ async function overview({ context }) {
       `SELECT snapshot.metrics, snapshot.captured_at, competitor.display_name AS competitor_name
        FROM goodads_competitor_snapshots snapshot
        JOIN goodads_competitors competitor ON competitor.id=snapshot.competitor_id
-       WHERE snapshot.organization_id=$1 AND snapshot.status='completed'
+       WHERE snapshot.organization_id=$1 AND snapshot.status='completed' AND competitor.archived_at IS NULL
        ORDER BY snapshot.captured_at DESC LIMIT 1`,
       [context.organizationId]
     ),
