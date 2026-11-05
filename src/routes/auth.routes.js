@@ -1226,7 +1226,12 @@ router.get("/authorize/:appId", authRequired, async (req, res) => {
   const membership = (req.apps || []).find((app) =>
     String(app.id || "").trim().toLowerCase() === requestedAppId
   );
-  const authorized = Boolean(
+  // GoodSure has one GoodOS identity for both of its domains. Valid GoodOS
+  // sessions can enter the application; sensitive lead data is still guarded
+  // by GoodSure's independent server-side role checks.
+  const goodsureEntry = requestedAppId === "goodsure"
+    && String(req.user?.status || "").toLowerCase() === "active";
+  const authorized = goodsureEntry || Boolean(
     membership &&
     String(membership.appStatus || "").toLowerCase() === "active" &&
     String(membership.membershipStatus || "").toLowerCase() === "active"
@@ -1253,7 +1258,9 @@ router.get("/authorize/:appId", authRequired, async (req, res) => {
 
   return success(res, {
     authorized: true,
-    app: membership
+    app: membership || (goodsureEntry
+      ? { id: "goodsure", name: "GoodSure", domain: "sure.goodos.app", domainAliases: ["insurance.goodos.app"], role: "viewer", membershipStatus: "authenticated" }
+      : null)
   });
 });
 

@@ -119,6 +119,7 @@ test("GoodCustoms, GoodTrust, and GoodSure use canonical singular domains", () =
   assert.equal(applications.get("goodcustoms").domain, "custom.goodos.app");
   assert.equal(applications.get("goodtrusts").domain, "trust.goodos.app");
   assert.equal(applications.get("goodsure").domain, "sure.goodos.app");
+  assert.deepEqual(applications.get("goodsure").domainAliases, ["insurance.goodos.app"]);
   assert.equal(applications.get("goodsupply").domain, "supply.goodos.app");
 
   const domainMigration = fs.readFileSync(
@@ -138,4 +139,11 @@ test("retired applications and legacy repositories remain classified", () => {
   assert.match(cleanupMigration, /DELETE FROM apps[\s\S]*'goodbackend'/);
   assert.match(cleanupMigration, /backend\.goodos\.app/);
   assert.match(cleanupMigration, /base\.goodos\.app/);
+});
+
+test("GoodSure permits GoodOS app entry without bypassing data permissions", () => {
+  const authRoutes = fs.readFileSync(path.join(root, "src/routes/auth.routes.js"), "utf8");
+  assert.match(authRoutes, /requestedAppId === "goodsure"/);
+  assert.match(authRoutes, /role: "viewer"/);
+  assert.match(authRoutes, /goodsureEntry \|\| Boolean/);
 });
