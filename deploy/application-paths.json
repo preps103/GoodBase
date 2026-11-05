@@ -135,7 +135,7 @@
       "loginIntegration": "src/components/AuthModal.tsx", "theme": { "accent": "#c9a227", "accentInk": "#090909" }
     },
     {
-      "id": "goodsure", "name": "GoodSure", "domain": "sure.goodos.app", "status": "active", "classification": "product",
+      "id": "goodsure", "name": "GoodSure", "domain": "sure.goodos.app", "domainAliases": ["insurance.goodos.app"], "status": "active", "classification": "product",
       "repositoryUrl": "https://github.com/preps103/GoodSure.git", "localDirectory": "goodsure-source",
       "deploymentType": "sites", "deploymentManaged": false, "hostingProjectId": "appgprj_6a66ae5710f081919545a08768d3c21c", "authEnabled": true, "canonicalLoginRequired": true,
       "loginIntegration": "src/components/GoodOSLogin.tsx", "theme": { "accent": "#f59e0b", "accentInk": "#111827" }
