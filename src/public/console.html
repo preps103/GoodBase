@@ -5712,7 +5712,7 @@
   </div>
 
   <div id="app" class="shell hidden">
-    <header class="topbar goodos-topbar" data-goodos-topbar data-goodos-topbar-account-layout="profile">
+    <header class="topbar goodos-topbar" data-goodos-topbar data-goodos-topbar-widget="shared" data-goodos-topbar-widget-version="4.27.0" data-goodos-floating-support="disabled" data-goodos-topbar-account-layout="profile">
       <div class="topbar-left goodos-topbar__identity" data-goodos-topbar-identity>
         <div class="topbar-brand goodos-topbar__brand" data-goodos-topbar-brand>
           <span class="topbar-brand-mark goodos-topbar__brand-mark" data-goodos-topbar-brand-mark aria-hidden="true">
@@ -22757,5 +22757,17 @@ if (!window.__goodosGlobalSearchListenerInstalled) {
 <a class="update-sites-link" href="/update-sites">Update Sites</a>
 <!-- END GOODOS_UPDATE_SITES_FLOATING_LINK -->
 
+
+<link rel="stylesheet" href="/goodos-canonical-topbar.css?v=4290"><script defer src="/goodos-canonical-topbar.js?v=4290" data-goodos-canonical-app="GoodBase" data-app-id="goodbase" data-workspace="Owner Workspace" data-accent="#6d72e6" data-reserve-space="false"></script>
 </body>
 </html>
+<style id="goodbase-mobile-navigation-20261105">
+@media(max-width:820px){
+ .sidebar > .brand {display:flex!important;justify-content:space-between}
+ .sidebar > .brand > .logo,.sidebar > .brand > div {display:none}
+ .sidebar {top:72px!important;max-height:calc(100dvh - 72px)!important}
+ .goodos-mobile-nav-toggle,main button {min-height:44px}
+ .content {padding-bottom:112px!important}
+ main input:not([type=checkbox]):not([type=radio]),main select,main textarea {font-size:16px;min-height:44px}
+}
+</style>
