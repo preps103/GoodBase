@@ -30,6 +30,9 @@ const exactOrigins = new Set(
   [
     ...configuredOrigins,
     GOODBUILDER_SITES_ORIGIN,
+    // Owned production storefronts using the shared GoodBase session.
+    "https://solegodz.com",
+    "https://www.solegodz.com",
     "https://localhost",
     "tauri://localhost",
     "http://tauri.localhost",
